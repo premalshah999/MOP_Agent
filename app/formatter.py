@@ -159,6 +159,155 @@ def _fmt_num(value: Any) -> str:
     return str(value)
 
 
+def _format_entity_label(value: Any) -> str:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "Unknown"
+    text = str(value).strip()
+    if not text:
+        return "Unknown"
+    if re.fullmatch(r"[A-Z]{2}-\d{1,2}", text):
+        return text
+    if text.isupper() and len(text) <= 5 and " " not in text:
+        return text
+    if text.upper() == text and any(ch.isalpha() for ch in text):
+        return text.title()
+    if text.lower() == text and any(ch.isalpha() for ch in text):
+        return text.title()
+    return text
+
+
+def _metric_display_name(metric: str, question: str | None = None) -> str:
+    mapping = {
+        "spending_total": "default federal spending",
+        "total_flow": "total fund flow",
+        "total_liabilities": "total liabilities",
+        "total_assets": "total assets",
+        "current_ratio": "current ratio",
+        "debt_ratio": "debt ratio",
+        "resident_wage": "resident wage",
+    }
+    if metric in mapping:
+        return mapping[metric]
+    return metric.replace("_", " ")
+
+
+def _metric_label(metric: str) -> str:
+    return _metric_display_name(metric).title()
+
+
+def _is_money_metric(metric: str) -> bool:
+    lowered = metric.lower()
+    if "ratio" in lowered:
+        return False
+    money_tokens = (
+        "contracts",
+        "grants",
+        "wage",
+        "payments",
+        "liabilities",
+        "assets",
+        "revenue",
+        "expenses",
+        "cash_flow",
+        "cash flow",
+        "bonds",
+        "amount",
+        "spending",
+        "flow",
+        "position",
+    )
+    return any(token in lowered for token in money_tokens)
+
+
+def _is_count_metric(metric: str) -> bool:
+    lowered = metric.lower()
+    count_tokens = ("employees", "residents", "population", "household", "count")
+    return any(token in lowered for token in count_tokens) and not _is_money_metric(metric)
+
+
+def _is_percent_metric(metric: str, value: Any) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    lowered = metric.lower()
+    percent_tokens = (
+        "poverty",
+        "education",
+        "owner",
+        "renter",
+        "white",
+        "black",
+        "asian",
+        "hispanic",
+        "satisfied",
+        "risk_averse",
+        "risk averse",
+    )
+    return any(token in lowered for token in percent_tokens)
+
+
+def _format_currency(value: float) -> str:
+    sign = "-" if value < 0 else ""
+    absolute = abs(float(value))
+    for unit, divisor in (("T", 1_000_000_000_000), ("B", 1_000_000_000), ("M", 1_000_000), ("K", 1_000)):
+        if absolute >= divisor:
+            return f"{sign}${absolute / divisor:,.2f}{unit}"
+    if absolute >= 100:
+        return f"{sign}${absolute:,.0f}"
+    return f"{sign}${absolute:,.2f}"
+
+
+def _format_metric_value(metric: str, value: Any) -> str:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "null"
+    if _is_money_metric(metric):
+        return _format_currency(float(value))
+    if _is_percent_metric(metric, value):
+        numeric = float(value)
+        if abs(numeric) <= 1.5:
+            return f"{numeric * 100:.1f}%"
+        return f"{numeric:.1f}%"
+    if _is_count_metric(metric):
+        return f"{int(round(float(value))):,}"
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    return str(value)
+
+
+def _row_label(row: pd.Series, df: pd.DataFrame, label_col: Optional[str]) -> str:
+    cols = set(df.columns)
+    if {"rcpt_state_name", "subawardee_state_name"} <= cols:
+        origin = _format_entity_label(row["rcpt_state_name"])
+        destination = _format_entity_label(row["subawardee_state_name"])
+        suffix = " (internal)" if origin == destination else ""
+        return f"{origin} -> {destination}{suffix}"
+    if {"rcpt_cty_name", "subawardee_cty_name"} <= cols:
+        origin = _format_entity_label(row["rcpt_cty_name"])
+        destination = _format_entity_label(row["subawardee_cty_name"])
+        return f"{origin} -> {destination}"
+    if {"rcpt_cd_name", "subawardee_cd_name"} <= cols:
+        origin = _format_entity_label(row["rcpt_cd_name"])
+        destination = _format_entity_label(row["subawardee_cd_name"])
+        return f"{origin} -> {destination}"
+    if label_col and label_col in row.index:
+        return _format_entity_label(row[label_col])
+    return "This result"
+
+
+def _entity_group_name(df: pd.DataFrame, label_col: Optional[str]) -> str:
+    cols = set(df.columns)
+    if {"rcpt_state_name", "subawardee_state_name"} <= cols or {"rcpt_cty_name", "subawardee_cty_name"} <= cols or {"rcpt_cd_name", "subawardee_cd_name"} <= cols:
+        return "flow pairs"
+    if label_col == "state":
+        return "states"
+    if label_col == "county":
+        return "counties"
+    if label_col == "agency":
+        return "agencies"
+    if label_col == "cd_118":
+        return "districts"
+    return "rows"
+
+
 def _is_year_like(column_name: str) -> bool:
     lowered = column_name.lower()
     return lowered in {"year", "period", "fiscal_year", "act_dt_fis_yr"} or lowered.endswith("_year")
@@ -214,12 +363,27 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any]) ->
 
     if len(df) == 1:
         row = df.iloc[0]
-        pieces: list[str] = []
-        if label_col:
-            pieces.append(f"{row[label_col]} is the matching result.")
-        for col in _numeric_columns(df, label_col)[:5]:
-            pieces.append(f"{col} = {_fmt_num(row[col])}")
-        return " ".join(pieces)
+        entity = _row_label(row, df, label_col)
+        primary_name = _metric_display_name(primary, question)
+        primary_value = _format_metric_value(primary, row[primary])
+
+        if primary == "spending_total":
+            lead = f"**{entity} receives about {primary_value} in default federal spending.**"
+        else:
+            lead = f"**{entity} has {primary_name} of {primary_value}.**"
+
+        detail_parts = []
+        for col in _numeric_columns(df, label_col):
+            if col == primary:
+                continue
+            detail_parts.append(f"**{_metric_label(col)}:** {_format_metric_value(col, row[col])}")
+
+        lines = [lead]
+        if primary == "spending_total":
+            lines.append("*Definition:* This total uses the dashboard default: **Contracts + Grants + Resident Wage**.")
+        if detail_parts:
+            lines.append("*Breakdown:* " + ", ".join(detail_parts[:4]) + ".")
+        return "\n\n".join(lines)
 
     if label_col:
         ascending = any(token in question.lower() for token in ["lowest", "least", "bottom", "smallest"])
@@ -229,33 +393,59 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any]) ->
         third = sorted_df.iloc[2] if len(sorted_df) > 2 else None
         tail = sorted_df.iloc[-1]
         top_five = sorted_df.head(5)
-        top_five_text = ", ".join(f"{row[label_col]} ({_fmt_num(row[primary])})" for _, row in top_five.iterrows())
-        parts = [f"{top[label_col]} leads on {primary} at {_fmt_num(top[primary])}."]
-        if second is not None:
-            parts.append(f"Next is {second[label_col]} at {_fmt_num(second[primary])}.")
-        if third is not None:
-            parts.append(f"Third is {third[label_col]} at {_fmt_num(third[primary])}.")
-        parts.append(f"The top returned entries are {top_five_text}.")
-        parts.append(
-            f"Across the {stats['row_count']} rows in this result, values range from "
-            f"{_fmt_num(tail[primary])} for {tail[label_col]} to {_fmt_num(top[primary])} for {top[label_col]}."
+        entity_group = _entity_group_name(df, label_col)
+        primary_name = _metric_display_name(primary, question)
+        top_label = _row_label(top, df, label_col)
+        tail_label = _row_label(tail, df, label_col)
+        top_value = _format_metric_value(primary, top[primary])
+        tail_value = _format_metric_value(primary, tail[primary])
+        top_five_text = ", ".join(
+            f"**{_row_label(row, df, label_col)}** ({_format_metric_value(primary, row[primary])})"
+            for _, row in top_five.iterrows()
         )
+
+        if ascending:
+            lead = f"**{top_label} has the lowest {primary_name} in this result set, at {top_value}.**"
+        else:
+            lead = f"**{top_label} has the highest {primary_name} in this result set, at {top_value}.**"
+
+        follow_parts: list[str] = []
+        if second is not None:
+            follow_parts.append(
+                f"**{_row_label(second, df, label_col)}** is next at "
+                f"**{_format_metric_value(primary, second[primary])}**"
+            )
+        if third is not None:
+            follow_parts.append(
+                f"**{_row_label(third, df, label_col)}** is third at "
+                f"**{_format_metric_value(primary, third[primary])}**"
+            )
+
+        lines = [lead]
+        if follow_parts:
+            lines.append(". ".join(follow_parts) + ".")
+        lines.append(f"*Top 5:* {top_five_text}.")
         metric_stats = stats.get("metrics", {}).get(primary)
+        context = (
+            f"*Context:* Across the {stats['row_count']} returned {entity_group}, values range from "
+            f"**{tail_value}** for **{tail_label}** to **{top_value}** for **{top_label}**."
+        )
         if metric_stats:
-            parts.append(
-                f"Across {stats['row_count']} rows, the mean is {_fmt_num(metric_stats['mean'])} "
-                f"and the median is {_fmt_num(metric_stats['median'])}."
+            context += (
+                f" The mean is **{_format_metric_value(primary, metric_stats['mean'])}** and the median is "
+                f"**{_format_metric_value(primary, metric_stats['median'])}**."
             )
         if second is not None:
             try:
                 gap = float(top[primary]) - float(second[primary])
-                parts.append(
-                    f"The gap between first and second place is {_fmt_num(gap)}, which helps show "
-                    "whether the leader is only slightly ahead or clearly separated from the pack."
+                context += (
+                    f" The gap between first and second place is **{_format_metric_value(primary, gap)}**, "
+                    "so the leader is clearly ahead of the next result."
                 )
             except Exception:
                 pass
-        return " ".join(parts)
+        lines.append(context)
+        return "\n\n".join(lines)
 
     return _fallback_answer(df, stats)
 

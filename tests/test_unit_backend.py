@@ -256,7 +256,19 @@ class FormatterTests(unittest.TestCase):
         })
         result = formatter.format_result("Which agencies account for the most spending in Maryland?", df)
         self.assertIn("HHS", result)
-        self.assertIn("spending_total", result)
+        self.assertIn("default federal spending", result)
+        self.assertIn("**", result)
+        self.assertIn("*Top 5:*", result)
+
+    def test_format_result_uses_flow_pair_labels(self) -> None:
+        df = pd.DataFrame({
+            "rcpt_state_name": ["Virginia", "Texas", "Ohio"],
+            "subawardee_state_name": ["Virginia", "California", "New Mexico"],
+            "total_flow": [32_593_894_707.72, 19_205_492_501.90, 13_389_580_913.82],
+        })
+        result = formatter.format_result("biggest federal fund flow?", df)
+        self.assertIn("Virginia -> Virginia", result)
+        self.assertIn("Texas -> California", result)
 
     def test_fallback_answer_no_api_key(self) -> None:
         df = pd.DataFrame({
@@ -624,6 +636,14 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("Resident Wage", plan.sql)
         self.assertNotIn("Direct Payments", plan.sql)
         self.assertNotIn("Employees Wage", plan.sql)
+
+    def test_planner_prefers_total_assets_for_assets_question(self) -> None:
+        plan = planner.plan_query("highest assets county in california?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["gov_county"])
+        self.assertIn("Total_Assets", plan.sql)
+        self.assertNotIn("Current_Ratio", plan.sql)
 
     def test_planner_handles_gov_metric_ranking(self) -> None:
         plan = planner.plan_query("Which states have the highest debt ratio?")

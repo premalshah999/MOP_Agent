@@ -265,6 +265,20 @@ def column_match_score(table_name: str, column_name: str, question: str) -> floa
         score += 3.0
     if "income" in q_tokens and "median household income" in name_text:
         score += 3.0
+    if {"asset", "assets"} & q_tokens:
+        if column_name == "Total_Assets":
+            score += 5.0
+        elif "assets" in name_text:
+            score += 3.0
+    if {"liability", "liabilities"} & q_tokens:
+        if column_name == "Total_Liabilities":
+            score += 5.0
+        elif "liabilities" in name_text:
+            score += 3.0
+    if "revenue" in q_tokens and column_name == "Revenue":
+        score += 5.0
+    if {"expense", "expenses"} & q_tokens and column_name == "Expenses":
+        score += 5.0
     if "debt" in q_tokens and column_name == "Debt_Ratio":
         score += 4.0
     if "pension" in q_tokens and "Net_Pension_Liability" in column_name:
@@ -277,5 +291,11 @@ def column_match_score(table_name: str, column_name: str, question: str) -> floa
         score += 4.0
     if "payments" in q_tokens and column_name == "Direct Payments":
         score += 4.0
+    if "ratio" not in q_tokens and column_name.endswith("Ratio"):
+        score -= 2.5
+    if "per capita" not in normalize_text(question) and column_name.endswith("_per_capita"):
+        score -= 2.5
+    if "current" not in q_tokens and column_name.startswith("Current_"):
+        score -= 0.5
 
     return score
