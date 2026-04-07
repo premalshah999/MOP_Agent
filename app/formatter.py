@@ -308,6 +308,90 @@ def _entity_group_name(df: pd.DataFrame, label_col: Optional[str]) -> str:
     return "rows"
 
 
+def _component_columns(df: pd.DataFrame, primary: str, label_col: Optional[str]) -> list[str]:
+    return [col for col in _numeric_columns(df, label_col) if col != primary]
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _share_percent(part: float, whole: float) -> str:
+    if whole == 0:
+        return "0.0%"
+    return f"{(part / whole) * 100:.1f}%"
+
+
+def _component_breakdown_text(row: pd.Series, primary: str, component_cols: list[str]) -> str | None:
+    if len(component_cols) < 2:
+        return None
+
+    values: list[tuple[str, float]] = []
+    for col in component_cols:
+        numeric = _as_float(row[col])
+        if numeric is None:
+            continue
+        values.append((col, numeric))
+
+    if len(values) < 2:
+        return None
+
+    total = _as_float(row[primary])
+    if total is None or total <= 0:
+        total = sum(value for _, value in values if value > 0)
+    if total <= 0:
+        return None
+
+    values.sort(key=lambda item: item[1], reverse=True)
+    top_values = values[:3]
+    phrases = [
+        f"**{_metric_label(col)}** ({_format_metric_value(col, value)}, {_share_percent(value, total)})"
+        for col, value in top_values
+    ]
+    if len(phrases) == 2:
+        return f"The largest components are {phrases[0]} and {phrases[1]}."
+    return f"The largest components are {phrases[0]}, {phrases[1]}, and {phrases[2]}."
+
+
+def _ranking_concentration_text(df: pd.DataFrame, primary: str) -> str | None:
+    series = df[primary].dropna()
+    if len(series) < 3:
+        return None
+    total = float(series.sum())
+    if total <= 0:
+        return None
+    top_three = float(series.head(3).sum())
+    return (
+        f"The top 3 together account for **{_format_metric_value(primary, top_three)}**, "
+        f"or **{_share_percent(top_three, total)}** of the total represented by these returned rows."
+    )
+
+
+def _scope_note(sql: str | None, primary: str) -> str | None:
+    if not sql:
+        return None
+    sql_lower = sql.lower()
+    if " from gov_" in sql_lower:
+        return "*Scope:* This answer is based on the **FY2023 government finance** dataset."
+    if " from contract_" in sql_lower or " from spending_state_agency" in sql_lower or " from spending_state " in sql_lower:
+        if "year = '2024'" in sql_lower:
+            if primary == "spending_total":
+                return "*Scope:* This answer uses the **2024** federal spending data and the dashboard default of **Contracts + Grants + Resident Wage**."
+            return "*Scope:* This answer uses the **2024** federal spending data."
+        if "year = '2020-2024'" in sql_lower:
+            return "*Scope:* This answer uses the **2020-2024 aggregate** federal spending period, not single-year 2024."
+    if " from state_flow" in sql_lower:
+        return "*Scope:* This comes from the **state fund-flow** table, so it ranks state-to-state subcontract flow pairs rather than federal spending totals."
+    if " from county_flow" in sql_lower or " from congress_flow" in sql_lower:
+        return "*Scope:* This comes from the **fund-flow** tables, so it reflects subcontract movement rather than direct federal spending totals."
+    return None
+
+
 def _is_year_like(column_name: str) -> bool:
     lowered = column_name.lower()
     return lowered in {"year", "period", "fiscal_year", "act_dt_fis_yr"} or lowered.endswith("_year")
@@ -344,7 +428,7 @@ def _choose_primary_metric(question: str, df: pd.DataFrame, label_col: Optional[
     return numeric_cols[0] if numeric_cols else None
 
 
-def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any]) -> str:
+def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any], sql: str | None = None) -> str:
     label_col = stats.get("label_column")
     primary = _choose_primary_metric(question, df, label_col)
     if primary is None:
@@ -366,6 +450,7 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any]) ->
         entity = _row_label(row, df, label_col)
         primary_name = _metric_display_name(primary, question)
         primary_value = _format_metric_value(primary, row[primary])
+        component_cols = _component_columns(df, primary, label_col)
 
         if primary == "spending_total":
             lead = f"**{entity} receives about {primary_value} in default federal spending.**"
@@ -383,6 +468,12 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any]) ->
             lines.append("*Definition:* This total uses the dashboard default: **Contracts + Grants + Resident Wage**.")
         if detail_parts:
             lines.append("*Breakdown:* " + ", ".join(detail_parts[:4]) + ".")
+        component_text = _component_breakdown_text(row, primary, component_cols)
+        if component_text:
+            lines.append(f"*Composition:* {component_text}")
+        scope = _scope_note(sql, primary)
+        if scope:
+            lines.append(scope)
         return "\n\n".join(lines)
 
     if label_col:
@@ -424,6 +515,12 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any]) ->
         lines = [lead]
         if follow_parts:
             lines.append(". ".join(follow_parts) + ".")
+        component_cols = _component_columns(df, primary, label_col)
+        leader_profile = _component_breakdown_text(top, primary, component_cols)
+        if leader_profile:
+            if leader_profile.startswith("The "):
+                leader_profile = "the " + leader_profile[4:]
+            lines.append(f"*Leader profile:* For **{top_label}**, {leader_profile}")
         lines.append(f"*Top 5:* {top_five_text}.")
         metric_stats = stats.get("metrics", {}).get(primary)
         context = (
@@ -444,7 +541,15 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any]) ->
                 )
             except Exception:
                 pass
+        concentration = _ranking_concentration_text(sorted_df, primary)
+        if concentration:
+            context += " " + concentration
+        if " (internal)" in top_label:
+            context += " The top result is an *internal flow*, meaning the origin and destination are the same place."
         lines.append(context)
+        scope = _scope_note(sql, primary)
+        if scope:
+            lines.append(scope)
         return "\n\n".join(lines)
 
     return _fallback_answer(df, stats)
@@ -543,7 +648,7 @@ def format_result(question: str, df: pd.DataFrame, sql: str | None = None) -> st
         return "No data found matching your query."
 
     stats = compute_statistics(df)
-    grounded = _grounded_summary(question, df, stats)
+    grounded = _grounded_summary(question, df, stats, sql=sql)
     if not USE_LLM_FORMATTER:
         return grounded
 

@@ -252,6 +252,9 @@ class FormatterTests(unittest.TestCase):
     def test_format_result_prefers_grounded_summary(self) -> None:
         df = pd.DataFrame({
             "agency": ["HHS", "Defense", "SSA"],
+            "contracts": [12.0, 20.0, 5.0],
+            "grants": [18.0, 5.0, 10.0],
+            "resident_wage": [6.2, 6.8, 14.1],
             "spending_total": [36.2, 31.8, 29.1],
         })
         result = formatter.format_result("Which agencies account for the most spending in Maryland?", df)
@@ -259,6 +262,22 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("default federal spending", result)
         self.assertIn("**", result)
         self.assertIn("*Top 5:*", result)
+        self.assertIn("*Leader profile:*", result)
+        self.assertIn("top 3 together account for", result.lower())
+
+    def test_format_result_single_row_spending_includes_definition_and_composition(self) -> None:
+        df = pd.DataFrame({
+            "state": ["MARYLAND"],
+            "contracts": [46_230_238_790.42],
+            "grants": [30_579_948_445.74],
+            "resident_wage": [27_461_823_181.99],
+            "spending_total": [104_272_010_418.15],
+        })
+        result = formatter.format_result("How much federal money goes to Maryland?", df, sql="SELECT ... FROM contract_state WHERE year = '2024'")
+        self.assertIn("*Definition:*", result)
+        self.assertIn("*Breakdown:*", result)
+        self.assertIn("*Composition:*", result)
+        self.assertIn("*Scope:*", result)
 
     def test_format_result_uses_flow_pair_labels(self) -> None:
         df = pd.DataFrame({
