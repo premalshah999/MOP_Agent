@@ -20,6 +20,7 @@ from app.chart_generator import generate_chart_spec
 from app.classifier import classify
 from app.db import execute_query
 from app.formatter import format_result
+from app.planner import plan_query
 from app.prompts import (
     CONCEPTUAL_SYSTEM,
     SQL_REPAIR_SYSTEM,
@@ -463,26 +464,35 @@ def ask_agent(question: str, history: list[Any]) -> dict[str, Any]:
     if intent == "FOLLOWUP":
         effective_question = _resolve_followup(question, clean_history)
 
-    # Step 4: Check API key
-    if not os.getenv("DEEPSEEK_API_KEY"):
-        return {
-            "error": "DEEPSEEK_API_KEY is not set. Add it to .env to enable SQL generation.",
-            "sql": None,
-            "data": [],
-            "row_count": 0,
-        }
-
-    # Step 5: Route to tables (LLM-assisted)
-    table_names = route_tables(effective_question)
-
-    # Step 6: Build schema context
+    # Step 4: Try deterministic metadata-driven planning first
+    plan = plan_query(effective_question)
+    table_names = plan.table_names if plan else route_tables(effective_question)
     schema_ctx = build_schema_context(table_names)
 
-    # Step 7: Generate SQL (LLM is the primary and only path)
-    sql = _generate_sql(effective_question, schema_ctx, clean_history, table_names)
+    df: Optional[pd.DataFrame]
+    final_sql: str
+    error: Optional[str]
 
-    # Step 8: Execute with auto-repair
-    df, final_sql, error = _execute_with_repair(effective_question, sql, schema_ctx)
+    if plan:
+        df, final_sql, error = _execute_with_repair(effective_question, plan.sql, schema_ctx)
+    else:
+        # Step 5: LLM fallback only when deterministic planning cannot cover the question
+        if not os.getenv("DEEPSEEK_API_KEY"):
+            return {
+                "error": "DEEPSEEK_API_KEY is not set and this question requires LLM SQL generation.",
+                "sql": None,
+                "data": [],
+                "row_count": 0,
+            }
+        sql = _generate_sql(effective_question, schema_ctx, clean_history, table_names)
+        df, final_sql, error = _execute_with_repair(effective_question, sql, schema_ctx)
+
+    # If the deterministic planner failed, fall back to LLM before returning an error.
+    if error and plan and os.getenv("DEEPSEEK_API_KEY"):
+        table_names = route_tables(effective_question)
+        schema_ctx = build_schema_context(table_names)
+        sql = _generate_sql(effective_question, schema_ctx, clean_history, table_names)
+        df, final_sql, error = _execute_with_repair(effective_question, sql, schema_ctx)
 
     if error:
         return {"error": _user_friendly_error(error), "sql": final_sql, "data": [], "row_count": 0}

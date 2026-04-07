@@ -20,6 +20,7 @@ from app import sql_utils  # noqa: E402
 from app import router  # noqa: E402
 from app import formatter  # noqa: E402
 from app import prompts  # noqa: E402
+from app import planner  # noqa: E402
 
 
 # ===================================================================
@@ -248,6 +249,15 @@ class FormatterTests(unittest.TestCase):
         result = formatter.format_result("test?", df)
         self.assertEqual(result, "No data found matching your query.")
 
+    def test_format_result_prefers_grounded_summary(self) -> None:
+        df = pd.DataFrame({
+            "agency": ["HHS", "Defense", "SSA"],
+            "total_federal_amount": [36.2, 31.8, 29.1],
+        })
+        result = formatter.format_result("Which agencies account for the most spending in Maryland?", df)
+        self.assertIn("HHS", result)
+        self.assertIn("total_federal_amount", result)
+
     def test_fallback_answer_no_api_key(self) -> None:
         df = pd.DataFrame({
             "state": ["maryland", "virginia"],
@@ -340,6 +350,16 @@ class AgentIntegrationTests(unittest.TestCase):
         self.assertIn("error", result)
         # Error should be user-friendly, not raw SQL error
         self.assertNotIn("Set operations", result["error"])
+
+    def test_ask_agent_uses_deterministic_planner_without_api_key(self) -> None:
+        from app import agent
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": ""}, clear=False):
+            result = agent.ask_agent("Which agencies account for the most spending in Maryland?", [])
+
+        self.assertIn("sql", result)
+        self.assertIn("spending_state_agency", result["sql"])
+        self.assertGreater(result["row_count"], 0)
 
 
 class ChartGeneratorTests(unittest.TestCase):
@@ -556,6 +576,9 @@ class PromptImprovementTests(unittest.TestCase):
     def test_prompt_has_cross_year_alignment(self) -> None:
         self.assertIn("a.Year = 2023 AND c.year = '2024'", prompts.SQL_SYSTEM_PROMPT)
 
+    def test_prompt_distinguishes_spending_state_year_column(self) -> None:
+        self.assertIn("| spending_state | Year | VARCHAR | '2024' |", prompts.SQL_SYSTEM_PROMPT)
+
     def test_examples_use_json_format(self) -> None:
         examples = prompts.get_relevant_examples(["state_flow"])
         self.assertIn('"reasoning":', examples)
@@ -564,6 +587,33 @@ class PromptImprovementTests(unittest.TestCase):
     def test_flow_examples_include_agency_drilldown(self) -> None:
         examples = prompts.get_relevant_examples(["state_flow"])
         self.assertIn("agency_name", examples)
+
+
+class PlannerTests(unittest.TestCase):
+    def test_planner_uses_agency_table_for_broad_spending(self) -> None:
+        plan = planner.plan_query("Which agencies account for the most spending in Maryland?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["spending_state_agency"])
+        self.assertIn("Resident Wage", plan.sql)
+        self.assertIn("Employees Wage", plan.sql)
+        self.assertNotIn("Federal Residents +", plan.sql)
+        self.assertNotIn("Employees +", plan.sql)
+
+    def test_planner_handles_gov_metric_ranking(self) -> None:
+        plan = planner.plan_query("Which states have the highest debt ratio?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["gov_state"])
+        self.assertIn("Debt_Ratio", plan.sql)
+        self.assertIn("ORDER BY", plan.sql)
+
+    def test_planner_handles_finra_trend(self) -> None:
+        plan = planner.plan_query("How has financial literacy changed over time nationally?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["finra_state"])
+        self.assertIn("SELECT Year AS period", plan.sql)
 
 
 if __name__ == "__main__":

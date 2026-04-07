@@ -6,19 +6,30 @@ import json
 import logging
 import os
 import re
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
 from openai import OpenAI
+
+from app.metadata_utils import (
+    available_tables,
+    broad_money_total_expression,
+    count_columns,
+    default_year_filter,
+    load_metadata,
+    monetary_columns,
+    relevant_warnings,
+    table_columns,
+    table_metadata,
+    table_year_column,
+)
 
 _log = logging.getLogger(__name__)
 
 METADATA_PATH = Path("data/schema/metadata.json")
 MANIFEST_PATH = Path("data/schema/manifest.json")
 
-with METADATA_PATH.open() as _f:
-    METADATA = json.load(_f)
+METADATA = load_metadata()
 
 # ---------------------------------------------------------------------------
 # State / geography constants
@@ -88,11 +99,7 @@ def extract_year(question: str) -> Optional[str]:
 # Available tables from manifest
 # ---------------------------------------------------------------------------
 def _available_tables() -> set[str]:
-    if not MANIFEST_PATH.exists():
-        return set(METADATA.get("tables", {}).keys())
-    with MANIFEST_PATH.open() as f:
-        manifest = json.load(f)
-    return set(manifest.keys())
+    return available_tables()
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +145,7 @@ def _keyword_route(question: str) -> list[str]:
         datasets.add("contract")
     if any(k in q for k in ["agency", "department of", "defense", "treasury"]):
         datasets.add("spending_state_agency")
+        datasets.discard("contract")
     if any(k in q for k in ["fund flow", "subaward", "subawardee", "flow", "awardee"]):
         datasets.add("flow")
 
@@ -178,9 +186,13 @@ def _keyword_route(question: str) -> list[str]:
 # ---------------------------------------------------------------------------
 def route_tables(question: str) -> list[str]:
     """Select the right tables for a question. Uses LLM when available, keyword fallback otherwise."""
+    deterministic = _keyword_route(question)
+    if deterministic:
+        return deterministic
+
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
-        return _keyword_route(question)
+        return deterministic
 
     try:
         client = OpenAI(
@@ -198,6 +210,8 @@ def route_tables(question: str) -> list[str]:
                     "content": (
                         "You select database tables needed to answer a user question. "
                         "Return ONLY a JSON array of table names. No explanation.\n\n"
+                        "Prefer the smallest set of tables possible. "
+                        "Never invent tables that are not listed.\n\n"
                         + TABLE_CATALOG
                     ),
                 },
@@ -251,8 +265,7 @@ def _build_join_hints() -> None:
     """Populate join hints for common cross-table pairs."""
     if _JOIN_HINTS:
         return
-    state_tables = ["acs_state", "gov_state", "contract_state", "spending_state",
-                    "spending_state_agency", "finra_state", "contract_state_agency"]
+    state_tables = ["acs_state", "gov_state", "contract_state", "spending_state", "spending_state_agency", "finra_state"]
     county_tables = ["acs_county", "gov_county", "contract_county", "finra_county"]
     congress_tables = ["acs_congress", "gov_congress", "contract_congress", "finra_congress"]
 
@@ -278,6 +291,14 @@ def build_schema_context(table_names: list[str]) -> str:
         selected = {k: v for k, v in tables.items() if k in available}
 
     lines = ["SCHEMA FOR SELECTED TABLES:\n"]
+
+    warnings = relevant_warnings(list(selected.keys()))
+    if warnings:
+        lines.append("CRITICAL WARNINGS:")
+        for warning in warnings:
+            lines.append(f"- {warning}")
+        lines.append("")
+
     for name, info in selected.items():
         lines.append(f"TABLE: {name}")
         lines.append(f"  Description: {info.get('description', 'n/a')}")
@@ -301,10 +322,29 @@ def build_schema_context(table_names: list[str]) -> str:
             lines.append(f"  Key columns: {', '.join(key_cols)}")
         lines.append(f"  Data columns: {', '.join(data_cols)}")
 
+        year_col = table_year_column(name)
+        if year_col:
+            lines.append(f"  Year column: {year_col}")
         if info.get("year_type"):
             lines.append(f"  Year handling: {info['year_type']}")
+        year_filter = default_year_filter(name)
+        if year_filter:
+            lines.append(f"  Default year filter when unspecified: {year_filter}")
         if info.get("state_name_casing"):
             lines.append(f"  State casing: {info['state_name_casing']}")
+
+        money_cols = monetary_columns(name)
+        if money_cols:
+            lines.append(f"  Monetary columns: {', '.join(money_cols)}")
+        count_cols = count_columns(name)
+        if count_cols:
+            lines.append(f"  Count columns (do not add into dollar totals): {', '.join(count_cols)}")
+        total_formula = broad_money_total_expression(name, alias="total_federal_amount")
+        if total_formula:
+            lines.append(
+                "  Broad spending rule: if the user asks for total federal money/spending without naming a component, "
+                f"use {total_formula} and NEVER add count or per-1000 columns."
+            )
 
         # Sample rows — helps LLM understand actual data format, casing, types
         sample = _get_sample_rows(name)

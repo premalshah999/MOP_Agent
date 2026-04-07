@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from app.metadata_utils import available_tables, column_requires_quotes, table_columns
+
 METADATA_PATH = Path("data/schema/metadata.json")
 
 with METADATA_PATH.open() as _f:
@@ -41,10 +43,10 @@ def extract_sql(text: str) -> str:
 # ---------------------------------------------------------------------------
 def auto_quote_columns(sql: str) -> str:
     columns: list[str] = []
-    for col in _CRITICAL_WARNINGS.get("columns_with_spaces", {}).get("examples", []):
-        columns.append(col.strip().strip('"'))
-    for col in _CRITICAL_WARNINGS.get("special_character_columns", {}).get("columns", []):
-        columns.append(col.strip().strip('"'))
+    for table_name in available_tables():
+        for col in table_columns(table_name):
+            if column_requires_quotes(col):
+                columns.append(col)
 
     if not columns:
         return sql
@@ -66,6 +68,23 @@ def auto_fix_year_string(sql: str) -> str:
     if not any(re.search(rf"\b{re.escape(t)}\b", sql, flags=re.IGNORECASE) for t in tables):
         return sql
     sql = re.sub(r"(?<!\")\byear\s*=\s*(\d{4})\b", r"year = '\1'", sql)
+    return sql
+
+
+def auto_fix_known_schema_mismatches(sql: str) -> str:
+    spending_state_only = re.search(r"\bspending_state\b", sql, flags=re.IGNORECASE) and not re.search(
+        r"\bspending_state_agency\b", sql, flags=re.IGNORECASE
+    )
+    if spending_state_only:
+        sql = re.sub(r"\byear\b", "Year", sql, flags=re.IGNORECASE)
+
+    contract_or_agency_tables = any(
+        re.search(rf"\b{table}\b", sql, flags=re.IGNORECASE)
+        for table in ("contract_state", "contract_county", "contract_congress", "spending_state_agency")
+    )
+    if contract_or_agency_tables:
+        sql = re.sub(r"\bYear\b", "year", sql)
+
     return sql
 
 
@@ -138,5 +157,6 @@ def prepare_sql(sql: str, question: str) -> str:
     if is_ranking_question(question):
         sql = apply_limit(sql, ranking_top_k(question))
     sql = auto_quote_columns(sql)
+    sql = auto_fix_known_schema_mismatches(sql)
     sql = auto_fix_year_string(sql)
     return sql

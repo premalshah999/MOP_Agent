@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Optional
 
 import numpy as np
@@ -26,6 +27,7 @@ def _get_client() -> OpenAI:
 
 FORMATTER_MAX_TOKENS = int(os.getenv("FORMATTER_MAX_TOKENS", "2000"))
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+USE_LLM_FORMATTER = os.getenv("USE_LLM_FORMATTER", "0").strip().lower() in {"1", "true", "yes"}
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +159,106 @@ def _fmt_num(value: Any) -> str:
     return str(value)
 
 
+def _is_year_like(column_name: str) -> bool:
+    lowered = column_name.lower()
+    return lowered in {"year", "period", "fiscal_year", "act_dt_fis_yr"} or lowered.endswith("_year")
+
+
+def _choose_primary_metric(question: str, df: pd.DataFrame, label_col: Optional[str]) -> Optional[str]:
+    preferred = [
+        "total_federal_amount",
+        "total_amount",
+        "total_flow",
+        "debt_ratio",
+        "revenue_per_capita",
+        "financial_literacy",
+    ]
+    lowered_map = {col.lower(): col for col in df.columns}
+    for col in preferred:
+        if col in lowered_map:
+            return lowered_map[col]
+
+    q = re.sub(r"[^a-z0-9]+", " ", question.lower())
+    best_col = None
+    best_score = -1
+    for col in _numeric_columns(df, label_col):
+        tokens = set(re.sub(r"[^a-z0-9]+", " ", col.lower()).split())
+        score = len(tokens & set(q.split()))
+        if score > best_score:
+            best_col = col
+            best_score = score
+    if best_col:
+        return best_col
+
+    numeric_cols = _numeric_columns(df, label_col)
+    return numeric_cols[0] if numeric_cols else None
+
+
+def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any]) -> str:
+    label_col = stats.get("label_column")
+    primary = _choose_primary_metric(question, df, label_col)
+    if primary is None:
+        return _fallback_answer(df, stats)
+
+    if any(_is_year_like(col) for col in df.columns):
+        year_col = next(col for col in df.columns if _is_year_like(col))
+        ordered = df.sort_values(year_col)
+        first = ordered.iloc[0]
+        last = ordered.iloc[-1]
+        return (
+            f"{year_col} runs from {first[year_col]} to {last[year_col]}. "
+            f"{primary} moves from {_fmt_num(first[primary])} to {_fmt_num(last[primary])} "
+            f"across {len(ordered)} periods."
+        )
+
+    if len(df) == 1:
+        row = df.iloc[0]
+        pieces: list[str] = []
+        if label_col:
+            pieces.append(f"{row[label_col]} is the matching result.")
+        for col in _numeric_columns(df, label_col)[:5]:
+            pieces.append(f"{col} = {_fmt_num(row[col])}")
+        return " ".join(pieces)
+
+    if label_col:
+        ascending = any(token in question.lower() for token in ["lowest", "least", "bottom", "smallest"])
+        sorted_df = df.dropna(subset=[primary]).sort_values(primary, ascending=ascending)
+        top = sorted_df.iloc[0]
+        second = sorted_df.iloc[1] if len(sorted_df) > 1 else None
+        third = sorted_df.iloc[2] if len(sorted_df) > 2 else None
+        tail = sorted_df.iloc[-1]
+        top_five = sorted_df.head(5)
+        top_five_text = ", ".join(f"{row[label_col]} ({_fmt_num(row[primary])})" for _, row in top_five.iterrows())
+        parts = [f"{top[label_col]} leads on {primary} at {_fmt_num(top[primary])}."]
+        if second is not None:
+            parts.append(f"Next is {second[label_col]} at {_fmt_num(second[primary])}.")
+        if third is not None:
+            parts.append(f"Third is {third[label_col]} at {_fmt_num(third[primary])}.")
+        parts.append(f"The top returned entries are {top_five_text}.")
+        parts.append(
+            f"Across the {stats['row_count']} rows in this result, values range from "
+            f"{_fmt_num(tail[primary])} for {tail[label_col]} to {_fmt_num(top[primary])} for {top[label_col]}."
+        )
+        metric_stats = stats.get("metrics", {}).get(primary)
+        if metric_stats:
+            parts.append(
+                f"Across {stats['row_count']} rows, the mean is {_fmt_num(metric_stats['mean'])} "
+                f"and the median is {_fmt_num(metric_stats['median'])}."
+            )
+        if second is not None:
+            try:
+                gap = float(top[primary]) - float(second[primary])
+                parts.append(
+                    f"The gap between first and second place is {_fmt_num(gap)}, which helps show "
+                    "whether the leader is only slightly ahead or clearly separated from the pack."
+                )
+            except Exception:
+                pass
+        return " ".join(parts)
+
+    return _fallback_answer(df, stats)
+
+
 # ---------------------------------------------------------------------------
 # Build compact evidence text from statistics
 # ---------------------------------------------------------------------------
@@ -250,13 +352,17 @@ def format_result(question: str, df: pd.DataFrame, sql: str | None = None) -> st
         return "No data found matching your query."
 
     stats = compute_statistics(df)
+    grounded = _grounded_summary(question, df, stats)
+    if not USE_LLM_FORMATTER:
+        return grounded
+
     evidence_text = build_evidence_text(df, stats)
     preview = _build_preview(df)
 
     if not os.getenv("DEEPSEEK_API_KEY"):
-        return _fallback_answer(df, stats)
+        return grounded
 
     try:
         return _generate_answer(question, evidence_text, preview, sql)
     except Exception:
-        return _fallback_answer(df, stats)
+        return grounded

@@ -20,9 +20,10 @@ Think step-by-step before writing SQL:
 ### Federal spending / contracts
 - "How much federal money goes to state X?" → contract_state (totals by state)
 - "Compare contracts vs grants across states" → contract_state or spending_state
-- "Spending by agency/department" → spending_state_agency (15 agencies) or contract_state_agency (21 agencies)
+- "Spending by agency/department" → spending_state_agency
 - "County-level federal spending" → contract_county. Add WHERE county_fips > 1000 (excludes state-aggregate rows)
 - "Congressional district federal spending" → contract_congress
+- `spending_state` exists only at the state level and uses `Year` (capital Y), not `year`.
 
 ### Government finance (debt, revenue, pension, OPEB)
 - gov_state / gov_county / gov_congress — single-year FY2023 only. NEVER add a year filter.
@@ -40,14 +41,16 @@ Think step-by-step before writing SQL:
 - state_flow has agency_name column — use it for "which department/agency" drill-downs.
 - county_flow / congress_flow grain: per agency per NAICS per district-pair per fiscal year.
 
-## YEAR RULES (wrong type = 0 rows)
+## YEAR RULES (wrong type or wrong column name = 0 rows)
 
 | Tables | Column | Type | Default | Example |
 |--------|--------|------|---------|---------|
 | acs_* | Year | INTEGER | 2023 | WHERE Year = 2023 |
 | finra_state | Year | INTEGER | 2021 | WHERE Year = 2021 |
 | finra_county, finra_congress | Year | INTEGER | 2021 | Single year — do NOT filter |
-| contract_*, spending_* | year | VARCHAR | '2024' | WHERE year = '2024' |
+| contract_* | year | VARCHAR | '2024' | WHERE year = '2024' |
+| spending_state | Year | VARCHAR | '2024' | WHERE Year = '2024' |
+| spending_state_agency | year | VARCHAR | '2024' | WHERE year = '2024' |
 | gov_* | Year | VARCHAR | — | NEVER filter (single year FY2023) |
 | county_flow, congress_flow | act_dt_fis_yr | INTEGER | 2024 | WHERE act_dt_fis_yr = 2024 |
 | state_flow | — | — | — | NO year column exists |
@@ -59,7 +62,7 @@ CRITICAL: contract/spending year also has '2020-2024' aggregate rows. Use year =
 | Casing | Tables |
 |--------|--------|
 | lowercase | acs_*, gov_*, spending_state, finra_county |
-| UPPERCASE | contract_*, spending_state_agency, contract_state_agency |
+| UPPERCASE | contract_*, spending_state_agency |
 | Title Case | finra_state, state_flow, county_flow, congress_flow |
 
 RULE: Always use LOWER(a.state) = LOWER(b.state) for ANY cross-table state join.
@@ -124,7 +127,11 @@ SELECT * FROM ranked WHERE rnk <= 10;
 - Single-entity question: include national AVG, MEDIAN, RANK via window functions in a CTE.
 - Relationship/correlation: include corr(), COUNT(*), and means of both metrics.
 - Comparison: use CTEs to compute each side, then JOIN.
-- "Federal money/spending" without specifying type: show Contracts, Grants, "Direct Payments" columns.
+- "Federal money/spending" without specifying a component:
+  - For contract/spending tables, compute a monetary total from the dollar columns present on that table.
+  - Monetary columns are Contracts, Grants, "Resident Wage", "Direct Payments", and "Employees Wage" when present.
+  - NEVER add count columns such as "Federal Residents" or Employees into dollar totals.
+  - NEVER add any "Per 1000" columns into totals.
 - Prefer per-capita or per-1000 metrics for fair cross-entity comparisons.
 - Default years when unspecified: acs=2023, contract/spending='2024', finra=2021, gov=no filter, flow=no filter (or act_dt_fis_yr=2024 for county/congress flow).
 
@@ -185,7 +192,7 @@ _EXAMPLES_CONTRACT = [
     ),
     (
         "How much federal money goes to Maryland?",
-        '{"reasoning": "User asks about federal money broadly — show all spending types from contract_state", "sql": "SELECT state, Contracts, Grants, \\"Direct Payments\\", \\"Resident Wage\\" FROM contract_state WHERE LOWER(state) = \'maryland\' AND year = \'2024\';"}',
+        '{"reasoning": "User asks about federal money broadly — sum only the monetary columns on contract_state and keep the component columns visible", "sql": "SELECT state, Contracts, Grants, \\"Resident Wage\\", \\"Direct Payments\\", \\"Employees Wage\\", ROUND(Contracts + Grants + \\"Resident Wage\\" + \\"Direct Payments\\" + \\"Employees Wage\\", 2) AS total_federal_amount FROM contract_state WHERE LOWER(state) = \'maryland\' AND year = \'2024\';"}',
     ),
     (
         "Counties in Texas with highest grants per capita",
@@ -196,11 +203,11 @@ _EXAMPLES_CONTRACT = [
 _EXAMPLES_AGENCY = [
     (
         "How much did the Department of Defense spend in Maryland in 2024?",
-        '{"reasoning": "spending_state_agency for agency detail, state is UPPERCASE, year is varchar", "sql": "SELECT agency, state, Contracts, Grants, \\"Direct Payments\\" FROM spending_state_agency WHERE LOWER(state) = \'maryland\' AND agency = \'Department of Defense\' AND year = \'2024\';"}',
+        '{"reasoning": "spending_state_agency for agency detail, state is UPPERCASE, year is varchar. Broad spending means sum only monetary columns, not counts.", "sql": "SELECT agency, state, Contracts, Grants, \\"Resident Wage\\", \\"Direct Payments\\", \\"Employees Wage\\", ROUND(Contracts + Grants + \\"Resident Wage\\" + \\"Direct Payments\\" + \\"Employees Wage\\", 2) AS total_federal_amount FROM spending_state_agency WHERE LOWER(state) = \'maryland\' AND agency = \'Department of Defense\' AND year = \'2024\';"}',
     ),
     (
         "Federal spending in California by agency in 2024",
-        '{"reasoning": "All agencies in one state from spending_state_agency, UPPERCASE state", "sql": "SELECT agency, Contracts, Grants, \\"Direct Payments\\", (Contracts + Grants + \\"Direct Payments\\") AS total FROM spending_state_agency WHERE LOWER(state) = \'california\' AND year = \'2024\' ORDER BY total DESC;"}',
+        '{"reasoning": "All agencies in one state from spending_state_agency. Use only monetary columns when computing total federal amount.", "sql": "SELECT agency, Contracts, Grants, \\"Resident Wage\\", \\"Direct Payments\\", \\"Employees Wage\\", ROUND(Contracts + Grants + \\"Resident Wage\\" + \\"Direct Payments\\" + \\"Employees Wage\\", 2) AS total_federal_amount FROM spending_state_agency WHERE LOWER(state) = \'california\' AND year = \'2024\' ORDER BY total_federal_amount DESC;"}',
     ),
     (
         "Which agency spends the most on grants nationwide?",
@@ -253,7 +260,7 @@ _EXAMPLES_CROSS = [
     ),
     (
         "States with highest debt but lowest federal funding",
-        '{"reasoning": "Cross-dataset: gov_state (no year) + contract_state (year=\'2024\'). CTE approach for each side, rank by debt and funding separately.", "sql": "WITH debt AS (SELECT state, Debt_Ratio, RANK() OVER(ORDER BY Debt_Ratio DESC) AS debt_rank FROM gov_state), funding AS (SELECT state, Contracts + Grants AS total_federal FROM contract_state WHERE year = \'2024\') SELECT d.state, ROUND(d.Debt_Ratio, 3) AS debt_ratio, d.debt_rank, ROUND(f.total_federal, 0) AS total_federal FROM debt d JOIN funding f ON LOWER(d.state) = LOWER(f.state) WHERE d.debt_rank <= 15 ORDER BY f.total_federal ASC;"}',
+        '{"reasoning": "Cross-dataset: gov_state (no year) + contract_state (year=\'2024\'). Total federal funding should use the monetary columns only.", "sql": "WITH debt AS (SELECT state, Debt_Ratio, RANK() OVER(ORDER BY Debt_Ratio DESC) AS debt_rank FROM gov_state), funding AS (SELECT state, Contracts + Grants + \\"Resident Wage\\" + \\"Direct Payments\\" + \\"Employees Wage\\" AS total_federal FROM contract_state WHERE year = \'2024\') SELECT d.state, ROUND(d.Debt_Ratio, 3) AS debt_ratio, d.debt_rank, ROUND(f.total_federal, 0) AS total_federal FROM debt d JOIN funding f ON LOWER(d.state) = LOWER(f.state) WHERE d.debt_rank <= 15 ORDER BY f.total_federal ASC;"}',
     ),
 ]
 
