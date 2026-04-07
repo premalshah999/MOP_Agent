@@ -1,0 +1,27 @@
+services:
+  mop-agent:
+    build: .
+    container_name: mop-agent
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - SQLITE_DB_PATH=/app/data/runtime/mop.sqlite3
+      - DUCKDB_PATH=/app/data/runtime/mop.duckdb
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - TRUSTED_HOSTS=${TRUSTED_HOSTS:-*}
+    volumes:
+      # Persist SQLite database and query logs across restarts
+      - mop-data:/app/data/runtime
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mop-data:
+    driver: local

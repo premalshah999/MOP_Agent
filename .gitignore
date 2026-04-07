@@ -1,0 +1,24 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+
+# Parquet files are committed to the repo (required for Docker build on Hetzner).
+# If any file exceeds GitHub's 100 MB limit, install git-lfs:
+#   git lfs install && git lfs track "data/parquet/*.parquet"
+# data/parquet/   ← intentionally NOT ignored
+
+# Runtime state — generated at startup, not committed
+data/runtime/
+data/query_log.jsonl
+
+# Build artifacts
+frontend/node_modules/
+frontend/dist/
+*.sqlite3
+*.db
+
+# Dev / test
+.pytest_cache/
+output/
+reports/
