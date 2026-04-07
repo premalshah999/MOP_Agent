@@ -166,6 +166,7 @@ def _is_year_like(column_name: str) -> bool:
 
 def _choose_primary_metric(question: str, df: pd.DataFrame, label_col: Optional[str]) -> Optional[str]:
     preferred = [
+        "spending_total",
         "total_federal_amount",
         "total_amount",
         "total_flow",

@@ -252,11 +252,11 @@ class FormatterTests(unittest.TestCase):
     def test_format_result_prefers_grounded_summary(self) -> None:
         df = pd.DataFrame({
             "agency": ["HHS", "Defense", "SSA"],
-            "total_federal_amount": [36.2, 31.8, 29.1],
+            "spending_total": [36.2, 31.8, 29.1],
         })
         result = formatter.format_result("Which agencies account for the most spending in Maryland?", df)
         self.assertIn("HHS", result)
-        self.assertIn("total_federal_amount", result)
+        self.assertIn("spending_total", result)
 
     def test_fallback_answer_no_api_key(self) -> None:
         df = pd.DataFrame({
@@ -552,6 +552,13 @@ class SchemaContextTests(unittest.TestCase):
         ctx = build_schema_context(["gov_state"])
         self.assertNotIn("JOIN PATHS:", ctx)
 
+    def test_schema_context_includes_canonical_spending_rules(self) -> None:
+        from app.router import build_schema_context
+        ctx = build_schema_context(["contract_state"])
+        self.assertIn("CANONICAL CHATBOT RULES:", ctx)
+        self.assertIn('Contracts + Grants + "Resident Wage"', ctx)
+        self.assertIn("Direct Payments", ctx)
+
 
 class PromptImprovementTests(unittest.TestCase):
     """Test that the improved prompt contains critical new rules."""
@@ -579,6 +586,10 @@ class PromptImprovementTests(unittest.TestCase):
     def test_prompt_distinguishes_spending_state_year_column(self) -> None:
         self.assertIn("| spending_state | Year | VARCHAR | '2024' |", prompts.SQL_SYSTEM_PROMPT)
 
+    def test_prompt_includes_dashboard_spending_rule(self) -> None:
+        self.assertIn('use spending_total = Contracts + Grants + "Resident Wage"', prompts.SQL_SYSTEM_PROMPT)
+        self.assertIn("Do not silently invent a total", prompts.SQL_SYSTEM_PROMPT)
+
     def test_examples_use_json_format(self) -> None:
         examples = prompts.get_relevant_examples(["state_flow"])
         self.assertIn('"reasoning":', examples)
@@ -596,9 +607,21 @@ class PlannerTests(unittest.TestCase):
         assert plan is not None
         self.assertEqual(plan.table_names, ["spending_state_agency"])
         self.assertIn("Resident Wage", plan.sql)
-        self.assertIn("Employees Wage", plan.sql)
-        self.assertNotIn("Federal Residents +", plan.sql)
+        self.assertIn("spending_total", plan.sql)
+        self.assertNotIn("Direct Payments", plan.sql)
+        self.assertNotIn("Employees Wage", plan.sql)
+        self.assertNotIn("Federal Residents", plan.sql)
         self.assertNotIn("Employees +", plan.sql)
+
+    def test_planner_uses_dashboard_composite_for_broad_federal_spending(self) -> None:
+        plan = planner.plan_query("How much federal money goes to Maryland?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["contract_state"])
+        self.assertIn("spending_total", plan.sql)
+        self.assertIn("Resident Wage", plan.sql)
+        self.assertNotIn("Direct Payments", plan.sql)
+        self.assertNotIn("Employees Wage", plan.sql)
 
     def test_planner_handles_gov_metric_ranking(self) -> None:
         plan = planner.plan_query("Which states have the highest debt ratio?")

@@ -6,11 +6,13 @@ from functools import lru_cache
 
 from app.db import execute_query
 from app.metadata_utils import (
+    agency_spending_total_expression,
     available_tables,
-    broad_money_total_expression,
     column_match_score,
     count_columns,
     default_year_filter,
+    default_spending_component_columns,
+    default_spending_total_expression,
     monetary_columns,
     quote_identifier,
     table_columns,
@@ -178,7 +180,7 @@ def _is_compare(question: str, states: list[str]) -> bool:
     return len(states) >= 2 or any(token in q for token in ["compare", "versus", " vs ", "against"])
 
 
-def _needs_broad_money_total(question: str, table_name: str) -> bool:
+def _needs_default_spending_total(question: str, table_name: str) -> bool:
     q = question.lower()
     if table_name not in {"contract_state", "contract_county", "contract_congress", "spending_state", "spending_state_agency"}:
         return False
@@ -244,13 +246,18 @@ def _metric_expr_for_component(table_name: str, column_name: str, question: str)
 
 
 def _resolve_metric(table_name: str, question: str) -> tuple[str, str] | None:
-    if _needs_broad_money_total(question, table_name):
-        expr = broad_money_total_expression(table_name, alias="total_federal_amount")
+    if _needs_default_spending_total(question, table_name):
+        expr = (
+            agency_spending_total_expression(table_name, alias="spending_total")
+            if table_name == "spending_state_agency"
+            else default_spending_total_expression(table_name, alias="spending_total")
+        )
+        alias = "spending_total"
         if expr:
             raw_expr = expr.rsplit(" AS ", 1)[0]
             if raw_expr.startswith("(") and raw_expr.endswith(")"):
                 raw_expr = raw_expr[1:-1]
-            return raw_expr, "total_federal_amount"
+            return raw_expr, alias
 
     q = question.lower()
     for column_name, aliases in _COMPONENT_COLUMNS.items():
@@ -442,7 +449,14 @@ def _plan_standard_table(question: str, table_name: str) -> QueryPlan | None:
     if not label_columns:
         return None
 
-    select_cols = ", ".join(dict.fromkeys(label_columns))
+    select_parts = list(dict.fromkeys(label_columns))
+    if metric_alias == "spending_total":
+        component_cols = default_spending_component_columns(table_name)
+        select_parts.extend(
+            f"ROUND({quote_identifier(col)}, 2) AS {_metric_alias(col)}"
+            for col in component_cols
+        )
+    select_cols = ", ".join(select_parts)
     order_by = metric_alias
     sql = f"SELECT {select_cols}, {_render_metric(metric_expr, metric_alias, table_name)} FROM {table_name}{where_clause}"
 
@@ -468,7 +482,10 @@ def _plan_spending_state_agency(question: str) -> QueryPlan | None:
 
     base_filters = _default_filters(table_name, question)
     direction = _order_direction(question)
-    money_cols = [col for col in monetary_columns(table_name) if col in table_columns(table_name)]
+    if metric_alias == "spending_total":
+        money_cols = default_spending_component_columns(table_name)
+    else:
+        money_cols = [col for col in monetary_columns(table_name) if col in table_columns(table_name)]
     rendered_money_cols = ", ".join(f"ROUND({quote_identifier(col)}, 2) AS {_metric_alias(col)}" for col in money_cols)
 
     if state_names:
@@ -485,7 +502,7 @@ def _plan_spending_state_agency(question: str) -> QueryPlan | None:
 
         where_clause = _build_where_clause(filters)
         select_parts = ["agency"]
-        if metric_alias == "total_federal_amount" and rendered_money_cols:
+        if metric_alias == "spending_total" and rendered_money_cols:
             select_parts.append(rendered_money_cols)
         select_parts.append(_render_metric(metric_expr, metric_alias, table_name))
         sql = (

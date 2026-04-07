@@ -127,11 +127,15 @@ SELECT * FROM ranked WHERE rnk <= 10;
 - Single-entity question: include national AVG, MEDIAN, RANK via window functions in a CTE.
 - Relationship/correlation: include corr(), COUNT(*), and means of both metrics.
 - Comparison: use CTEs to compute each side, then JOIN.
-- "Federal money/spending" without specifying a component:
-  - For contract/spending tables, compute a monetary total from the dollar columns present on that table.
-  - Monetary columns are Contracts, Grants, "Resident Wage", "Direct Payments", and "Employees Wage" when present.
-  - NEVER add count columns such as "Federal Residents" or Employees into dollar totals.
-  - NEVER add any "Per 1000" columns into totals.
+- The contract_* and spending_state tables are channel-based federal spending tables. Do not silently invent a total by adding every dollar-like column.
+- For generic federal spending questions where a default composite is needed, use spending_total = Contracts + Grants + "Resident Wage".
+- Exclude "Direct Payments", "Federal Residents", Employees, and "Employees Wage" unless the user explicitly asks for them.
+- NEVER add count columns such as "Federal Residents" or Employees into dollar totals.
+- NEVER add any "Per 1000" columns into totals.
+- For agency-ranking questions like "Which agencies account for the most spending in Maryland?":
+  - Default to spending_total = Contracts + Grants + "Resident Wage".
+  - Exclude "Direct Payments", "Federal Residents", Employees, and "Employees Wage" unless the user explicitly asks for them.
+- Treat '2020-2024' as its own aggregate period label, not as interchangeable with single-year '2024'.
 - Prefer per-capita or per-1000 metrics for fair cross-entity comparisons.
 - Default years when unspecified: acs=2023, contract/spending='2024', finra=2021, gov=no filter, flow=no filter (or act_dt_fis_yr=2024 for county/congress flow).
 
@@ -192,7 +196,7 @@ _EXAMPLES_CONTRACT = [
     ),
     (
         "How much federal money goes to Maryland?",
-        '{"reasoning": "User asks about federal money broadly — sum only the monetary columns on contract_state and keep the component columns visible", "sql": "SELECT state, Contracts, Grants, \\"Resident Wage\\", \\"Direct Payments\\", \\"Employees Wage\\", ROUND(Contracts + Grants + \\"Resident Wage\\" + \\"Direct Payments\\" + \\"Employees Wage\\", 2) AS total_federal_amount FROM contract_state WHERE LOWER(state) = \'maryland\' AND year = \'2024\';"}',
+        '{"reasoning": "User asks about federal spending broadly. Use the dashboard-aligned spending_total = Contracts + Grants + \\"Resident Wage\\" and keep the component columns visible.", "sql": "SELECT state, Contracts, Grants, \\"Resident Wage\\", ROUND(Contracts + Grants + \\"Resident Wage\\", 2) AS spending_total FROM contract_state WHERE LOWER(state) = \'maryland\' AND year = \'2024\';"}',
     ),
     (
         "Counties in Texas with highest grants per capita",
@@ -203,11 +207,11 @@ _EXAMPLES_CONTRACT = [
 _EXAMPLES_AGENCY = [
     (
         "How much did the Department of Defense spend in Maryland in 2024?",
-        '{"reasoning": "spending_state_agency for agency detail, state is UPPERCASE, year is varchar. Broad spending means sum only monetary columns, not counts.", "sql": "SELECT agency, state, Contracts, Grants, \\"Resident Wage\\", \\"Direct Payments\\", \\"Employees Wage\\", ROUND(Contracts + Grants + \\"Resident Wage\\" + \\"Direct Payments\\" + \\"Employees Wage\\", 2) AS total_federal_amount FROM spending_state_agency WHERE LOWER(state) = \'maryland\' AND agency = \'Department of Defense\' AND year = \'2024\';"}',
+        '{"reasoning": "spending_state_agency for agency detail, state is UPPERCASE, year is varchar. Default spending composition on the dashboard is Contracts + Grants + Resident Wage.", "sql": "SELECT agency, state, Contracts, Grants, \\"Resident Wage\\", ROUND(Contracts + Grants + \\"Resident Wage\\", 2) AS spending_total FROM spending_state_agency WHERE LOWER(state) = \'maryland\' AND agency = \'Department of Defense\' AND year = \'2024\';"}',
     ),
     (
         "Federal spending in California by agency in 2024",
-        '{"reasoning": "All agencies in one state from spending_state_agency. Use only monetary columns when computing total federal amount.", "sql": "SELECT agency, Contracts, Grants, \\"Resident Wage\\", \\"Direct Payments\\", \\"Employees Wage\\", ROUND(Contracts + Grants + \\"Resident Wage\\" + \\"Direct Payments\\" + \\"Employees Wage\\", 2) AS total_federal_amount FROM spending_state_agency WHERE LOWER(state) = \'california\' AND year = \'2024\' ORDER BY total_federal_amount DESC;"}',
+        '{"reasoning": "All agencies in one state from spending_state_agency. For default agency spending composition, use Contracts + Grants + Resident Wage.", "sql": "SELECT agency, Contracts, Grants, \\"Resident Wage\\", ROUND(Contracts + Grants + \\"Resident Wage\\", 2) AS spending_total FROM spending_state_agency WHERE LOWER(state) = \'california\' AND year = \'2024\' ORDER BY spending_total DESC;"}',
     ),
     (
         "Which agency spends the most on grants nationwide?",
@@ -260,7 +264,7 @@ _EXAMPLES_CROSS = [
     ),
     (
         "States with highest debt but lowest federal funding",
-        '{"reasoning": "Cross-dataset: gov_state (no year) + contract_state (year=\'2024\'). Total federal funding should use the monetary columns only.", "sql": "WITH debt AS (SELECT state, Debt_Ratio, RANK() OVER(ORDER BY Debt_Ratio DESC) AS debt_rank FROM gov_state), funding AS (SELECT state, Contracts + Grants + \\"Resident Wage\\" + \\"Direct Payments\\" + \\"Employees Wage\\" AS total_federal FROM contract_state WHERE year = \'2024\') SELECT d.state, ROUND(d.Debt_Ratio, 3) AS debt_ratio, d.debt_rank, ROUND(f.total_federal, 0) AS total_federal FROM debt d JOIN funding f ON LOWER(d.state) = LOWER(f.state) WHERE d.debt_rank <= 15 ORDER BY f.total_federal ASC;"}',
+        '{"reasoning": "Cross-dataset: gov_state (no year) + contract_state (year=\'2024\'). Use dashboard-aligned spending_total = Contracts + Grants + \\"Resident Wage\\".", "sql": "WITH debt AS (SELECT state, Debt_Ratio, RANK() OVER(ORDER BY Debt_Ratio DESC) AS debt_rank FROM gov_state), funding AS (SELECT state, Contracts + Grants + \\"Resident Wage\\" AS spending_total FROM contract_state WHERE year = \'2024\') SELECT d.state, ROUND(d.Debt_Ratio, 3) AS debt_ratio, d.debt_rank, ROUND(f.spending_total, 0) AS spending_total FROM debt d JOIN funding f ON LOWER(d.state) = LOWER(f.state) WHERE d.debt_rank <= 15 ORDER BY f.spending_total ASC;"}',
     ),
 ]
 
@@ -457,6 +461,10 @@ DEFINITIONS: dict[str, str] = {
     "contracts": (
         "Federal contracts are agreements where the government purchases goods or services. "
         "Available in contract_state, contract_county, contract_congress with year as VARCHAR."
+    ),
+    "federal spending": (
+        "In the dashboard's default spending composition, federal spending means Contracts + Grants + Resident Wage. "
+        "Direct Payments, Federal Residents, Employees, and Employees Wage should only be included when the user explicitly asks for them."
     ),
     "grants": (
         "Federal grants are financial assistance awards to state/local governments or organizations. "

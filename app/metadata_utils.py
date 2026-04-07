@@ -71,6 +71,8 @@ _MONEY_COLUMNS = {
     "Revenue",
 }
 _COUNT_COLUMNS = {"Federal Residents", "Employees"}
+_AGENCY_SPENDING_COMPONENTS = ("Contracts", "Grants", "Resident Wage")
+_DEFAULT_SPENDING_COMPONENTS = ("Contracts", "Grants", "Resident Wage")
 
 
 @lru_cache(maxsize=1)
@@ -190,9 +192,22 @@ def count_columns(table_name: str) -> list[str]:
     return [col for col in cols if col in _COUNT_COLUMNS]
 
 
-def broad_money_total_expression(table_name: str, alias: str = "total_amount") -> str | None:
-    cols = monetary_columns(table_name)
-    if not cols:
+def default_spending_component_columns(table_name: str) -> list[str]:
+    cols = set(table_columns(table_name))
+    return [col for col in _DEFAULT_SPENDING_COMPONENTS if col in cols]
+
+
+def default_spending_total_expression(table_name: str, alias: str = "spending_total") -> str | None:
+    cols = default_spending_component_columns(table_name)
+    if len(cols) != len(_DEFAULT_SPENDING_COMPONENTS):
+        return None
+    expr = " + ".join(f"COALESCE({quote_identifier(col)}, 0)" for col in cols)
+    return f"({expr}) AS {alias}"
+
+
+def agency_spending_total_expression(table_name: str, alias: str = "spending_total") -> str | None:
+    cols = [col for col in _AGENCY_SPENDING_COMPONENTS if col in table_columns(table_name)]
+    if len(cols) != len(_AGENCY_SPENDING_COMPONENTS):
         return None
     expr = " + ".join(f"COALESCE({quote_identifier(col)}, 0)" for col in cols)
     return f"({expr}) AS {alias}"

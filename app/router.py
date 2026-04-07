@@ -12,10 +12,11 @@ from typing import Any, Optional
 from openai import OpenAI
 
 from app.metadata_utils import (
+    agency_spending_total_expression,
     available_tables,
-    broad_money_total_expression,
     count_columns,
     default_year_filter,
+    default_spending_total_expression,
     load_metadata,
     monetary_columns,
     relevant_warnings,
@@ -291,6 +292,17 @@ def build_schema_context(table_names: list[str]) -> str:
         selected = {k: v for k, v in tables.items() if k in available}
 
     lines = ["SCHEMA FOR SELECTED TABLES:\n"]
+    lines.extend(
+        [
+            "CANONICAL CHATBOT RULES:",
+            "- Treat generic federal spending questions as channel-based unless a dashboard composite is explicitly defined.",
+            "- For default spending composition in contract/spending tables, use Contracts + Grants + \"Resident Wage\".",
+            "- Do not silently fold in \"Direct Payments\", \"Federal Residents\", Employees, or \"Employees Wage\" unless the user explicitly asks for them.",
+            "- Counts are not dollars, and per-1000/per-capita columns are already normalized metrics.",
+            "- Treat '2020-2024' as a separate aggregate period label, not the same thing as single-year 2024.",
+            "",
+        ]
+    )
 
     warnings = relevant_warnings(list(selected.keys()))
     if warnings:
@@ -339,12 +351,18 @@ def build_schema_context(table_names: list[str]) -> str:
         count_cols = count_columns(name)
         if count_cols:
             lines.append(f"  Count columns (do not add into dollar totals): {', '.join(count_cols)}")
-        total_formula = broad_money_total_expression(name, alias="total_federal_amount")
+        total_formula = agency_spending_total_expression(name, alias="spending_total") if name == "spending_state_agency" else default_spending_total_expression(name, alias="spending_total")
         if total_formula:
-            lines.append(
-                "  Broad spending rule: if the user asks for total federal money/spending without naming a component, "
-                f"use {total_formula} and NEVER add count or per-1000 columns."
-            )
+            if name == "spending_state_agency":
+                lines.append(
+                    "  Agency spending default: when the user asks for top agencies by spending, use "
+                    f"{total_formula} and exclude Direct Payments, Federal Residents, Employees, and Employees Wage unless explicitly requested."
+                )
+            else:
+                lines.append(
+                    "  Broad spending rule: if the user asks for federal spending without naming a component, "
+                    f"use {total_formula}; do not add Direct Payments, Federal Residents, Employees, Employees Wage, count columns, or per-1000 columns unless explicitly requested."
+                )
 
         # Sample rows — helps LLM understand actual data format, casing, types
         sample = _get_sample_rows(name)
