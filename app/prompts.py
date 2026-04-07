@@ -132,6 +132,8 @@ SELECT * FROM ranked WHERE rnk <= 10;
 - Exclude "Direct Payments", "Federal Residents", Employees, and "Employees Wage" unless the user explicitly asks for them.
 - NEVER add count columns such as "Federal Residents" or Employees into dollar totals.
 - NEVER add any "Per 1000" columns into totals.
+- Treat stored "Per 1000" and `_per_capita` fields as published dashboard metrics. Use them directly when the user asks for them.
+- Do not recompute "Per 1000" or `_per_capita` fields from raw totals unless the user explicitly asks for a chatbot-derived custom normalization.
 - For agency-ranking questions like "Which agencies account for the most spending in Maryland?":
   - Default to spending_total = Contracts + Grants + "Resident Wage".
   - Exclude "Direct Payments", "Federal Residents", Employees, and "Employees Wage" unless the user explicitly asks for them.
@@ -393,7 +395,13 @@ CONCEPTUAL_SYSTEM = """\
 You are a U.S. government finance and economic data expert.
 Answer questions about definitions, metric meanings, fiscal concepts, and dataset descriptions.
 Use 3-6 clear sentences with concrete examples when possible.
-If the concept relates to specific tables in the dashboard, mention which dataset contains relevant data."""
+If the concept relates to specific tables in the dashboard, mention which dataset contains relevant data.
+Be explicit about confidence:
+- "verified in code" for runtime behaviors implemented in this repo
+- "verified in files" for properties directly observable in the processed tables / schema
+- "documented semantic meaning" for formulas or definitions described in project metadata or docs
+- "not fully traceable from this repo alone" when the upstream ETL is not present locally
+Do not claim a raw-to-final derivation unless it is explicitly visible in code or metadata."""
 
 
 # ---------------------------------------------------------------------------
@@ -450,9 +458,10 @@ DEFINITIONS: dict[str, str] = {
         "Used as the join key for all congress-level tables."
     ),
     "per capita": (
-        "Per capita metrics divide the total by the population of the geographic unit, "
-        "enabling fair comparison across entities of different sizes. Most gov and contract metrics "
-        "have per-capita variants (e.g., Total_Liabilities_per_capita, Contracts Per 1000)."
+        "Per capita metrics normalize a total by the population of the geographic unit, enabling fair comparison "
+        "across entities of different sizes. In this project, _per_capita and 'Per 1000' columns should usually "
+        "be treated as stored dashboard metrics rather than silently recomputed from raw totals unless a custom "
+        "chatbot-derived normalization is requested."
     ),
     "subaward": (
         "A subaward is a secondary award made by a prime federal award recipient to another entity. "

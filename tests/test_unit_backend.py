@@ -558,6 +558,7 @@ class SchemaContextTests(unittest.TestCase):
         self.assertIn("CANONICAL CHATBOT RULES:", ctx)
         self.assertIn('Contracts + Grants + "Resident Wage"', ctx)
         self.assertIn("Direct Payments", ctx)
+        self.assertIn('Use stored "Per 1000" and `_per_capita` fields directly', ctx)
 
 
 class PromptImprovementTests(unittest.TestCase):
@@ -589,6 +590,7 @@ class PromptImprovementTests(unittest.TestCase):
     def test_prompt_includes_dashboard_spending_rule(self) -> None:
         self.assertIn('use spending_total = Contracts + Grants + "Resident Wage"', prompts.SQL_SYSTEM_PROMPT)
         self.assertIn("Do not silently invent a total", prompts.SQL_SYSTEM_PROMPT)
+        self.assertIn('Do not recompute "Per 1000" or `_per_capita` fields', prompts.SQL_SYSTEM_PROMPT)
 
     def test_examples_use_json_format(self) -> None:
         examples = prompts.get_relevant_examples(["state_flow"])

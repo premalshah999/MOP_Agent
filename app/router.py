@@ -299,6 +299,8 @@ def build_schema_context(table_names: list[str]) -> str:
             "- For default spending composition in contract/spending tables, use Contracts + Grants + \"Resident Wage\".",
             "- Do not silently fold in \"Direct Payments\", \"Federal Residents\", Employees, or \"Employees Wage\" unless the user explicitly asks for them.",
             "- Counts are not dollars, and per-1000/per-capita columns are already normalized metrics.",
+            "- Use stored \"Per 1000\" and `_per_capita` fields directly when the user asks for them; do not silently recompute them from totals.",
+            "- Be honest about provenance: separate runtime behavior verified in code from semantic descriptions documented in metadata or docs.",
             "- Treat '2020-2024' as a separate aggregate period label, not the same thing as single-year 2024.",
             "",
         ]
