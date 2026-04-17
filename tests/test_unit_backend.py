@@ -97,6 +97,20 @@ class SqlUtilsTests(unittest.TestCase):
         self.assertIn("year = '2024'", result)
         self.assertIn("LIMIT", result)
 
+    def test_prepare_sql_does_not_limit_leaderboard_bundle_queries(self) -> None:
+        raw = (
+            "WITH ranked AS (SELECT state, Debt_Ratio AS debt_ratio, 1 AS metric_rank, 50 AS total_states, 0.44 AS national_average FROM gov_state), "
+            "focus AS (SELECT 'focus' AS row_kind, state, debt_ratio, metric_rank, total_states, national_average, 0 AS list_position FROM ranked), "
+            "top_rows AS (SELECT 'top' AS row_kind, state, debt_ratio, metric_rank, total_states, national_average, metric_rank AS list_position FROM ranked), "
+            "bottom_rows AS (SELECT 'bottom' AS row_kind, state, debt_ratio, metric_rank, total_states, national_average, metric_rank AS list_position FROM ranked) "
+            "SELECT * FROM focus UNION ALL SELECT * FROM top_rows UNION ALL SELECT * FROM bottom_rows ORDER BY row_kind, list_position"
+        )
+        result = sql_utils.prepare_sql(
+            raw,
+            "Where does Maryland rank nationally for debt ratio, and what are the top 10 and bottom 10 states?",
+        )
+        self.assertNotIn(" LIMIT ", result.upper())
+
 
 # ===================================================================
 # Router
