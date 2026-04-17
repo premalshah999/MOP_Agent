@@ -249,7 +249,48 @@ def _resolve_followup(question: str, history: list[dict[str, str]]) -> str:
     frame = infer_query_frame(question)
     last_frame = infer_query_frame(last_q) if last_q else infer_query_frame("")
 
+    def _metric_phrase(metric_hint: str | None) -> str | None:
+        if not metric_hint:
+            return None
+        mapping = {
+            "spending_total": "default federal spending",
+            "Total_Liabilities": "total liabilities",
+            "Total_Assets": "total assets",
+            "Debt_Ratio": "debt ratio",
+            "Current_Ratio": "current ratio",
+            "Free_Cash_Flow": "free cash flow",
+            "financial_literacy": "financial literacy",
+            "financial_constraint": "financial constraint",
+            "alternative_financing": "alternative financing",
+            "Median household income": "median household income",
+            "Below poverty": "poverty",
+            "Education >= Bachelor's": "bachelor's attainment",
+            "Total population": "total population",
+            "Black": "Black population share",
+            "Black_count": "Black population count",
+            "Hispanic": "Hispanic population share",
+            "Hispanic_count": "Hispanic population count",
+            "White": "White population share",
+            "White_count": "White population count",
+            "Asian": "Asian population share",
+            "Asian_count": "Asian population count",
+        }
+        return mapping.get(metric_hint, metric_hint.replace("_", " ").lower())
+
     if last_q:
+        if frame.intent == "compare" and len(frame.state_names) >= 2 and frame.metric_hint is None:
+            metric_phrase = _metric_phrase(last_frame.metric_hint)
+            if metric_phrase:
+                state_labels = [
+                    " ".join(part.capitalize() for part in state.split())
+                    for state in frame.state_names[:3]
+                ]
+                if len(state_labels) == 2:
+                    states_phrase = f"{state_labels[0]} and {state_labels[1]}"
+                else:
+                    states_phrase = ", ".join(state_labels[:-1]) + f", and {state_labels[-1]}"
+                return f"Compare {states_phrase} on {metric_phrase}"
+
         if q_lower in {"by count", "by number", "count", "number"}:
             if re.search(r"\bby (ratio|share|percent|percentage|count|number)\b", last_q, re.IGNORECASE):
                 return re.sub(
