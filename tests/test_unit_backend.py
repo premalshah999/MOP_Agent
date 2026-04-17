@@ -260,11 +260,30 @@ class MapIntentTests(unittest.TestCase):
             ]
         )
         intent = map_intent.build_map_intent(
-            "Which states send the most subcontract inflow into Maryland?",
+            "Which state-pair flows are the largest nationally?",
             df,
             ["state_flow"],
         )
         self.assertFalse(intent["enabled"])
+
+    def test_build_map_intent_enables_flow_breakdown_map(self) -> None:
+        df = pd.DataFrame(
+            [
+                {"rcpt_state_name": "Virginia", "total_flow": 8_130_000_000},
+                {"rcpt_state_name": "Texas", "total_flow": 5_130_000_000},
+                {"rcpt_state_name": "California", "total_flow": 1_060_000_000},
+                {"rcpt_state_name": "Ohio", "total_flow": 661_490_000},
+            ]
+        )
+        intent = map_intent.build_map_intent(
+            "Which states send the most subcontract inflow into Maryland?",
+            df,
+            ["state_flow"],
+        )
+        self.assertTrue(intent["enabled"])
+        self.assertEqual(intent["dataset"], "fund_flow")
+        self.assertEqual(intent["level"], "state")
+        self.assertEqual(intent["mapType"], "top-n-highlight")
 
     def test_build_map_intent_enables_single_row_state_lookup(self) -> None:
         df = pd.DataFrame(
@@ -805,6 +824,16 @@ class AgentIntegrationTests(unittest.TestCase):
         )
         self.assertNotEqual(intent, "FOLLOWUP")
 
+    def test_contextual_reframe_is_classified_as_followup(self) -> None:
+        from app import agent
+
+        agent._last_query.clear()
+        intent = agent._classify_intent(
+            "money as in federal fund flows",
+            [{"role": "user", "content": "How much federal money goes to Maryland?"}],
+        )
+        self.assertEqual(intent, "FOLLOWUP")
+
     def test_ask_agent_returns_rank_for_mississippi_position_lookup(self) -> None:
         from app import agent
 
@@ -837,6 +866,14 @@ class AgentIntegrationTests(unittest.TestCase):
         self.assertIn("answer", result)
         self.assertIn("needs a dimension", result["answer"].lower())
         self.assertIsNone(result["sql"])
+
+    def test_resolve_followup_rewrites_fund_flow_reference_to_prior_state(self) -> None:
+        from app import agent
+
+        agent._last_query.clear()
+        agent._last_query["question"] = "How much federal money goes to Maryland?"
+        resolved = agent._resolve_followup("money as in federal fund flows", [])
+        self.assertEqual(resolved, "How much subcontract inflow goes to Maryland?")
 
 
 class ChartGeneratorTests(unittest.TestCase):
@@ -1213,6 +1250,15 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNotNone(plan)
         assert plan is not None
         self.assertIn("DATA_NOT_AVAILABLE", plan.sql)
+
+    def test_planner_returns_total_for_state_flow_amount_question(self) -> None:
+        plan = planner.plan_query("How much subcontract inflow goes to Maryland?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["state_flow"])
+        self.assertIn("SUM(subaward_amount_year)", plan.sql)
+        self.assertIn("LOWER(subawardee_state_name) = 'maryland'", plan.sql)
+        self.assertNotIn("GROUP BY rcpt_state_name", plan.sql)
 
 
 if __name__ == "__main__":

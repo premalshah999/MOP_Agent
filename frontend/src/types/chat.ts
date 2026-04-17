@@ -90,7 +90,7 @@ export interface ChatbotMapIntent {
   mapType: ChatbotMapType;
   defaultView?: 'heat' | 'comparison' | 'state-zoom' | 'subdivision' | 'subdivision-zoom';
   buttonLabel?: string;
-  dataset?: 'census' | 'gov_spending' | 'finra' | 'contract_static' | 'contract_agency' | 'spending_breakdown';
+  dataset?: 'census' | 'gov_spending' | 'finra' | 'contract_static' | 'contract_agency' | 'spending_breakdown' | 'fund_flow';
   level?: 'state' | 'county' | 'congress';
   year?: string;
   metric?: string;

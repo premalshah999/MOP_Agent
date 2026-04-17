@@ -142,6 +142,10 @@ CONTEXTUAL_FOLLOWUP_SIGNALS = [
     "and ",
     "what's ",
     "whats ",
+    "as in",
+    "instead",
+    "rather than",
+    "i mean",
 ]
 
 
@@ -174,6 +178,9 @@ def _classify_intent(question: str, history: list[dict[str, str]]) -> str:
                 or (has_contextual_signal and not has_explicit_metric_context)
             )
         ):
+            return "FOLLOWUP"
+
+        if len(words_clean) <= 8 and has_contextual_signal and frame.family is not None and not frame.state_names:
             return "FOLLOWUP"
 
     # Only bypass to DATA_QUERY for clear data-seeking patterns
@@ -217,11 +224,36 @@ def _resolve_followup(question: str, history: list[dict[str, str]]) -> str:
 
     q_lower = question.lower().strip()
     frame = infer_query_frame(question)
+    last_frame = infer_query_frame(last_q) if last_q else infer_query_frame("")
 
     # If the follow-up already names the metric/family explicitly, keep it self-contained
     # instead of leaking previous-answer entities into the rewritten question.
     if frame.metric_hint is not None and frame.family is not None:
         return question
+
+    if (
+        frame.family == "flow"
+        and not frame.state_names
+        and last_frame.primary_state
+        and any(
+            phrase in q_lower
+            for phrase in (
+                "fund flow",
+                "fund flows",
+                "subcontract flow",
+                "subcontract flows",
+                "money as in",
+                "as in federal fund flows",
+                "as in fund flows",
+                "flow instead",
+                "flows instead",
+            )
+        )
+    ):
+        state_label = " ".join(part.capitalize() for part in last_frame.primary_state.split())
+        if any(token in q_lower for token in ("how much", "money", "total", "amount", "fund")):
+            return f"How much subcontract inflow goes to {state_label}?"
+        return f"Which states send the most subcontract inflow into {state_label}?"
 
     if last_q:
         # Compact geography/entity follow-ups should inherit the prior metric directly.

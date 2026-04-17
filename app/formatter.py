@@ -503,9 +503,13 @@ def _scope_note(sql: str | None, primary: str) -> str | None:
         if "year = '2020-2024'" in sql_lower:
             return "**Scope:** This answer uses the **2020-2024 aggregate** federal spending period, not single-year 2024."
     if " from state_flow" in sql_lower:
-        return "**Scope:** This comes from the **state fund-flow** table, so it ranks state-to-state subcontract flow pairs rather than federal spending totals."
+        if "group by" in sql_lower:
+            return "**Scope:** This comes from the **state fund-flow** table, so it reflects state-to-state subcontract movement rather than direct federal spending totals."
+        return "**Scope:** This comes from the **state fund-flow** table and sums subcontract movement rather than direct federal spending totals."
     if " from county_flow" in sql_lower or " from congress_flow" in sql_lower:
-        return "**Scope:** This comes from the **fund-flow** tables, so it reflects subcontract movement rather than direct federal spending totals."
+        if "group by" in sql_lower:
+            return "**Scope:** This comes from the **fund-flow** tables, so it reflects subcontract movement rather than direct federal spending totals."
+        return "**Scope:** This comes from the **fund-flow** tables and sums subcontract movement rather than direct federal spending totals."
     return None
 
 
@@ -830,6 +834,14 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any], sq
                 f"**{entity}** ranks **{_ordinal(int(rank_value))}** out of **{int(total_entities)}** on "
                 f"**{primary_name}**, at **{primary_value}**.",
             )
+        elif primary == "total_flow" and frame.primary_state:
+            focus_state = " ".join(part.capitalize() for part in frame.primary_state.split())
+            if frame.flow_direction == "inflow":
+                lead = _section("Answer", f"**{focus_state}** receives about **{primary_value}** in subcontract inflow.")
+            elif frame.flow_direction == "outflow":
+                lead = _section("Answer", f"**{focus_state}** sends about **{primary_value}** in subcontract outflow.")
+            else:
+                lead = _section("Answer", f"**{focus_state}** has about **{primary_value}** in subcontract flow.")
         elif primary == "spending_total":
             lead = _section("Answer", f"**{entity}** receives about **{primary_value}** in default federal spending.")
         else:

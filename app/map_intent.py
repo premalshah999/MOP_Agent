@@ -34,6 +34,12 @@ def _table_dataset_level(table_name: str | None) -> tuple[str | None, str | None
         return "spending_breakdown", "state"
     if table_name == "spending_state_agency":
         return "contract_agency", "state"
+    if table_name == "state_flow":
+        return "fund_flow", "state"
+    if table_name == "county_flow":
+        return "fund_flow", "county"
+    if table_name == "congress_flow":
+        return "fund_flow", "congress"
     return None, None
 
 
@@ -74,7 +80,7 @@ def _focus_ids(df: pd.DataFrame) -> list[str]:
     if df.empty:
         return []
     row = df.iloc[0]
-    for column in ("state_fips", "county_fips", "fips", "cd_118", "state", "county"):
+    for column in ("state_fips", "county_fips", "fips", "cd_118", "state", "county", "rcpt_state_name", "subawardee_state_name"):
         value = row.get(column)
         if value is not None and str(value).strip():
             return [str(value)]
@@ -160,6 +166,10 @@ def _resolve_metric(frame: QueryFrame, df: pd.DataFrame) -> str | None:
 
 
 def _resolve_map_type(frame: QueryFrame, level: str | None, df: pd.DataFrame) -> str:
+    if frame.family == "flow":
+        if level in {"county", "congress"} and frame.primary_state:
+            return "single-state-ranked-subregions"
+        return "top-n-highlight"
     if level in {"county", "congress"} and frame.primary_state:
         return "single-state-ranked-subregions" if frame.intent in {"ranking", "share", "compare"} else "atlas-within-state"
     if level == "state" and len(frame.state_names) >= 2:
@@ -172,9 +182,7 @@ def _resolve_map_type(frame: QueryFrame, level: str | None, df: pd.DataFrame) ->
 
 
 def _map_is_useful(frame: QueryFrame, dataset: str, level: str | None, metric: str | None, df: pd.DataFrame) -> bool:
-    if dataset not in {"census", "gov_spending", "finra", "contract_static", "spending_breakdown", "contract_agency"}:
-        return False
-    if frame.family == "flow":
+    if dataset not in {"census", "gov_spending", "finra", "contract_static", "spending_breakdown", "contract_agency", "fund_flow"}:
         return False
     if level not in {"state", "county", "congress"}:
         return False
@@ -182,6 +190,12 @@ def _map_is_useful(frame: QueryFrame, dataset: str, level: str | None, metric: s
         return False
     if frame.intent not in {"ranking", "compare", "lookup", "share"}:
         return False
+    if dataset == "fund_flow":
+        if frame.wants_pair_ranking or frame.wants_internal_flow or frame.wants_displayed_flow:
+            return False
+        if len(df.index) < 2:
+            return False
+        return True
     if _has_multi_agency_non_geo_shape(df, level):
         return False
     if dataset == "contract_agency" and not _single_agency(df):
@@ -272,6 +286,8 @@ def build_map_intent(question: str, df: pd.DataFrame, table_names: list[str] | N
         subtitle_bits.append("Federal Spending Breakdown")
     elif dataset == "contract_agency":
         subtitle_bits.append("Federal Spending by Agency")
+    elif dataset == "fund_flow":
+        subtitle_bits.append("Fund Flow")
     if year_label:
         subtitle_bits.append(str(year_label))
 

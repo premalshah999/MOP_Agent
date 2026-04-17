@@ -180,6 +180,11 @@ def _is_trend(question: str) -> bool:
     return any(token in q for token in ["trend", "over time", "changed", "change in", "from 20", "between 20", "by year", "time series"])
 
 
+def _is_amount_question(question: str) -> bool:
+    q = question.lower()
+    return any(token in q for token in ["how much", "total amount", "total flow", "total subcontract", "how many dollars", "amount of"])
+
+
 def _is_compare(question: str, states: list[str]) -> bool:
     q = question.lower()
     return len(states) >= 2 or any(token in q for token in ["compare", "versus", " vs ", "against"])
@@ -745,6 +750,12 @@ def _plan_flow(question: str, table_name: str, frame: QueryFrame) -> QueryPlan |
             return QueryPlan([table_name], sql, "deterministic_flow_industry_breakdown")
 
         if states:
+            if _is_amount_question(question) and not frame.wants_pair_ranking and not frame.wants_displayed_flow:
+                sql = (
+                    f"SELECT ROUND(SUM({amount_col}), 2) AS total_flow "
+                    f"FROM {table_name}{_build_where_clause(filters)}"
+                )
+                return QueryPlan([table_name], sql, "deterministic_flow_state_total")
             if frame.wants_pair_ranking or frame.wants_displayed_flow:
                 pair_filters = list(filters)
                 if frame.wants_displayed_flow:
@@ -803,6 +814,13 @@ def _plan_flow(question: str, table_name: str, frame: QueryFrame) -> QueryPlan |
             f"{direction} LIMIT {ranking_top_k(question)}"
         )
         return QueryPlan([table_name], sql, "deterministic_flow_nonstate_industry")
+
+    if frame.primary_state and _is_amount_question(question) and not frame.wants_pair_ranking and not frame.wants_displayed_flow:
+        sql = (
+            f"SELECT ROUND(SUM({amount_col}), 2) AS total_flow "
+            f"FROM {table_name}{_build_where_clause(filters)}"
+        )
+        return QueryPlan([table_name], sql, "deterministic_flow_nonstate_total")
 
     if frame.wants_pair_ranking or not frame.state_names:
         pair_filters = list(filters)

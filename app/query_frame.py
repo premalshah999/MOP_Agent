@@ -348,9 +348,9 @@ def _infer_intent(q: str, state_names: tuple[str, ...]) -> str:
 
 
 def _infer_flow_direction(q: str) -> str | None:
-    if any(token in q for token in (" inflow", " inflows", "into ", "incoming", "receive", "received")):
+    if any(token in q for token in (" inflow", " inflows", "into ", "incoming", "receive", "received", "goes to ", "go to ")):
         return "inflow"
-    if any(token in q for token in (" outflow", " outflows", "from ", "outbound", "leaving", "send ", "sends ", "sent ")):
+    if any(token in q for token in (" outflow", " outflows", "from ", "outbound", "leaving", "send ", "sends ", "sent ", "goes from ", "go from ")):
         return "outflow"
     return None
 
