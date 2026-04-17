@@ -266,7 +266,7 @@ class MapIntentTests(unittest.TestCase):
         )
         self.assertFalse(intent["enabled"])
 
-    def test_build_map_intent_disabled_for_single_row_lookup(self) -> None:
+    def test_build_map_intent_enables_single_row_state_lookup(self) -> None:
         df = pd.DataFrame(
             [{"state": "mississippi", "total_liabilities": 1_830_000_000, "metric_rank": 34, "total_states": 50}]
         )
@@ -275,7 +275,41 @@ class MapIntentTests(unittest.TestCase):
             df,
             ["gov_state"],
         )
-        self.assertFalse(intent["enabled"])
+        self.assertTrue(intent["enabled"])
+        self.assertEqual(intent["mapType"], "single-state-spotlight")
+        self.assertEqual(intent["state"], "Mississippi")
+        self.assertEqual(intent.get("buttonLabel"), "Open state map")
+
+    def test_build_map_intent_enables_spending_total_spotlight(self) -> None:
+        df = pd.DataFrame(
+            [{"state": "maryland", "spending_total": 104_270_000_000, "Contracts": 46_230_000_000}]
+        )
+        intent = map_intent.build_map_intent(
+            "How much federal money goes to Maryland?",
+            df,
+            ["contract_state"],
+        )
+        self.assertTrue(intent["enabled"])
+        self.assertEqual(intent["dataset"], "contract_static")
+        self.assertEqual(intent["metric"], "spending_total")
+        self.assertEqual(intent["mapType"], "single-state-spotlight")
+
+    def test_build_map_intent_enables_national_county_heat_map_without_state_filter(self) -> None:
+        df = pd.DataFrame(
+            [
+                {"county": "Los Angeles", "state": "california", "Total population": 10_000_000},
+                {"county": "Cook", "state": "illinois", "Total population": 5_000_000},
+                {"county": "Harris", "state": "texas", "Total population": 4_700_000},
+            ]
+        )
+        intent = map_intent.build_map_intent(
+            "Which counties have the highest total population in 2023?",
+            df,
+            ["acs_county"],
+        )
+        self.assertTrue(intent["enabled"])
+        self.assertEqual(intent["level"], "county")
+        self.assertEqual(intent["mapType"], "top-n-highlight")
 
     def test_build_map_intent_includes_comparison_ids(self) -> None:
         df = pd.DataFrame(

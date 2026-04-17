@@ -81,6 +81,40 @@ def _focus_ids(df: pd.DataFrame) -> list[str]:
     return []
 
 
+def _unique_geo_count(df: pd.DataFrame, level: str | None) -> int:
+    if df.empty:
+        return 0
+    if level == "state" and "state" in df.columns:
+        return int(df["state"].dropna().astype(str).str.lower().nunique())
+    if level == "county":
+        if {"state", "county"}.issubset(df.columns):
+            return int((df["state"].astype(str).str.lower() + "::" + df["county"].astype(str).str.lower()).nunique())
+        if "county" in df.columns:
+            return int(df["county"].dropna().astype(str).str.lower().nunique())
+    if level == "congress" and "cd_118" in df.columns:
+        return int(df["cd_118"].dropna().astype(str).str.upper().nunique())
+    return 0
+
+
+def _single_agency(df: pd.DataFrame) -> str | None:
+    if "agency" not in df.columns:
+        return None
+    agencies = [str(value).strip() for value in df["agency"].dropna().tolist() if str(value).strip()]
+    unique = sorted(set(agencies))
+    if len(unique) == 1:
+        return unique[0]
+    return None
+
+
+def _has_multi_agency_non_geo_shape(df: pd.DataFrame, level: str | None) -> bool:
+    if "agency" not in df.columns:
+        return False
+    agency_count = int(df["agency"].dropna().astype(str).nunique())
+    if agency_count <= 1:
+        return False
+    return _unique_geo_count(df, level) <= 1
+
+
 def _comparison_ids(frame: QueryFrame, level: str | None) -> list[str]:
     if level != "state":
         return []
@@ -127,30 +161,30 @@ def _resolve_metric(frame: QueryFrame, df: pd.DataFrame) -> str | None:
 
 def _resolve_map_type(frame: QueryFrame, level: str | None, df: pd.DataFrame) -> str:
     if level in {"county", "congress"} and frame.primary_state:
-        return "single-state-ranked-subregions" if frame.intent == "ranking" else "atlas-within-state"
+        return "single-state-ranked-subregions" if frame.intent in {"ranking", "share", "compare"} else "atlas-within-state"
     if level == "state" and len(frame.state_names) >= 2:
         return "atlas-comparison"
-    if level == "state" and frame.primary_state and len(df.index) <= 3:
+    if level == "state" and frame.primary_state and frame.intent == "lookup":
         return "single-state-spotlight"
-    if frame.intent == "ranking" and len(df.index) > 1:
+    if frame.intent in {"ranking", "share"}:
         return "top-n-highlight"
     return "atlas-single-metric"
 
 
 def _map_is_useful(frame: QueryFrame, dataset: str, level: str | None, metric: str | None, df: pd.DataFrame) -> bool:
-    if dataset not in {"census", "gov_spending", "finra", "contract_static"}:
+    if dataset not in {"census", "gov_spending", "finra", "contract_static", "spending_breakdown", "contract_agency"}:
         return False
-    if frame.family in {"flow", "agency", "breakdown"}:
+    if frame.family == "flow":
         return False
     if level not in {"state", "county", "congress"}:
         return False
-    if len(df.index) < 4:
+    if metric is None:
         return False
-    if frame.intent not in {"ranking", "compare"}:
+    if frame.intent not in {"ranking", "compare", "lookup", "share"}:
         return False
-    if metric in {None, "spending_total"}:
+    if _has_multi_agency_non_geo_shape(df, level):
         return False
-    if level in {"county", "congress"} and not frame.primary_state:
+    if dataset == "contract_agency" and not _single_agency(df):
         return False
     return True
 
@@ -250,7 +284,7 @@ def build_map_intent(question: str, df: pd.DataFrame, table_names: list[str] | N
         "level": level,
         "year": year_label,
         "metric": metric,
-        "agency": None,
+        "agency": _single_agency(df),
         "state": state_label,
         "focusIds": _focus_ids(df),
         "comparisonIds": _comparison_ids(frame, level),
