@@ -277,9 +277,30 @@ def _resolve_followup(question: str, history: list[dict[str, str]]) -> str:
         }
         return mapping.get(metric_hint, metric_hint.replace("_", " ").lower())
 
+    def _state_label(state_name: str) -> str:
+        return " ".join(part.capitalize() for part in state_name.split())
+
     if last_q:
+        metric_phrase = _metric_phrase(last_frame.metric_hint)
+        ranking_tokens = ("top", "bottom", "highest", "lowest", "most", "least", "largest", "smallest", "maximum", "minimum", "rank")
+
+        if metric_phrase and frame.metric_hint is None:
+            if frame.intent == "compare" and frame.state_names:
+                compare_states = list(frame.state_names[:2])
+                if len(compare_states) == 1 and last_frame.primary_state and compare_states[0] != last_frame.primary_state:
+                    compare_states = [last_frame.primary_state, compare_states[0]]
+                if len(compare_states) >= 2:
+                    state_labels = [_state_label(state) for state in compare_states[:2]]
+                    return f"Compare {state_labels[0]} and {state_labels[1]} on {metric_phrase}"
+
+            if any(token in q_lower for token in ranking_tokens):
+                connector = "by"
+                if any(token in metric_phrase for token in ("ratio", "rate", "literacy", "constraint", "share", "attainment")):
+                    connector = "on"
+                if not re.search(r"\b(on|by)\b", q_lower):
+                    return f"{question.rstrip('?.!')} {connector} {metric_phrase}"
+
         if frame.intent == "compare" and len(frame.state_names) >= 2 and frame.metric_hint is None:
-            metric_phrase = _metric_phrase(last_frame.metric_hint)
             if metric_phrase:
                 state_labels = [
                     " ".join(part.capitalize() for part in state.split())

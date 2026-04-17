@@ -960,6 +960,17 @@ class AgentIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(resolved, "Compare Maryland and Virginia on grants")
 
+    def test_resolve_followup_ranking_inherits_prior_metric(self) -> None:
+        from app import agent
+
+        agent._last_query.clear()
+        agent._last_query["question"] = "grants in maryland"
+        resolved = agent._resolve_followup(
+            "top 5 states",
+            [{"role": "user", "content": "grants in maryland"}],
+        )
+        self.assertEqual(resolved, "top 5 states by grants")
+
 
 class ChartGeneratorTests(unittest.TestCase):
     """Test Vega-Lite chart auto-generation."""
