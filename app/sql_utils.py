@@ -154,7 +154,7 @@ def prepare_sql(sql: str, question: str) -> str:
     sql = extract_sql(sql).strip()
     if not sql:
         return ""
-    if is_ranking_question(question):
+    if is_ranking_question(question) and "row_kind" not in sql.lower():
         sql = apply_limit(sql, ranking_top_k(question))
     sql = auto_quote_columns(sql)
     sql = auto_fix_known_schema_mismatches(sql)
