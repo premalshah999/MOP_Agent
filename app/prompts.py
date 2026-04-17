@@ -354,7 +354,7 @@ def build_repair_prompt(question: str, failed_sql: str, error: str, schema_ctx: 
 # Formatter prompt
 # ---------------------------------------------------------------------------
 FORMATTER_SYSTEM = """\
-You are a quantitative research analyst writing a concise, evidence-grounded response for a data dashboard.
+You are a quantitative research analyst writing a polished, evidence-grounded response for a serious public-policy data product.
 
 CRITICAL — Anti-hallucination rules:
 - Every number you cite MUST appear in the evidence or data preview below. Do not invent, estimate, or round numbers.
@@ -365,18 +365,22 @@ CRITICAL — Anti-hallucination rules:
 
 Formatting rules:
 - Lead with the direct answer in 1-2 bold sentences.
+- Expand the answer into a genuinely useful analyst-style response, not a stub.
 - Prefer a consistent answer contract when the evidence supports it:
   1. direct answer
-  2. *Definition* or *Interpretation* if the metric is ambiguous, normalized, or composite
-  3. *Key findings* as 2-4 bullet points
-  4. *Context* paragraph with spread, averages, ranks, or sample size
-  5. *Scope* or *Caveat* only if supported by the evidence
-- Include key quantitative context: ranks, averages, spreads, sample sizes.
+  2. *Definition* if the metric is ambiguous, normalized, relative, or composite
+  3. *Key findings* as 3-6 bullet points
+  4. *Breakdown* or *Leader profile* when components are available
+  5. *Context* paragraph with spread, averages, medians, ranks, nearby peers, or sample size
+  6. *Interpretation* that explains what the numbers mean descriptively
+  7. *Scope* or *Caveat* only if supported by the evidence
+- Include key quantitative context: ranks, averages, medians, spreads, peers, sample sizes, and leading/trailing entities when available.
 - Use short paragraphs and flat bullet points. No markdown headings or tables.
-- 180-420 words unless the question is very simple.
+- 260-700 words unless the question is extremely simple or the evidence is genuinely sparse.
 - No causal claims unless the data directly supports them.
 - If the result is a single row, interpret it in context.
 - If the result is a ranking, highlight the top entries, the spread, and any notable outliers.
+- If the result includes helper columns such as rank, average, median, leader, or trailing entity, use them explicitly.
 - Bold the lead finding. Use italics sparingly for labels like _Caveat_ or _Context_.
 - If this is a drill-down query that breaks down a previous aggregate, explicitly note the relationship
   (e.g., "The $32.59B total was spread across multiple agencies, with DoD accounting for $20.55B (63%)").
@@ -393,7 +397,8 @@ def build_formatter_prompt(question: str, evidence_text: str, preview: str, sql:
         "REMINDER: Your answer must be based ONLY on the evidence summary and data preview above. "
         "If the question implies a particular answer (e.g. 'isn't it X?'), verify against the data. "
         "If the data contradicts the user's expectation, say what the data actually shows. "
-        "Do not omit important scope, definition, or caveat notes from the grounded draft if they remain supported by the evidence."
+        "Do not omit important scope, definition, interpretation, or caveat notes from the grounded draft if they remain supported by the evidence. "
+        "Expand the grounded draft into a fuller analyst answer with richer key findings, but do not change the factual scaffold."
     )
 
 

@@ -5,7 +5,8 @@ import { VegaChart } from './VegaChart';
 
 interface ChatbotMapRendererProps {
   mapIntent: ChatbotMapIntent;
-  rows: Record<string, unknown>[];
+  mapRows: Record<string, unknown>[];
+  insightRows: Record<string, unknown>[];
   loading: boolean;
   error: string | null;
 }
@@ -19,6 +20,8 @@ const ATLAS_TYPES = new Set([
   'agency-choropleth',
   'top-n-highlight',
 ]);
+const SPENDING_TYPES = new Set(['single-state-agency', 'spending-breakdown']);
+const FLOW_TYPES = new Set(['flow-map', 'flow-state-focused', 'flow-pair', 'flow-within-state']);
 
 function getNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -123,6 +126,16 @@ function rankRows(rows: Record<string, unknown>[], metric: string): Record<strin
   return [...rows].sort((a, b) => (getNumber(b[metric]) ?? -Infinity) - (getNumber(a[metric]) ?? -Infinity));
 }
 
+function hasGeographicRows(rows: Record<string, unknown>[]): boolean {
+  return rows.some((row) =>
+    typeof row.state === 'string' ||
+    typeof row.county === 'string' ||
+    typeof row.cd_118 === 'string' ||
+    typeof row.rcpt_state_name === 'string' ||
+    typeof row.subawardee_state_name === 'string',
+  );
+}
+
 function levelLabel(level: ChatbotMapIntent['level']): string {
   if (level === 'county') return 'county';
   if (level === 'congress') return 'district';
@@ -209,6 +222,81 @@ function buildHistogramSpec(metric: string, rows: Record<string, unknown>[]): Re
         type: 'quantitative',
         axis: { title: null, tickCount: 4, grid: true },
       },
+    },
+    config: { view: { stroke: null } },
+  };
+}
+
+function buildStackedAgencySpec(rows: Record<string, unknown>[]): Record<string, unknown> | null {
+  const components = ['contracts', 'grants', 'resident_wage']
+    .filter((column) => rows.some((row) => getNumber(row[column]) !== null));
+  if (!components.length || !rows.some((row) => typeof row.agency === 'string')) return null;
+
+  const ranked = rows
+    .map((row) => ({
+      agency: rowLabel(row),
+      contracts: getNumber(row.contracts) ?? 0,
+      grants: getNumber(row.grants) ?? 0,
+      resident_wage: getNumber(row.resident_wage) ?? 0,
+      spending_total: getNumber(row.spending_total) ?? (
+        (getNumber(row.contracts) ?? 0) +
+        (getNumber(row.grants) ?? 0) +
+        (getNumber(row.resident_wage) ?? 0)
+      ),
+    }))
+    .sort((a, b) => b.spending_total - a.spending_total)
+    .slice(0, 10);
+  if (!ranked.length) return null;
+
+  return {
+    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    width: 'container',
+    height: 320,
+    data: { values: ranked },
+    transform: [{ fold: ['contracts', 'grants', 'resident_wage'], as: ['component', 'value'] }],
+    mark: { type: 'bar' },
+    encoding: {
+      y: { field: 'agency', type: 'nominal', sort: '-x', axis: { title: null, labelLimit: 220 } },
+      x: { field: 'value', type: 'quantitative', stack: 'zero', axis: { title: null, format: '~s', grid: true } },
+      color: {
+        field: 'component',
+        type: 'nominal',
+        scale: { domain: ['contracts', 'grants', 'resident_wage'], range: ['#243b68', '#3b6fb6', '#b8622d'] },
+        legend: { title: null, orient: 'top' },
+      },
+      tooltip: [
+        { field: 'agency', type: 'nominal' },
+        { field: 'component', type: 'nominal' },
+        { field: 'value', type: 'quantitative', format: ',.2f' },
+      ],
+    },
+    config: { view: { stroke: null } },
+  };
+}
+
+function buildSingleSeriesBarSpec(
+  rows: Record<string, unknown>[],
+  metric: string,
+  color: string,
+): Record<string, unknown> | null {
+  const ranked = rankRows(rows, metric)
+    .slice(0, 10)
+    .map((row) => ({ label: rowLabel(row), value: getNumber(row[metric]) ?? 0 }));
+  if (!ranked.length) return null;
+  return {
+    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    width: 'container',
+    height: 300,
+    data: { values: ranked },
+    mark: { type: 'bar' },
+    encoding: {
+      y: { field: 'label', type: 'nominal', sort: '-x', axis: { title: null, labelLimit: 220 } },
+      x: { field: 'value', type: 'quantitative', axis: { title: null, format: metricKind(metric) === 'money' ? '~s' : undefined, grid: true } },
+      color: { value: color },
+      tooltip: [
+        { field: 'label', type: 'nominal' },
+        { field: 'value', type: 'quantitative', format: ',.2f' },
+      ],
     },
     config: { view: { stroke: null } },
   };
@@ -336,7 +424,171 @@ function InsightPanel({ mapIntent, rows }: { mapIntent: ChatbotMapIntent; rows: 
   );
 }
 
-export function ChatbotMapRenderer({ mapIntent, rows, loading, error }: ChatbotMapRendererProps) {
+function SpendingPanel({
+  mapIntent,
+  mapRows,
+  insightRows,
+}: {
+  mapIntent: ChatbotMapIntent;
+  mapRows: Record<string, unknown>[];
+  insightRows: Record<string, unknown>[];
+}) {
+  const stackedSpec = buildStackedAgencySpec(insightRows);
+  const metric = resolveMetric(mapIntent, insightRows) ?? resolveMetric(mapIntent, mapRows);
+  const jobsMetric = insightRows.some((row) => getNumber(row.Employees) !== null)
+    ? 'Employees'
+    : insightRows.some((row) => getNumber(row.employees) !== null)
+      ? 'employees'
+      : null;
+  const jobsSpec = jobsMetric ? buildSingleSeriesBarSpec(insightRows, jobsMetric, '#b8622d') : null;
+  const histogramSpec = metric ? buildHistogramSpec(metric, insightRows) : null;
+  const geoRows = mapRows.length ? mapRows : insightRows;
+  const canMap = hasGeographicRows(geoRows);
+
+  return (
+    <div className="space-y-6">
+      <div className={`grid gap-6 ${canMap ? 'xl:grid-cols-[minmax(0,1.02fr)_400px]' : ''}`}>
+        {canMap ? (
+          <MapPreview rows={geoRows} variant="modal" mapIntent={mapIntent} />
+        ) : (
+          <InsightCard
+            eyebrow="State spotlight"
+            title={mapIntent.state ?? 'Selected state'}
+            meta="The geographic spotlight is centered on the selected state while the charts summarize agency composition."
+          />
+        )}
+        <aside className="space-y-4">
+          <InsightCard
+            eyebrow="Focus"
+            title={mapIntent.state ?? 'Selected state'}
+            meta="This view pairs a state spotlight with agency-level composition, which is the closest chatbot analogue to the dashboard’s spending breakdown experience."
+          />
+          <InsightCard
+            eyebrow="Returned rows"
+            title={`${insightRows.length} agency rows`}
+            meta="These agency rows drive the composition charts and the ranking blocks in this modal."
+          />
+        </aside>
+      </div>
+
+      {stackedSpec && (
+        <section className="border border-[var(--line)] bg-[var(--surface)] px-5 py-4">
+          <div className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">Agency composition</div>
+          <div className="mt-2 text-[20px] font-semibold text-[var(--ink)]">Top agencies by spending mix</div>
+          <div className="mt-4">
+            <VegaChart spec={stackedSpec} />
+          </div>
+        </section>
+      )}
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        {jobsSpec && (
+          <section className="border border-[var(--line)] bg-[var(--surface)] px-5 py-4">
+            <div className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">Jobs view</div>
+            <div className="mt-2 text-[20px] font-semibold text-[var(--ink)]">Top agencies by federal jobs</div>
+            <div className="mt-4">
+              <VegaChart spec={jobsSpec} />
+            </div>
+          </section>
+        )}
+
+        {metric && histogramSpec && (
+          <section className="border border-[var(--line)] bg-[var(--surface)] px-5 py-4">
+            <div className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">Distribution</div>
+            <div className="mt-2 text-[20px] font-semibold text-[var(--ink)]">
+              {humanizeMetric(metric)} across the returned agencies
+            </div>
+            <div className="mt-4">
+              <VegaChart spec={histogramSpec} />
+            </div>
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FlowPanel({
+  mapIntent,
+  mapRows,
+  insightRows,
+}: {
+  mapIntent: ChatbotMapIntent;
+  mapRows: Record<string, unknown>[];
+  insightRows: Record<string, unknown>[];
+}) {
+  const metric = resolveMetric(mapIntent, insightRows) ?? resolveMetric(mapIntent, mapRows);
+  const rows = insightRows.length ? insightRows : mapRows;
+  const geoRows = mapRows.length ? mapRows : rows;
+  const canMap = hasGeographicRows(geoRows) && mapIntent.mapType !== 'flow-pair';
+  const barSpec = metric ? buildSingleSeriesBarSpec(rows, metric, '#3458a5') : null;
+  const histogramSpec = metric ? buildHistogramSpec(metric, rows) : null;
+
+  return (
+    <div className="space-y-6">
+      <div className={`grid gap-6 ${canMap ? 'xl:grid-cols-[minmax(0,1.05fr)_380px]' : ''}`}>
+        {canMap ? (
+          <MapPreview rows={geoRows} variant="modal" mapIntent={mapIntent} />
+        ) : (
+          <section className="border border-[var(--line)] bg-[var(--surface)] px-5 py-4">
+            <div className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">Flow routes</div>
+            <div className="mt-2 text-[20px] font-semibold text-[var(--ink)]">Top flow pairs</div>
+            <div className="mt-4 space-y-2">
+              {rows.slice(0, 10).map((row, index) => (
+                <div key={`${rowLabel(row)}-${index}`} className="flex items-center justify-between gap-3 border border-[var(--line)] px-3 py-2.5">
+                  <div className="text-[13px] font-medium text-[var(--ink)]">{rowLabel(row)}</div>
+                  <div className="text-[12px] font-semibold text-[var(--ink)]">
+                    {metric ? formatValue(metric, row[metric]) : 'N/A'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <aside className="space-y-4">
+          <InsightCard
+            eyebrow="Flow focus"
+            title={mapIntent.state ?? 'Selected geography'}
+            meta={supportingText(mapIntent)}
+          />
+          {metric && rows.length > 0 && (
+            <InsightCard
+              eyebrow="Lead route"
+              title={rowLabel(rankRows(rows, metric)[0])}
+              value={formatValue(metric, rankRows(rows, metric)[0][metric])}
+              meta={`${humanizeMetric(metric)} · ${rows.length} returned rows`}
+            />
+          )}
+        </aside>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        {barSpec && (
+          <section className="border border-[var(--line)] bg-[var(--surface)] px-5 py-4">
+            <div className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">Leaderboard</div>
+            <div className="mt-2 text-[20px] font-semibold text-[var(--ink)]">Largest flow results in this answer</div>
+            <div className="mt-4">
+              <VegaChart spec={barSpec} />
+            </div>
+          </section>
+        )}
+
+        {histogramSpec && (
+          <section className="border border-[var(--line)] bg-[var(--surface)] px-5 py-4">
+            <div className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">Distribution</div>
+            <div className="mt-2 text-[20px] font-semibold text-[var(--ink)]">How the flow values are distributed</div>
+            <div className="mt-4">
+              <VegaChart spec={histogramSpec} />
+            </div>
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function ChatbotMapRenderer({ mapIntent, mapRows, insightRows, loading, error }: ChatbotMapRendererProps) {
   if (loading) {
     return (
       <div className="flex h-[min(78vh,860px)] items-center justify-center border border-[var(--line)] bg-[var(--surface)]">
@@ -353,7 +605,10 @@ export function ChatbotMapRenderer({ mapIntent, rows, loading, error }: ChatbotM
     );
   }
 
-  if (!rows.length) {
+  const resolvedMapRows = mapRows.length ? mapRows : insightRows;
+  const resolvedInsightRows = insightRows.length ? insightRows : mapRows;
+
+  if (!resolvedMapRows.length && !resolvedInsightRows.length) {
     return (
       <div className="flex h-[min(78vh,860px)] items-center justify-center border border-[var(--line)] bg-[var(--surface)] px-6 text-center text-[13px] text-[var(--muted)]">
         No geographic rows were available for this answer yet.
@@ -364,10 +619,18 @@ export function ChatbotMapRenderer({ mapIntent, rows, loading, error }: ChatbotM
   if (ATLAS_TYPES.has(mapIntent.mapType)) {
     return (
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.08fr)_380px]">
-        <MapPreview rows={rows} variant="modal" mapIntent={mapIntent} />
-        <InsightPanel mapIntent={mapIntent} rows={rows} />
+        <MapPreview rows={resolvedMapRows} variant="modal" mapIntent={mapIntent} />
+        <InsightPanel mapIntent={mapIntent} rows={resolvedMapRows} />
       </div>
     );
+  }
+
+  if (SPENDING_TYPES.has(mapIntent.mapType)) {
+    return <SpendingPanel mapIntent={mapIntent} mapRows={resolvedMapRows} insightRows={resolvedInsightRows} />;
+  }
+
+  if (FLOW_TYPES.has(mapIntent.mapType)) {
+    return <FlowPanel mapIntent={mapIntent} mapRows={resolvedMapRows} insightRows={resolvedInsightRows} />;
   }
 
   return (

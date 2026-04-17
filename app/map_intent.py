@@ -167,9 +167,17 @@ def _resolve_metric(frame: QueryFrame, df: pd.DataFrame) -> str | None:
 
 def _resolve_map_type(frame: QueryFrame, level: str | None, df: pd.DataFrame) -> str:
     if frame.family == "flow":
+        if frame.wants_pair_ranking:
+            return "flow-pair"
         if level in {"county", "congress"} and frame.primary_state:
-            return "single-state-ranked-subregions"
-        return "top-n-highlight"
+            return "flow-within-state"
+        if frame.primary_state:
+            return "flow-state-focused"
+        return "flow-map"
+    if frame.family == "agency" and frame.primary_state:
+        return "single-state-agency"
+    if frame.family == "breakdown" and frame.primary_state:
+        return "spending-breakdown"
     if level in {"county", "congress"} and frame.primary_state:
         return "single-state-ranked-subregions" if frame.intent in {"ranking", "share", "compare"} else "atlas-within-state"
     if level == "state" and len(frame.state_names) >= 2:
@@ -191,14 +199,16 @@ def _map_is_useful(frame: QueryFrame, dataset: str, level: str | None, metric: s
     if frame.intent not in {"ranking", "compare", "lookup", "share"}:
         return False
     if dataset == "fund_flow":
-        if frame.wants_pair_ranking or frame.wants_internal_flow or frame.wants_displayed_flow:
+        if frame.wants_pair_ranking and not {"rcpt_state_name", "subawardee_state_name"}.issubset(df.columns):
             return False
-        if len(df.index) < 2:
+        if frame.wants_internal_flow:
+            return False
+        if len(df.index) < 1:
             return False
         return True
-    if _has_multi_agency_non_geo_shape(df, level):
+    if _has_multi_agency_non_geo_shape(df, level) and not (frame.primary_state and dataset in {"contract_agency", "spending_breakdown"}):
         return False
-    if dataset == "contract_agency" and not _single_agency(df):
+    if dataset == "contract_agency" and not _single_agency(df) and not frame.primary_state:
         return False
     return True
 
@@ -224,6 +234,10 @@ def _default_view_for_map_type(map_type: str) -> str:
         return "state-zoom"
     if map_type in {"single-state-ranked-subregions", "atlas-within-state"}:
         return "subdivision"
+    if map_type in {"single-state-agency", "spending-breakdown"}:
+        return "state-zoom"
+    if map_type in {"flow-map", "flow-state-focused", "flow-pair", "flow-within-state"}:
+        return "heat"
     return "heat"
 
 
@@ -234,6 +248,10 @@ def _button_label_for_map_type(map_type: str, level: str | None) -> str:
         return "Open state map"
     if map_type in {"single-state-ranked-subregions", "atlas-within-state"}:
         return "Open district map" if level == "congress" else "Open county map"
+    if map_type in {"single-state-agency", "spending-breakdown"}:
+        return "Open agency view"
+    if map_type in {"flow-map", "flow-state-focused", "flow-pair", "flow-within-state"}:
+        return "Open flow view"
     if map_type == "top-n-highlight":
         return "Open heat map"
     return "Open map view"
@@ -250,27 +268,49 @@ def _reason_for_map_type(map_type: str, state_label: str | None) -> str:
         return "This answer returns a ranked set of places, so the map emphasizes the leaders while keeping the full distribution visible."
     if map_type == "agency-choropleth":
         return "This answer is geographically meaningful for one agency-specific metric, so the map shows where that agency stands out."
+    if map_type in {"single-state-agency", "spending-breakdown"} and state_label:
+        return f"This answer is centered on {state_label}, so the view combines a state spotlight with agency composition charts."
+    if map_type == "flow-state-focused" and state_label:
+        return f"This answer is about fund flows connected to {state_label}, so the view highlights the counterpart geography pattern and the largest routes."
+    if map_type == "flow-pair":
+        return "This answer is about a specific flow pairing, so the view emphasizes the route list and the distribution behind it."
+    if map_type == "flow-within-state" and state_label:
+        return f"This answer is about within-state flow patterns for {state_label}, so the view focuses on those counties or districts directly."
+    if map_type == "flow-map":
+        return "This answer is geographically meaningful, so the view summarizes the flow distribution and the mapped counterpart pattern."
     return "This answer has a geographic result, so opening the map gives quick spatial context."
 
 
 def build_map_intent(question: str, df: pd.DataFrame, table_names: list[str] | None = None) -> dict[str, Any]:
-    if df.empty or not _geo_columns_present(df):
+    if df.empty:
         return dict(_NONE)
 
+    frame = infer_query_frame(question)
     table_name = table_names[0] if table_names else None
     dataset, level = _table_dataset_level(table_name)
     if dataset is None or level is None:
         return dict(_NONE)
-
-    frame = infer_query_frame(question)
+    if not _geo_columns_present(df) and not (
+        frame.primary_state
+        and dataset in {"contract_agency", "spending_breakdown"}
+        and "agency" in df.columns
+    ):
+        return dict(_NONE)
     metric = _resolve_metric(frame, df)
     if not metric or not _map_is_useful(frame, dataset, level, metric, df):
         return dict(_NONE)
 
     state_label = _state_title(frame.primary_state)
     map_type = _resolve_map_type(frame, level, df)
+    map_dataset = dataset
+    map_level = level
+    map_metric = metric
+    if map_type in {"single-state-agency", "spending-breakdown"}:
+        map_dataset = "contract_static"
+        map_level = "state"
+        map_metric = metric if metric != "total_flow" else "spending_total"
     year_label = frame.period_label or _default_year_for_table(table_name)
-    metric_label = _humanize_metric(metric)
+    metric_label = _humanize_metric(map_metric)
     top_n = min(len(df.index), 10) if frame.intent == "ranking" else None
 
     subtitle_bits = []
@@ -295,11 +335,11 @@ def build_map_intent(question: str, df: pd.DataFrame, table_names: list[str] | N
         "enabled": True,
         "mapType": map_type,
         "defaultView": _default_view_for_map_type(map_type),
-        "buttonLabel": _button_label_for_map_type(map_type, level),
-        "dataset": dataset,
-        "level": level,
+        "buttonLabel": _button_label_for_map_type(map_type, map_level),
+        "dataset": map_dataset,
+        "level": map_level,
         "year": year_label,
-        "metric": metric,
+        "metric": map_metric,
         "agency": _single_agency(df),
         "state": state_label,
         "focusIds": _focus_ids(df),

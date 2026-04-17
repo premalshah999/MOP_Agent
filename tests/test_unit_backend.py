@@ -283,7 +283,7 @@ class MapIntentTests(unittest.TestCase):
         self.assertTrue(intent["enabled"])
         self.assertEqual(intent["dataset"], "fund_flow")
         self.assertEqual(intent["level"], "state")
-        self.assertEqual(intent["mapType"], "top-n-highlight")
+        self.assertEqual(intent["mapType"], "flow-state-focused")
 
     def test_build_map_intent_enables_single_row_state_lookup(self) -> None:
         df = pd.DataFrame(
@@ -312,6 +312,24 @@ class MapIntentTests(unittest.TestCase):
         self.assertEqual(intent["dataset"], "contract_static")
         self.assertEqual(intent["metric"], "spending_total")
         self.assertEqual(intent["mapType"], "single-state-spotlight")
+
+    def test_build_map_intent_enables_single_state_agency_view(self) -> None:
+        df = pd.DataFrame(
+            [
+                {"agency": "Department of Defense", "contracts": 8_700_000_000, "grants": 0, "resident_wage": 5_100_000_000, "spending_total": 13_800_000_000},
+                {"agency": "Department of Health and Human Services", "contracts": 4_000_000_000, "grants": 14_800_000_000, "resident_wage": 5_100_000_000, "spending_total": 23_900_000_000},
+            ]
+        )
+        intent = map_intent.build_map_intent(
+            "Which agencies account for the most spending in Maryland?",
+            df,
+            ["spending_state_agency"],
+        )
+        self.assertTrue(intent["enabled"])
+        self.assertEqual(intent["mapType"], "single-state-agency")
+        self.assertEqual(intent["dataset"], "contract_static")
+        self.assertEqual(intent["level"], "state")
+        self.assertEqual(intent["state"], "Maryland")
 
     def test_build_map_intent_enables_national_county_heat_map_without_state_filter(self) -> None:
         df = pd.DataFrame(
@@ -584,7 +602,7 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("HHS", result)
         self.assertIn("default federal spending", result)
         self.assertIn("**", result)
-        self.assertIn("**Top 5:**", result)
+        self.assertIn("**Top 3:**", result)
         self.assertIn("**Leader profile:**", result)
         self.assertIn("**Context:**", result)
         self.assertIn("**Interpretation:**", result)
@@ -597,9 +615,18 @@ class FormatterTests(unittest.TestCase):
             "grants": [30_579_948_445.74],
             "resident_wage": [27_461_823_181.99],
             "spending_total": [104_272_010_418.15],
+            "metric_rank": [11],
+            "total_states": [51],
+            "national_average": [91_000_000_000.0],
+            "national_median": [72_500_000_000.0],
+            "national_leader": ["Virginia"],
+            "national_leader_value": [132_000_000_000.0],
+            "national_trailing_state": ["Wyoming"],
+            "national_trailing_value": [4_000_000_000.0],
         })
         result = formatter.format_result("How much federal money goes to Maryland?", df, sql="SELECT ... FROM contract_state WHERE year = '2024'")
         self.assertIn("**Definition:**", result)
+        self.assertIn("**Key findings:**", result)
         self.assertIn("**Breakdown:**", result)
         self.assertIn("**Composition:**", result)
         self.assertIn("**Scope:**", result)
@@ -632,6 +659,7 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("Maryland", result)
         self.assertIn("12th", result)
         self.assertIn("50", result)
+        self.assertIn("**Key findings:**", result)
         self.assertIn("**Around Maryland:**", result)
         self.assertIn("**Top 2:**", result)
         self.assertIn("**Bottom 2:**", result)
@@ -1244,6 +1272,16 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("metric_rank", plan.sql)
         self.assertIn("total_states", plan.sql)
         self.assertIn("LOWER(state) = 'mississippi'", plan.sql)
+
+    def test_planner_builds_contextual_single_state_lookup(self) -> None:
+        plan = planner.plan_query("How much federal money goes to Maryland?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["contract_state"])
+        self.assertIn("national_average", plan.sql)
+        self.assertIn("national_median", plan.sql)
+        self.assertIn("national_leader", plan.sql)
+        self.assertIn("LOWER(state) = 'maryland'", plan.sql)
 
     def test_planner_returns_data_not_available_for_missing_agency_geo_runtime(self) -> None:
         plan = planner.plan_query("Within Maryland counties in 2024, which counties have the highest Department of Defense contracts?")

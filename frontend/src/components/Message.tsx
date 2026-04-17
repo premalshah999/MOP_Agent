@@ -88,11 +88,7 @@ export function Message({ role, content, sqlQuery, data, rowCount, chart, error,
   const hasChart = Boolean(chart);
   const [mapOpen, setMapOpen] = useState(false);
   const effectiveMapIntent = mapIntent ?? null;
-  const hasMap = Boolean(
-    effectiveMapIntent?.enabled &&
-    ['atlas-single-metric', 'atlas-comparison', 'atlas-within-state', 'single-state-spotlight', 'single-state-ranked-subregions', 'top-n-highlight'].includes(effectiveMapIntent.mapType) &&
-    !error,
-  );
+  const hasMap = Boolean(effectiveMapIntent?.enabled && effectiveMapIntent.mapType !== 'none' && !error);
 
   if (role === 'user') {
     return (

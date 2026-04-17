@@ -23,7 +23,7 @@ def _get_client():
     return None
 
 
-FORMATTER_MAX_TOKENS = int(os.getenv("FORMATTER_MAX_TOKENS", "2000"))
+FORMATTER_MAX_TOKENS = int(os.getenv("FORMATTER_MAX_TOKENS", "3500"))
 FORMATTER_MODEL = os.getenv(
     "FORMATTER_MODEL",
     llm_reasoner_model(),
@@ -79,6 +79,8 @@ _HELPER_DETAIL_COLUMNS = {
     "total_districts",
     "national_average",
     "national_median",
+    "national_leader_value",
+    "national_trailing_value",
     "sample_size",
     "row_count",
 }
@@ -231,6 +233,13 @@ def _metric_label(metric: str) -> str:
 
 def _section(label: str, content: str) -> str:
     return f"**{label}:** {content}"
+
+
+def _bullet_section(label: str, items: list[str]) -> str | None:
+    cleaned = [item.strip() for item in items if item and item.strip()]
+    if not cleaned:
+        return None
+    return f"**{label}:**\n" + "\n".join(f"- {item}" for item in cleaned)
 
 
 def _is_money_metric(metric: str) -> bool:
@@ -412,6 +421,162 @@ def _component_breakdown_text(row: pd.Series, primary: str, component_cols: list
     if len(phrases) == 2:
         return f"The largest components are {phrases[0]} and {phrases[1]}."
     return f"The largest components are {phrases[0]}, {phrases[1]}, and {phrases[2]}."
+
+
+def _dominant_component_text(row: pd.Series, primary: str, component_cols: list[str]) -> str | None:
+    values: list[tuple[str, float]] = []
+    for col in component_cols:
+        numeric = _as_float(row.get(col))
+        if numeric is None:
+            continue
+        values.append((col, numeric))
+
+    if not values:
+        return None
+
+    values.sort(key=lambda item: item[1], reverse=True)
+    top_col, top_value = values[0]
+    total = _as_float(row.get(primary))
+    if total is None or total <= 0:
+        total = sum(value for _, value in values if value > 0)
+    if total is None or total <= 0:
+        return f"The largest named component is **{_metric_label(top_col)}** at **{_format_metric_value(top_col, top_value)}**."
+    return (
+        f"The largest named component is **{_metric_label(top_col)}** at **{_format_metric_value(top_col, top_value)}**, "
+        f"which is **{_share_percent(top_value, total)}** of the displayed total."
+    )
+
+
+def _display_top_k(question: str, available: int, default_k: int = 5) -> int:
+    words = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+    }
+    lowered = question.lower()
+    match = re.search(r"\b(?:top|bottom)\s+(\d{1,2})\b", lowered)
+    if match:
+        return min(available, max(1, int(match.group(1))))
+    match = re.search(r"\b(?:top|bottom)\s+(" + "|".join(words.keys()) + r")\b", lowered)
+    if match:
+        return min(available, words[match.group(1)])
+    return min(available, default_k)
+
+
+def _single_row_key_findings(
+    row: pd.Series,
+    primary: str,
+    entity: str,
+    question: str,
+    component_cols: list[str],
+) -> list[str]:
+    findings: list[str] = []
+    rank_value = _as_float(row.get("metric_rank")) or _as_float(row.get("rank"))
+    total_entities = _as_float(row.get("total_states")) or _as_float(row.get("total_counties")) or _as_float(row.get("total_districts"))
+    current_value = _as_float(row.get(primary))
+    national_average = _as_float(row.get("national_average"))
+    national_median = _as_float(row.get("national_median"))
+    leader_state = row.get("national_leader")
+    leader_value = _as_float(row.get("national_leader_value"))
+    trailing_state = row.get("national_trailing_state")
+    trailing_value = _as_float(row.get("national_trailing_value"))
+
+    if rank_value is not None and total_entities:
+        percentile_from_top = (rank_value / total_entities) * 100
+        findings.append(
+            f"**{entity}** sits **{_ordinal(int(rank_value))}** out of **{int(total_entities)}**, which is roughly the **{percentile_from_top:.0f}th percentile from the top** in this slice."
+        )
+
+    if current_value is not None and national_average is not None:
+        delta = current_value - national_average
+        direction = "above" if delta >= 0 else "below"
+        findings.append(
+            f"It is **{_format_metric_value(primary, abs(delta))}** {direction} the national average of **{_format_metric_value(primary, national_average)}**."
+        )
+
+    if current_value is not None and national_median is not None:
+        delta = current_value - national_median
+        direction = "above" if delta >= 0 else "below"
+        findings.append(
+            f"Relative to the national median of **{_format_metric_value(primary, national_median)}**, it is **{_format_metric_value(primary, abs(delta))}** {direction} the middle of the distribution."
+        )
+
+    if leader_state and leader_value is not None and str(leader_state).strip().lower() != entity.strip().lower() and current_value is not None:
+        findings.append(
+            f"The national leader in this slice is **{_format_entity_label(leader_state)}** at **{_format_metric_value(primary, leader_value)}**, leaving a gap of **{_format_metric_value(primary, abs(leader_value - current_value))}**."
+        )
+
+    if trailing_state and trailing_value is not None and str(trailing_state).strip().lower() != entity.strip().lower() and current_value is not None:
+        findings.append(
+            f"The bottom of this slice is **{_format_entity_label(trailing_state)}** at **{_format_metric_value(primary, trailing_value)}**, so **{entity}** sits **{_format_metric_value(primary, abs(current_value - trailing_value))}** above that floor."
+        )
+
+    dominant_component = _dominant_component_text(row, primary, component_cols)
+    if dominant_component:
+        findings.append(dominant_component)
+
+    if primary == "total_flow" and "internal" in entity.lower():
+        findings.append("This is an **internal** flow, meaning the origin and destination are the same place rather than a cross-state or cross-district transfer.")
+
+    return findings[:5]
+
+
+def _ranking_key_findings(
+    sorted_df: pd.DataFrame,
+    primary: str,
+    top: pd.Series,
+    second: pd.Series | None,
+    third: pd.Series | None,
+    tail: pd.Series,
+    metric_stats: dict[str, Any] | None,
+    df: pd.DataFrame,
+    label_col: str,
+) -> list[str]:
+    findings: list[str] = []
+    top_label = _row_label(top, df, label_col)
+    top_value = _format_metric_value(primary, top[primary])
+    tail_label = _row_label(tail, df, label_col)
+    tail_value = _format_metric_value(primary, tail[primary])
+
+    findings.append(f"The lead result is **{top_label}** at **{top_value}**.")
+
+    if second is not None:
+        second_label = _row_label(second, df, label_col)
+        second_value = _format_metric_value(primary, second[primary])
+        findings.append(f"The runner-up is **{second_label}** at **{second_value}**.")
+        try:
+            gap = abs(float(top[primary]) - float(second[primary]))
+            findings.append(f"The gap between first and second place is **{_format_metric_value(primary, gap)}**.")
+        except Exception:
+            pass
+
+    if third is not None:
+        findings.append(
+            f"Third place is **{_row_label(third, df, label_col)}** at **{_format_metric_value(primary, third[primary])}**."
+        )
+
+    findings.append(f"At the other end of the returned set, **{tail_label}** is at **{tail_value}**.")
+
+    if metric_stats:
+        findings.append(
+            f"For the returned set, the mean is **{_format_metric_value(primary, metric_stats['mean'])}** and the median is **{_format_metric_value(primary, metric_stats['median'])}**."
+        )
+
+    concentration = _ranking_concentration_text(sorted_df, primary)
+    if concentration:
+        findings.append(concentration)
+
+    if " (internal)" in top_label:
+        findings.append("The leading result is an **internal** flow, so the largest movement here stays within the same place rather than crossing into another geography.")
+
+    return findings[:6]
 
 
 def _ranking_concentration_text(df: pd.DataFrame, primary: str) -> str | None:
@@ -620,10 +785,37 @@ def _leaderboard_context_answer(question: str, df: pd.DataFrame, label_col: str,
     definition = _definition_note(primary, question)
     if definition:
         lines.append(definition)
-
     nearby_ordered = nearby_rows.sort_values("metric_rank") if "metric_rank" in nearby_rows.columns else nearby_rows
     top_ordered = top_rows.sort_values("list_position") if "list_position" in top_rows.columns else top_rows.sort_values("metric_rank")
     bottom_ordered = bottom_rows.sort_values("list_position") if "list_position" in bottom_rows.columns else bottom_rows.sort_values("metric_rank", ascending=False)
+    key_findings: list[str] = []
+    national_average = _as_float(focus.get("national_average"))
+    if rank_value is not None and total_entities is not None:
+        percentile = (rank_value / total_entities) * 100
+        key_findings.append(
+            f"That puts **{entity}** around the **{percentile:.0f}th percentile from the top** of the national ranking."
+        )
+    if national_average is not None:
+        current_value = _as_float(focus.get(primary))
+        if current_value is not None:
+            delta = current_value - national_average
+            direction = "above" if delta >= 0 else "below"
+            key_findings.append(
+                f"It sits **{_format_metric_value(primary, abs(delta))}** {direction} the national average of **{_format_metric_value(primary, national_average)}**."
+            )
+    if not top_ordered.empty:
+        leader = top_ordered.iloc[0]
+        leader_label = _row_label(leader, df, label_col)
+        leader_value = _format_metric_value(primary, leader[primary])
+        key_findings.append(f"The national leader shown here is **{leader_label}** at **{leader_value}**.")
+    if not bottom_ordered.empty:
+        tail = bottom_ordered.iloc[0]
+        tail_label = _row_label(tail, df, label_col)
+        tail_value = _format_metric_value(primary, tail[primary])
+        key_findings.append(f"The bottom of the ranking shown here is **{tail_label}** at **{tail_value}**.")
+    key_findings_block = _bullet_section("Key findings", key_findings)
+    if key_findings_block:
+        lines.append(key_findings_block)
 
     if not nearby_ordered.empty:
         lines.append(
@@ -636,7 +828,6 @@ def _leaderboard_context_answer(question: str, df: pd.DataFrame, label_col: str,
         lines.append(f"**Bottom {len(bottom_ordered)}:**\n" + _ordered_subset_block(bottom_ordered, df, label_col, primary))
 
     context_bits: list[str] = []
-    national_average = _as_float(focus.get("national_average"))
     if national_average is not None:
         context_bits.append(f"National average: **{_format_metric_value(primary, national_average)}**")
     if rank_value is not None and total_entities is not None:
@@ -857,6 +1048,10 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any], sq
         definition = _definition_note(primary, question)
         if definition:
             lines.append(definition)
+        key_findings = _single_row_key_findings(row, primary, entity, question, component_cols)
+        key_findings_block = _bullet_section("Key findings", key_findings)
+        if key_findings_block:
+            lines.append(key_findings_block)
         if detail_parts:
             lines.append(_section("Breakdown", ", ".join(detail_parts[:4]) + "."))
         component_text = _component_breakdown_text(row, primary, component_cols)
@@ -893,14 +1088,15 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any], sq
         second = sorted_df.iloc[1] if len(sorted_df) > 1 else None
         third = sorted_df.iloc[2] if len(sorted_df) > 2 else None
         tail = sorted_df.iloc[-1]
-        top_five = sorted_df.head(5)
+        top_count = _display_top_k(question, len(sorted_df))
+        top_rows = sorted_df.head(top_count)
         entity_group = _entity_group_name(df, label_col)
         primary_name = _metric_display_name(primary, question)
         top_label = _row_label(top, df, label_col)
         tail_label = _row_label(tail, df, label_col)
         top_value = _format_metric_value(primary, top[primary])
         tail_value = _format_metric_value(primary, tail[primary])
-        top_five_text = _top_n_block(sorted_df, df, label_col, primary, n=min(5, len(top_five)))
+        top_five_text = _top_n_block(sorted_df, df, label_col, primary, n=top_count)
 
         lead = _ranking_answer_lead(question, primary, top_label, top_value, ascending, frame)
 
@@ -914,6 +1110,13 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any], sq
         definition = _definition_note(primary, question)
         if definition:
             lines.append(definition)
+        metric_stats = stats.get("metrics", {}).get(primary)
+        key_findings_block = _bullet_section(
+            "Key findings",
+            _ranking_key_findings(sorted_df, primary, top, second, third, tail, metric_stats, df, label_col),
+        )
+        if key_findings_block:
+            lines.append(key_findings_block)
         if follow_parts:
             lines.append(_section("Next up", "; ".join(follow_parts) + "."))
         component_cols = _component_columns(df, primary, label_col)
@@ -925,8 +1128,7 @@ def _grounded_summary(question: str, df: pd.DataFrame, stats: dict[str, Any], sq
         comparison_note = _comparison_note(question, sorted_df, primary, label_col, ascending)
         if comparison_note:
             lines.append(comparison_note)
-        lines.append("**Top 5:**\n" + top_five_text)
-        metric_stats = stats.get("metrics", {}).get(primary)
+        lines.append(f"**Top {top_count}:**\n" + top_five_text)
         context_bits = [
             f"Across the {stats['row_count']} returned {entity_group}, values range from **{tail_value}** for **{tail_label}** "
             f"to **{top_value}** for **{top_label}**."
@@ -1050,10 +1252,15 @@ def _should_fallback_to_grounded(generated: str, grounded: str) -> bool:
     normalized = _normalize_generated_answer(generated)
     grounded_lower = grounded.lower()
     normalized_lower = normalized.lower()
+    grounded_words = len(re.findall(r"\w+", grounded))
+    normalized_words = len(re.findall(r"\w+", normalized))
 
     for marker in _required_markers_from_grounded(grounded):
         if marker not in normalized:
             return True
+
+    if grounded_words >= 140 and normalized_words < max(120, int(grounded_words * 0.72)):
+        return True
 
     phrase_guards = [
         "default federal spending",

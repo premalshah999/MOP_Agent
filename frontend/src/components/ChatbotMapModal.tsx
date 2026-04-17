@@ -15,7 +15,7 @@ interface ChatbotMapModalProps {
 const FETCHABLE_DATASETS = new Set(['census', 'gov_spending', 'finra', 'contract_static', 'contract_agency', 'spending_breakdown']);
 
 export function ChatbotMapModal({ isOpen, onClose, mapIntent, fallbackRows }: ChatbotMapModalProps) {
-  const [rows, setRows] = useState<Record<string, unknown>[]>(fallbackRows);
+  const [mapRows, setMapRows] = useState<Record<string, unknown>[]>(fallbackRows);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,7 +57,7 @@ export function ChatbotMapModal({ isOpen, onClose, mapIntent, fallbackRows }: Ch
 
     if (!isOpen) return () => { active = false; };
 
-    setRows(fallbackRows);
+    setMapRows(fallbackRows);
     setError(null);
 
     if (!canFetch || !mapIntent.dataset || !mapIntent.level || !mapIntent.metric) {
@@ -75,12 +75,12 @@ export function ChatbotMapModal({ isOpen, onClose, mapIntent, fallbackRows }: Ch
     })
       .then((nextRows) => {
         if (!active) return;
-        setRows(nextRows.length ? nextRows : fallbackRows);
+        setMapRows(nextRows.length ? nextRows : fallbackRows);
       })
       .catch((err) => {
         if (!active) return;
         if (fallbackRows.length) {
-          setRows(fallbackRows);
+          setMapRows(fallbackRows);
           setError(null);
           return;
         }
@@ -127,7 +127,13 @@ export function ChatbotMapModal({ isOpen, onClose, mapIntent, fallbackRows }: Ch
         </header>
 
         <main className="h-[calc(100%-132px)] overflow-auto bg-[var(--bg)] px-5 py-5 sm:px-6">
-          <ChatbotMapRenderer mapIntent={mapIntent} rows={rows} loading={loading} error={error} />
+          <ChatbotMapRenderer
+            mapIntent={mapIntent}
+            mapRows={mapRows}
+            insightRows={fallbackRows.length ? fallbackRows : mapRows}
+            loading={loading}
+            error={error}
+          />
         </main>
       </div>
     </div>

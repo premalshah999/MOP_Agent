@@ -599,6 +599,49 @@ def _plan_standard_table(question: str, table_name: str, frame: QueryFrame) -> Q
         )
         return QueryPlan([table_name], sql, "deterministic_position_lookup")
 
+    contextual_single_state = (
+        not trend
+        and not compare
+        and not ranking
+        and not position_lookup
+        and len(frame.state_names) == 1
+        and "state" in table_cols
+    )
+    if contextual_single_state:
+        ranking_filters = _default_filters(
+            table_name,
+            question,
+            include_default_year=True,
+            include_state=False,
+            frame=frame,
+        )
+        ranking_where = _build_where_clause(ranking_filters)
+        state_value = frame.state_names[0].lower()
+        base_select_parts = ["state"]
+        if metric_alias == "spending_total":
+            for component in default_spending_component_columns(table_name):
+                if component in table_cols:
+                    base_select_parts.append(f"{quote_identifier(component)} AS {_metric_alias(component)}")
+        base_select_parts.append(_render_metric(metric_expr, metric_alias, table_name))
+        sql = (
+            "WITH base AS ("
+            f"SELECT {', '.join(base_select_parts)} FROM {table_name}{ranking_where}"
+            "), ranked AS ("
+            f"SELECT base.*, "
+            f"RANK() OVER (ORDER BY {metric_alias} DESC) AS metric_rank, "
+            "COUNT(*) OVER () AS total_states, "
+            f"ROUND(AVG({metric_alias}) OVER (), 2) AS national_average, "
+            f"ROUND(quantile_cont({metric_alias}, 0.5) OVER (), 2) AS national_median, "
+            f"FIRST_VALUE(state) OVER (ORDER BY {metric_alias} DESC) AS national_leader, "
+            f"ROUND(FIRST_VALUE({metric_alias}) OVER (ORDER BY {metric_alias} DESC), 2) AS national_leader_value, "
+            f"FIRST_VALUE(state) OVER (ORDER BY {metric_alias} ASC) AS national_trailing_state, "
+            f"ROUND(FIRST_VALUE({metric_alias}) OVER (ORDER BY {metric_alias} ASC), 2) AS national_trailing_value "
+            "FROM base"
+            ") "
+            f"SELECT * FROM ranked WHERE LOWER(state) = '{state_value}'"
+        )
+        return QueryPlan([table_name], sql, "deterministic_single_state_context")
+
     select_parts = list(dict.fromkeys(label_columns))
     if metric_alias == "spending_total":
         component_cols = default_spending_component_columns(table_name)
