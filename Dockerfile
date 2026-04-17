@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # App code
 COPY app/ app/
+COPY data/boundaries/ data/boundaries/
 COPY data/schema/ data/schema/
 COPY data/parquet/ data/parquet/
 COPY scripts/ scripts/

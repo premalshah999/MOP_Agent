@@ -52,7 +52,7 @@ SERVICE_NAME = "mop-agent"
 SERVICE_VERSION = os.getenv("APP_VERSION", "1.0.0")
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 MANIFEST_PATH = Path(__file__).resolve().parent.parent / "data" / "schema" / "manifest.json"
-BOUNDARIES_DIR = Path(__file__).resolve().parent.parent.parent / "geospatial" / "boundaries"
+BOUNDARIES_DIR = Path(__file__).resolve().parent.parent / "data" / "boundaries"
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
