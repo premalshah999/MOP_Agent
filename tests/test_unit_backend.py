@@ -226,6 +226,12 @@ class QueryFrameTests(unittest.TestCase):
         self.assertEqual(frame.metric_hint, "Black")
         self.assertEqual(frame.intent, "ranking")
 
+    def test_query_frame_maps_black_count_to_derived_metric(self) -> None:
+        frame = query_frame.infer_query_frame("Which state has the maximum black population in USA by count?")
+        self.assertEqual(frame.family, "acs")
+        self.assertEqual(frame.metric_hint, "Black_count")
+        self.assertEqual(frame.intent, "ranking")
+
 
 class MapIntentTests(unittest.TestCase):
     def test_build_map_intent_for_state_ranking(self) -> None:
@@ -689,6 +695,20 @@ class FormatterTests(unittest.TestCase):
         )
         self.assertIn("processed congress-level government finance", result.lower())
 
+    def test_format_result_treats_race_count_as_count_not_percent(self) -> None:
+        df = pd.DataFrame({
+            "state": ["california", "texas", "florida"],
+            "black_count": [2_326_000, 3_577_000, 3_819_000],
+        })
+        result = formatter.format_result(
+            "Which state has the maximum black population by number?",
+            df,
+            sql="SELECT state, ROUND((Black * \"Total population\"), 0) AS black_count FROM acs_state WHERE Year = 2023 ORDER BY black_count DESC LIMIT 15",
+        )
+        self.assertIn("Black population count", result)
+        self.assertIn("3,819,000", result)
+        self.assertNotIn("%", result.split("**Top 3:**")[0])
+
     def test_fallback_answer_no_api_key(self) -> None:
         df = pd.DataFrame({
             "state": ["maryland", "virginia"],
@@ -902,6 +922,32 @@ class AgentIntegrationTests(unittest.TestCase):
         agent._last_query["question"] = "How much federal money goes to Maryland?"
         resolved = agent._resolve_followup("money as in federal fund flows", [])
         self.assertEqual(resolved, "How much subcontract inflow goes to Maryland?")
+
+    def test_classify_metric_reframe_as_followup(self) -> None:
+        from app import agent
+
+        agent._last_query.clear()
+        intent = agent._classify_intent(
+            "by count",
+            [{"role": "user", "content": "maximum black population in USA."}],
+        )
+        self.assertEqual(intent, "FOLLOWUP")
+
+    def test_resolve_followup_rewrites_by_count_against_previous_question(self) -> None:
+        from app import agent
+
+        agent._last_query.clear()
+        agent._last_query["question"] = "maximum black population in USA."
+        resolved = agent._resolve_followup("by count", [])
+        self.assertEqual(resolved, "maximum black population in USA by count")
+
+    def test_resolve_followup_reuses_prior_funded_question_for_money(self) -> None:
+        from app import agent
+
+        agent._last_query.clear()
+        agent._last_query["question"] = "top 5 most funded counties."
+        resolved = agent._resolve_followup("money", [])
+        self.assertEqual(resolved, "top 5 most funded counties.")
 
 
 class ChartGeneratorTests(unittest.TestCase):
@@ -1182,6 +1228,24 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("Resident Wage", plan.sql)
         self.assertNotIn("Direct Payments", plan.sql)
         self.assertNotIn("Employees Wage", plan.sql)
+
+    def test_planner_interprets_most_funded_counties_as_federal_spending(self) -> None:
+        plan = planner.plan_query("top 5 most funded counties.")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["contract_county"])
+        self.assertIn("spending_total", plan.sql)
+        self.assertIn("ORDER BY spending_total DESC", plan.sql)
+
+    def test_planner_supports_derived_black_count_rankings(self) -> None:
+        plan = planner.plan_query("Which state has the maximum black population by number?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["acs_state"])
+        self.assertIn("Black", plan.sql)
+        self.assertIn("Total population", plan.sql)
+        self.assertIn("/ 100.0", plan.sql)
+        self.assertIn("black_count", plan.sql)
 
     def test_planner_prefers_total_assets_for_assets_question(self) -> None:
         plan = planner.plan_query("highest assets county in california?")

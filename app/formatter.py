@@ -217,9 +217,13 @@ def _metric_display_name(metric: str, question: str | None = None) -> str:
         "debt_ratio": "debt ratio",
         "resident_wage": "resident wage",
         "black": "Black population share",
+        "black_count": "Black population count",
         "white": "White population share",
+        "white_count": "White population count",
         "asian": "Asian population share",
+        "asian_count": "Asian population count",
         "hispanic": "Hispanic population share",
+        "hispanic_count": "Hispanic population count",
         "below poverty": "poverty rate",
     }
     if normalized in mapping:
@@ -274,6 +278,8 @@ def _is_count_metric(metric: str) -> bool:
 
 def _is_percent_metric(metric: str, value: Any) -> bool:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    if _is_count_metric(metric) or "count" in metric.lower():
         return False
     lowered = metric.lower()
     percent_tokens = (

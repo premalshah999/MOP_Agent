@@ -94,6 +94,7 @@ _FEDERAL_PATTERNS = (
     "federal spending",
     "federal money",
     "federal funding",
+    "funded",
     "contracts",
     "contract",
     "grants",
@@ -154,6 +155,12 @@ _METRIC_PATTERNS: tuple[tuple[str, str], ...] = (
     ("owner occupied", "Owner occupied"),
     ("age 18 65", "Age 18-65"),
     ("share of black population", "Black"),
+    ("black population by count", "Black_count"),
+    ("black population by number", "Black_count"),
+    ("black population count", "Black_count"),
+    ("black count", "Black_count"),
+    ("black by count", "Black_count"),
+    ("black by number", "Black_count"),
     ("black population by ratio", "Black"),
     ("black population ratio", "Black"),
     ("black share", "Black"),
@@ -161,6 +168,11 @@ _METRIC_PATTERNS: tuple[tuple[str, str], ...] = (
     ("black population", "Black"),
     ("black", "Black"),
     ("share of hispanic population", "Hispanic"),
+    ("hispanic population by count", "Hispanic_count"),
+    ("hispanic population by number", "Hispanic_count"),
+    ("hispanic count", "Hispanic_count"),
+    ("hispanic by count", "Hispanic_count"),
+    ("hispanic by number", "Hispanic_count"),
     ("hispanic population by ratio", "Hispanic"),
     ("hispanic population ratio", "Hispanic"),
     ("hispanic share", "Hispanic"),
@@ -168,6 +180,11 @@ _METRIC_PATTERNS: tuple[tuple[str, str], ...] = (
     ("hispanic population", "Hispanic"),
     ("hispanic", "Hispanic"),
     ("share of white population", "White"),
+    ("white population by count", "White_count"),
+    ("white population by number", "White_count"),
+    ("white count", "White_count"),
+    ("white by count", "White_count"),
+    ("white by number", "White_count"),
     ("white population by ratio", "White"),
     ("white population ratio", "White"),
     ("white share", "White"),
@@ -175,6 +192,11 @@ _METRIC_PATTERNS: tuple[tuple[str, str], ...] = (
     ("white population", "White"),
     ("white", "White"),
     ("share of asian population", "Asian"),
+    ("asian population by count", "Asian_count"),
+    ("asian population by number", "Asian_count"),
+    ("asian count", "Asian_count"),
+    ("asian by count", "Asian_count"),
+    ("asian by number", "Asian_count"),
     ("asian population by ratio", "Asian"),
     ("asian population ratio", "Asian"),
     ("asian share", "Asian"),
@@ -362,8 +384,22 @@ def _infer_metric_hint(q: str) -> str | None:
             score = len(pattern)
             if best_match is None or score > best_match[0]:
                 best_match = (score, metric)
+    race_metric_overrides = {
+        "black": ("Black", "Black_count"),
+        "white": ("White", "White_count"),
+        "asian": ("Asian", "Asian_count"),
+        "hispanic": ("Hispanic", "Hispanic_count"),
+    }
+    for token, (share_metric, count_metric) in race_metric_overrides.items():
+        if token in q:
+            if any(phrase in q for phrase in ("by count", "by number", "population count", "population by number", "population by count")):
+                return count_metric
+            if any(phrase in q for phrase in ("by ratio", "by share", "population ratio", "population share", "share of")):
+                return share_metric
     if best_match is not None:
         return best_match[1]
+    if "funded" in q:
+        return "spending_total"
     if "federal money" in q or "federal funding" in q or "default spending" in q:
         return "spending_total"
     if "spending" in q and not any(token in q for token in ("direct payments", "resident wage", "employees wage")):

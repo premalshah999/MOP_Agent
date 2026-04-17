@@ -334,6 +334,13 @@ def _resolve_metric(table_name: str, question: str, frame: QueryFrame | None = N
                 raw_expr = raw_expr[1:-1]
             return raw_expr, alias
 
+    if frame and frame.metric_hint in {"Black_count", "White_count", "Asian_count", "Hispanic_count"}:
+        cols = set(table_columns(table_name))
+        race_column = frame.metric_hint.removesuffix("_count")
+        if race_column in cols and "Total population" in cols:
+            expr = f"(({quote_identifier(race_column)} / 100.0) * {quote_identifier('Total population')})"
+            return expr, _metric_alias(frame.metric_hint)
+
     if frame and frame.metric_hint:
         metric = _metric_expr_for_component(table_name, frame.metric_hint, question, frame=frame)
         if metric:
@@ -367,6 +374,8 @@ def _render_metric(metric_expr: str, metric_alias: str, table_name: str) -> str:
     plain_name = metric_alias.replace("_", " ")
     if metric_alias in {"employees", "federal_residents"} or plain_name in {"employees", "federal residents"}:
         return f"{metric_expr} AS {metric_alias}"
+    if metric_alias.endswith("_count"):
+        return f"ROUND({metric_expr}, 0) AS {metric_alias}"
     if metric_expr in {quote_identifier(col) for col in count_columns(table_name)}:
         return f"{metric_expr} AS {metric_alias}"
     return f"ROUND({metric_expr}, 2) AS {metric_alias}"

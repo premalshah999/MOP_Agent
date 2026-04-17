@@ -147,6 +147,23 @@ CONTEXTUAL_FOLLOWUP_SIGNALS = [
     "rather than",
     "i mean",
 ]
+METRIC_REFRAME_SIGNALS = {
+    "money",
+    "funding",
+    "spending",
+    "federal money",
+    "federal funding",
+    "by count",
+    "by number",
+    "count",
+    "number",
+    "by share",
+    "by ratio",
+    "share",
+    "ratio",
+    "percent",
+    "percentage",
+}
 
 
 def _classify_intent(question: str, history: list[dict[str, str]]) -> str:
@@ -162,6 +179,12 @@ def _classify_intent(question: str, history: list[dict[str, str]]) -> str:
             return "FOLLOWUP"
     if any(phrase in q for phrase in ["which one", "what one"]):
         if history or _last_query.get("sql"):
+            return "FOLLOWUP"
+
+    if history or _last_query.get("sql"):
+        if q in METRIC_REFRAME_SIGNALS or any(q == signal for signal in METRIC_REFRAME_SIGNALS):
+            return "FOLLOWUP"
+        if len(words_clean) <= 4 and any(signal in q for signal in METRIC_REFRAME_SIGNALS):
             return "FOLLOWUP"
 
     # Short contextual geography/entity questions should inherit the previous metric instead of
@@ -225,6 +248,41 @@ def _resolve_followup(question: str, history: list[dict[str, str]]) -> str:
     q_lower = question.lower().strip()
     frame = infer_query_frame(question)
     last_frame = infer_query_frame(last_q) if last_q else infer_query_frame("")
+
+    if last_q:
+        if q_lower in {"by count", "by number", "count", "number"}:
+            if re.search(r"\bby (ratio|share|percent|percentage|count|number)\b", last_q, re.IGNORECASE):
+                return re.sub(
+                    r"\bby (ratio|share|percent|percentage|count|number)\b",
+                    "by count",
+                    last_q,
+                    flags=re.IGNORECASE,
+                )
+            return f"{last_q.rstrip('?.!')} by count"
+
+        if q_lower in {"by share", "by ratio", "share", "ratio", "percent", "percentage"}:
+            if re.search(r"\bby (ratio|share|percent|percentage|count|number)\b", last_q, re.IGNORECASE):
+                return re.sub(
+                    r"\bby (ratio|share|percent|percentage|count|number)\b",
+                    "by ratio",
+                    last_q,
+                    flags=re.IGNORECASE,
+                )
+            return f"{last_q.rstrip('?.!')} by ratio"
+
+        if q_lower in {"money", "funding", "spending", "federal money", "federal funding"}:
+            if last_frame.family in {"contract", "agency", "breakdown", "flow"} or "funded" in last_q.lower():
+                return last_q
+            geo_phrase = ""
+            if last_frame.geo_level == "county":
+                geo_phrase = "counties"
+            elif last_frame.geo_level == "congress":
+                geo_phrase = "districts"
+            elif last_frame.geo_level == "state":
+                geo_phrase = "states"
+            if geo_phrase:
+                return f"Top {geo_phrase} by federal money"
+            return f"{last_q.rstrip('?.!')} using federal spending"
 
     # If the follow-up already names the metric/family explicitly, keep it self-contained
     # instead of leaking previous-answer entities into the rewritten question.
