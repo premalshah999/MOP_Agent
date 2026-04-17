@@ -23,14 +23,22 @@ export function VegaChart({ spec }: VegaChartProps) {
           config: {
             background: 'transparent',
             axis: {
+              domain: false,
+              tickColor: '#e2e8f0',
+              gridColor: '#eef2f7',
+              labelColor: '#64748b',
+              titleColor: '#0f172a',
               labelFontSize: 10,
               titleFontSize: 11,
-              labelFont: 'inherit',
-              titleFont: 'inherit',
+              labelFont: 'Inter',
+              titleFont: 'Inter',
             },
-            bar: { color: '#1a1a1a' },
-            line: { color: '#1a1a1a', strokeWidth: 2 },
-            point: { color: '#1a1a1a', size: 40 },
+            view: { stroke: null },
+            style: { 'guide-label': { font: 'Inter' }, 'guide-title': { font: 'Inter' } },
+            bar: { color: '#1f3b82', cornerRadiusEnd: 0 },
+            line: { color: '#1f3b82', strokeWidth: 2 },
+            point: { color: '#1f3b82', size: 34 },
+            rect: { cornerRadius: 0 },
           },
         });
 
@@ -53,7 +61,7 @@ export function VegaChart({ spec }: VegaChartProps) {
   return (
     <div
       ref={containerRef}
-      className="mt-3 w-full overflow-hidden rounded-lg border border-[var(--line)] bg-white p-3"
+      className="w-full overflow-hidden border border-[var(--line)] bg-[var(--surface)] p-4"
     />
   );
 }

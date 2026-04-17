@@ -51,14 +51,14 @@ export function Sidebar({
 
   return (
     <aside
-      className={`relative shrink-0 bg-[var(--sidebar-bg)] text-[var(--sidebar-ink)] ${className}`}
+      className={`relative shrink-0 border-r border-[var(--sidebar-line)] bg-[var(--sidebar-bg)] text-[var(--sidebar-ink)] ${className}`}
       style={resizable ? { width } : { width: 280 }}
     >
       {/* Drag handle (right edge) */}
       {resizable && (
         <div
           onMouseDown={onMouseDown}
-          className="absolute right-0 top-0 z-30 h-full w-1 cursor-col-resize hover:bg-white/10 active:bg-white/15"
+          className="absolute right-0 top-0 z-30 h-full w-1 cursor-col-resize hover:bg-[var(--sidebar-line)] active:bg-[var(--sidebar-line)]"
         />
       )}
 
@@ -66,7 +66,7 @@ export function Sidebar({
         {/* Header */}
         <div className="px-4 pt-5 pb-4">
           <div className="flex items-center justify-between">
-            <span className="font-display text-[15px] font-semibold tracking-tight">
+            <span className="font-display text-[18px] font-semibold tracking-tight text-[var(--ink)]">
               MOP Agent<span className="text-[var(--accent)]">.</span>
             </span>
             {onClose && (
@@ -74,7 +74,7 @@ export function Sidebar({
                 type="button"
                 onClick={onClose}
                 aria-label="Close sidebar"
-                className="p-1 text-[var(--sidebar-muted)] hover:text-white lg:hidden"
+                className="p-1 text-[var(--sidebar-muted)] hover:text-[var(--sidebar-ink)] lg:hidden"
               >
                 <X size={14} />
               </button>
@@ -87,7 +87,7 @@ export function Sidebar({
               onOpenChat();
               onNewChat();
             }}
-            className="mt-4 flex w-full items-center justify-center gap-1.5 border border-[var(--sidebar-line)] py-2 text-[11px] font-medium tracking-wide text-[var(--sidebar-ink)] transition hover:bg-[var(--sidebar-hover)]"
+            className="mt-4 flex w-full items-center justify-center gap-1.5 border border-[var(--sidebar-line)] bg-[var(--surface)] py-2 text-[11px] font-medium tracking-[0.16em] text-[var(--sidebar-ink)] transition hover:bg-[var(--sidebar-hover)]"
           >
             <Plus size={12} />
             New chat
@@ -106,7 +106,7 @@ export function Sidebar({
             return (
               <div
                 key={thread.id}
-                className={`group flex items-center gap-1 rounded px-2 py-2 transition ${
+            className={`group flex items-center gap-1 border border-transparent px-2 py-2 transition ${
                   active ? 'bg-[var(--sidebar-active)]' : 'hover:bg-[var(--sidebar-hover)]'
                 }`}
               >
@@ -130,7 +130,7 @@ export function Sidebar({
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); onDeleteThread(thread.id); }}
-                  className="shrink-0 p-1 text-[var(--sidebar-muted)] opacity-0 transition group-hover:opacity-100 hover:text-red-400"
+                  className="shrink-0 p-1 text-[var(--sidebar-muted)] opacity-0 transition group-hover:opacity-100 hover:text-red-500"
                   title="Delete thread"
                   aria-label="Delete thread"
                 >
@@ -152,7 +152,7 @@ export function Sidebar({
               <button
                 type="button"
                 onClick={signOut}
-                className="p-1.5 text-[var(--sidebar-muted)] transition hover:text-white"
+                className="p-1.5 text-[var(--sidebar-muted)] transition hover:text-[var(--sidebar-ink)]"
                 title="Sign out"
                 aria-label="Sign out"
               >

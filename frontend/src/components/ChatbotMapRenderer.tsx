@@ -1,6 +1,7 @@
+import type { ReactNode } from 'react';
 import type { ChatbotMapIntent } from '@/types/chat';
 import MapPreview from './MapPreview';
-
+import { VegaChart } from './VegaChart';
 
 interface ChatbotMapRendererProps {
   mapIntent: ChatbotMapIntent;
@@ -28,15 +29,20 @@ function getNumber(value: unknown): number | null {
   return null;
 }
 
+function metricKind(metric: string | undefined): 'money' | 'percent' | 'count' | 'generic' {
+  const lowered = (metric ?? '').toLowerCase();
+  if (/(contracts|grants|payments|wage|liabilit|assets|revenue|expenses|flow|amount|position|cash|spending)/i.test(lowered)) return 'money';
+  if (/(poverty|education|owner|renter|white|black|asian|hispanic|satisfied|risk_averse|literacy|constraint|financing|share|ratio|per_1000)/i.test(lowered)) return 'percent';
+  if (/(employees|residents|population|household|jobs|count)/i.test(lowered)) return 'count';
+  return 'generic';
+}
+
 function formatValue(metric: string | undefined, value: unknown): string {
   const numeric = getNumber(value);
   if (numeric === null) return String(value ?? 'N/A');
-  const lowered = (metric ?? '').toLowerCase();
-  const moneyLike = /(contracts|grants|payments|wage|liabilit|assets|revenue|expenses|flow|amount|position|cash)/i.test(lowered);
-  const percentLike = /(poverty|education|owner|renter|white|black|asian|hispanic|satisfied|risk_averse)/i.test(lowered);
-  const countLike = /(employees|residents|population|household)/i.test(lowered) && !moneyLike;
+  const kind = metricKind(metric);
 
-  if (moneyLike) {
+  if (kind === 'money') {
     const abs = Math.abs(numeric);
     const sign = numeric < 0 ? '-' : '';
     if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
@@ -45,12 +51,12 @@ function formatValue(metric: string | undefined, value: unknown): string {
     return `${sign}$${abs.toFixed(2)}`;
   }
 
-  if (percentLike) {
+  if (kind === 'percent') {
     if (Math.abs(numeric) <= 1.5) return `${(numeric * 100).toFixed(1)}%`;
     return `${numeric.toFixed(1)}%`;
   }
 
-  if (countLike) {
+  if (kind === 'count') {
     return `${Math.round(numeric).toLocaleString()}`;
   }
 
@@ -60,7 +66,16 @@ function formatValue(metric: string | undefined, value: unknown): string {
 function humanizeMetric(metric: string | undefined): string {
   if (!metric) return 'Metric';
   if (metric === 'spending_total') return 'Default federal spending';
-  return metric.replace(/_/g, ' ');
+  if (/^black$/i.test(metric)) return 'Black population share';
+  if (/^white$/i.test(metric)) return 'White population share';
+  if (/^hispanic$/i.test(metric)) return 'Hispanic population share';
+  if (/^asian$/i.test(metric)) return 'Asian population share';
+  if (/financial_literacy/i.test(metric)) return 'Financial literacy';
+  if (/financial_constraint/i.test(metric)) return 'Financial constraint';
+  if (/alternative_financing/i.test(metric)) return 'Alternative financing';
+  return metric
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function prettyText(value: string): string {
@@ -114,22 +129,113 @@ function levelLabel(level: ChatbotMapIntent['level']): string {
   return 'state';
 }
 
+function levelPluralLabel(level: ChatbotMapIntent['level']): string {
+  if (level === 'county') return 'counties';
+  if (level === 'congress') return 'districts';
+  return 'states';
+}
+
 function supportingText(mapIntent: ChatbotMapIntent): string {
   switch (mapIntent.mapType) {
     case 'single-state-spotlight':
-      return 'This view keeps the national context in frame while zooming directly into the answer state.';
+      return 'This view keeps the national context visible while moving into the focal state and summarizing how it sits in the national distribution.';
     case 'single-state-ranked-subregions':
     case 'atlas-within-state':
-      return 'This view narrows the geography to one state so the answer county or district is easier to read in local context.';
+      return 'This view isolates one state and reads the answer at the county or district level so the internal pattern is visible immediately.';
     case 'atlas-comparison':
-      return 'This view highlights the requested comparison geographies while keeping the broader distribution visible.';
+      return 'This view keeps the full choropleth but emphasizes the requested comparison geographies so the contrast is easy to read.';
     case 'top-n-highlight':
-      return 'This view pairs a choropleth with a compact leaderboard so the strongest locations stand out immediately.';
+      return 'This view pairs the choropleth with a compact leaderboard and distribution view so the leading places stand out without losing national context.';
     case 'agency-choropleth':
       return 'This view keeps the selected agency metric on the map so you can see where that department is strongest geographically.';
     default:
-      return 'This view provides the geographic context behind the answer.';
+      return 'This view provides the geographic evidence behind the answer and complements it with compact analytic context.';
   }
+}
+
+function buildBarChartSpec(metric: string, rows: Record<string, unknown>[]): Record<string, unknown> | null {
+  const ranked = rankRows(rows, metric)
+    .slice(0, 10)
+    .map((row) => ({ place: rowLabel(row), value: getNumber(row[metric]) ?? 0 }));
+  if (!ranked.length) return null;
+
+  return {
+    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    width: 'container',
+    height: 280,
+    padding: { left: 4, top: 4, right: 12, bottom: 4 },
+    data: { values: ranked },
+    mark: { type: 'bar' },
+    encoding: {
+      y: {
+        field: 'place',
+        type: 'nominal',
+        sort: '-x',
+        axis: { title: null, labelLimit: 220, labelPadding: 8 },
+      },
+      x: {
+        field: 'value',
+        type: 'quantitative',
+        axis: { title: null, tickCount: 5, grid: true, format: metricKind(metric) === 'money' ? '~s' : undefined },
+      },
+      color: { value: '#3458a5' },
+    },
+    config: { view: { stroke: null } },
+  };
+}
+
+function buildHistogramSpec(metric: string, rows: Record<string, unknown>[]): Record<string, unknown> | null {
+  const values = rows
+    .map((row) => getNumber(row[metric]))
+    .filter((value): value is number => value !== null);
+  if (values.length < 5) return null;
+
+  return {
+    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    width: 'container',
+    height: 140,
+    padding: { left: 4, top: 4, right: 8, bottom: 4 },
+    data: { values: values.map((value) => ({ value })) },
+    mark: { type: 'bar', color: '#b8622d' },
+    encoding: {
+      x: {
+        field: 'value',
+        type: 'quantitative',
+        bin: { maxbins: 12 },
+        axis: { title: null, grid: false, format: metricKind(metric) === 'money' ? '~s' : undefined },
+      },
+      y: {
+        aggregate: 'count',
+        type: 'quantitative',
+        axis: { title: null, tickCount: 4, grid: true },
+      },
+    },
+    config: { view: { stroke: null } },
+  };
+}
+
+function InsightCard({
+  eyebrow,
+  title,
+  value,
+  meta,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  value?: string;
+  meta?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="border border-[var(--line)] bg-[var(--surface)] px-5 py-4">
+      <div className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">{eyebrow}</div>
+      <div className="mt-3 text-[14px] font-semibold text-[var(--ink)]">{title}</div>
+      {value && <div className="mt-2 text-[42px] font-semibold leading-none tracking-[-0.03em] text-[var(--ink)]">{value}</div>}
+      {meta && <div className="mt-3 text-[12px] leading-6 text-[var(--muted)]">{meta}</div>}
+      {children && <div className="mt-4">{children}</div>}
+    </section>
+  );
 }
 
 function InsightPanel({ mapIntent, rows }: { mapIntent: ChatbotMapIntent; rows: Record<string, unknown>[] }) {
@@ -141,45 +247,34 @@ function InsightPanel({ mapIntent, rows }: { mapIntent: ChatbotMapIntent; rows: 
   const leader = focusedRow ?? sorted[0];
   const topFive = sorted.slice(0, Math.min(sorted.length, mapIntent.topN ?? 5, 5));
   const values = sorted.map((row) => getNumber(row[metric])).filter((value): value is number => value !== null);
-  const spread = values.length >= 2 ? Math.max(...values) - Math.min(...values) : null;
+  const max = values.length ? Math.max(...values) : null;
+  const min = values.length ? Math.min(...values) : null;
+  const spread = values.length >= 2 && max !== null && min !== null ? max - min : null;
+  const barSpec = buildBarChartSpec(metric, rows);
+  const histogramSpec = buildHistogramSpec(metric, rows);
 
   return (
-    <aside className="space-y-4 rounded-[10px] border border-black/5 bg-white/86 p-4 shadow-[0_10px_28px_rgba(15,23,42,0.04)] backdrop-blur">
-      <div>
-        <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
-          View type
-        </p>
-        <p className="mt-2 text-[13px] leading-6 text-[var(--ink)]">{supportingText(mapIntent)}</p>
-      </div>
-
-      <div className="rounded-[8px] border border-black/5 bg-[var(--surface)]/92 px-4 py-3">
-        <p className="text-[10px] uppercase tracking-[0.22em] text-[var(--muted)]">
-          {focusedRow ? 'Focus geography' : 'Lead result'}
-        </p>
-        <div className="mt-2 text-[14px] font-semibold text-[var(--ink)]">{rowLabel(leader)}</div>
-        <div className="mt-1 text-[22px] font-semibold tracking-tight text-[var(--ink)]">
-          {formatValue(metric, leader[metric])}
-        </div>
-        <div className="mt-2 text-[12px] leading-6 text-[var(--muted)]">
-          {humanizeMetric(metric)} · {levelLabel(mapIntent.level)}
-        </div>
-      </div>
+    <aside className="space-y-4">
+      <InsightCard
+        eyebrow="View type"
+        title={focusedRow ? rowLabel(leader) : 'Lead result'}
+        value={formatValue(metric, leader[metric])}
+        meta={`${humanizeMetric(metric)} · ${levelLabel(mapIntent.level)}`}
+      >
+        <p className="text-[13px] leading-7 text-[var(--ink)]">{supportingText(mapIntent)}</p>
+      </InsightCard>
 
       {topFive.length > 1 && (
-        <div>
-          <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
-            Top results
-          </p>
-          <div className="mt-3 space-y-2">
+        <section className="border border-[var(--line)] bg-[var(--surface)] px-5 py-4">
+          <div className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">Top results</div>
+          <div className="mt-4 space-y-2">
             {topFive.map((row, index) => (
               <div
                 key={`${rowLabel(row)}-${index}`}
-                className="flex items-center justify-between gap-3 rounded-[8px] border border-black/5 bg-white px-3 py-2"
+                className="flex items-center justify-between gap-3 border border-[var(--line)] px-3 py-2.5"
               >
                 <div className="min-w-0">
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
-                    #{index + 1}
-                  </div>
+                  <div className="text-[10px] uppercase tracking-[0.22em] text-[var(--muted)]">#{index + 1}</div>
                   <div className="truncate text-[13px] font-medium text-[var(--ink)]">{rowLabel(row)}</div>
                 </div>
                 <div className="shrink-0 text-[12px] font-semibold text-[var(--ink)]">
@@ -188,26 +283,55 @@ function InsightPanel({ mapIntent, rows }: { mapIntent: ChatbotMapIntent; rows: 
               </div>
             ))}
           </div>
-        </div>
+        </section>
       )}
 
-      <div className="rounded-[8px] border border-dashed border-black/8 px-4 py-3 text-[12px] leading-6 text-[var(--muted)]">
-        {values.length > 1 ? (
-          <>
-            Across the {rows.length} mapped results here, values span from{' '}
-            <strong className="text-[var(--ink)]">{formatValue(metric, Math.min(...values))}</strong> to{' '}
-            <strong className="text-[var(--ink)]">{formatValue(metric, Math.max(...values))}</strong>.
-            {spread !== null && (
+      {barSpec && (
+        <section className="border border-[var(--line)] bg-[var(--surface)] px-5 py-4">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">Leaderboard</div>
+              <div className="mt-2 text-[18px] font-semibold text-[var(--ink)]">
+                Top mapped {levelPluralLabel(mapIntent.level)}
+              </div>
+            </div>
+            <div className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+              {humanizeMetric(metric)}
+            </div>
+          </div>
+          <div className="mt-4">
+            <VegaChart spec={barSpec} />
+          </div>
+        </section>
+      )}
+
+      {histogramSpec && (
+        <section className="border border-[var(--line)] bg-[var(--surface)] px-5 py-4">
+          <div className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">Distribution</div>
+          <div className="mt-2 text-[18px] font-semibold text-[var(--ink)]">
+            Spread across the returned places
+          </div>
+          <div className="mt-3 text-[12px] leading-6 text-[var(--muted)]">
+            {values.length > 1 && min !== null && max !== null ? (
               <>
-                {' '}The total spread is{' '}
-                <strong className="text-[var(--ink)]">{formatValue(metric, spread)}</strong>.
+                Values run from <strong className="text-[var(--ink)]">{formatValue(metric, min)}</strong> to{' '}
+                <strong className="text-[var(--ink)]">{formatValue(metric, max)}</strong>
+                {spread !== null && (
+                  <>
+                    , with an overall spread of{' '}
+                    <strong className="text-[var(--ink)]">{formatValue(metric, spread)}</strong>.
+                  </>
+                )}
               </>
+            ) : (
+              <>This view is centered on a single resolved geography.</>
             )}
-          </>
-        ) : (
-          <>This map is centered on a single resolved geography from the answer.</>
-        )}
-      </div>
+          </div>
+          <div className="mt-4">
+            <VegaChart spec={histogramSpec} />
+          </div>
+        </section>
+      )}
     </aside>
   );
 }
@@ -215,7 +339,7 @@ function InsightPanel({ mapIntent, rows }: { mapIntent: ChatbotMapIntent; rows: 
 export function ChatbotMapRenderer({ mapIntent, rows, loading, error }: ChatbotMapRendererProps) {
   if (loading) {
     return (
-      <div className="flex h-[min(74vh,780px)] items-center justify-center rounded-[16px] border border-black/6 bg-[var(--surface)]/88 shadow-[0_14px_42px_rgba(15,23,42,0.08)]">
+      <div className="flex h-[min(78vh,860px)] items-center justify-center border border-[var(--line)] bg-[var(--surface)]">
         <div className="text-[13px] text-[var(--muted)]">Loading map data...</div>
       </div>
     );
@@ -223,7 +347,7 @@ export function ChatbotMapRenderer({ mapIntent, rows, loading, error }: ChatbotM
 
   if (error) {
     return (
-      <div className="flex h-[min(74vh,780px)] items-center justify-center rounded-[16px] border border-black/6 bg-[var(--surface)]/88 px-6 text-center text-[13px] text-[var(--muted)] shadow-[0_14px_42px_rgba(15,23,42,0.08)]">
+      <div className="flex h-[min(78vh,860px)] items-center justify-center border border-[var(--line)] bg-[var(--surface)] px-6 text-center text-[13px] text-[var(--muted)]">
         {error}
       </div>
     );
@@ -231,7 +355,7 @@ export function ChatbotMapRenderer({ mapIntent, rows, loading, error }: ChatbotM
 
   if (!rows.length) {
     return (
-      <div className="flex h-[min(74vh,780px)] items-center justify-center rounded-[16px] border border-black/6 bg-[var(--surface)]/88 px-6 text-center text-[13px] text-[var(--muted)] shadow-[0_14px_42px_rgba(15,23,42,0.08)]">
+      <div className="flex h-[min(78vh,860px)] items-center justify-center border border-[var(--line)] bg-[var(--surface)] px-6 text-center text-[13px] text-[var(--muted)]">
         No geographic rows were available for this answer yet.
       </div>
     );
@@ -239,7 +363,7 @@ export function ChatbotMapRenderer({ mapIntent, rows, loading, error }: ChatbotM
 
   if (ATLAS_TYPES.has(mapIntent.mapType)) {
     return (
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.08fr)_380px]">
         <MapPreview rows={rows} variant="modal" mapIntent={mapIntent} />
         <InsightPanel mapIntent={mapIntent} rows={rows} />
       </div>
@@ -247,7 +371,7 @@ export function ChatbotMapRenderer({ mapIntent, rows, loading, error }: ChatbotM
   }
 
   return (
-    <div className="flex h-[min(74vh,780px)] items-center justify-center rounded-[16px] border border-black/6 bg-[var(--surface)]/88 px-6 text-center text-[13px] text-[var(--muted)] shadow-[0_14px_42px_rgba(15,23,42,0.08)]">
+    <div className="flex h-[min(78vh,860px)] items-center justify-center border border-[var(--line)] bg-[var(--surface)] px-6 text-center text-[13px] text-[var(--muted)]">
       This answer does not have a dedicated interactive map renderer in this release yet.
     </div>
   );

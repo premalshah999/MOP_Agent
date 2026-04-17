@@ -60,9 +60,9 @@ interface ViewOption {
 /* ── Constants ── */
 
 const DEFAULT_BOUNDS: BoundsTuple = [-125, 24, -66.5, 49.5];
-const DEFAULT_FILL = '#eef3f8';
-const DEFAULT_STROKE = '#cbd5e1';
-const STATE_FOCUS_FILL = '#f8e6e3';
+const DEFAULT_FILL = '#f4f7fb';
+const DEFAULT_STROKE = '#d8e0ea';
+const STATE_FOCUS_FILL = '#f2d5cf';
 const COMPARISON_FILL = '#e3edf9';
 
 // Dashboard quintile palette (sequential red, matching Maryland Opportunities Dashboard)
@@ -452,13 +452,13 @@ function buildBaseFillExpression(
   primaryStateKey: string | null,
 ): string | ExpressionSpecification {
   if (view === 'comparison' && comparisonKeys.length) {
-    return ['case', buildKeyMatchExpression(comparisonKeys), COMPARISON_FILL, DEFAULT_FILL] as ExpressionSpecification;
+    return ['case', buildKeyMatchExpression(comparisonKeys), COMPARISON_FILL, 'rgba(244,247,251,0.4)'] as ExpressionSpecification;
   }
   if (view === 'state-zoom' && primaryStateKey) {
-    return ['case', ['==', ['get', 'map_key'], primaryStateKey], STATE_FOCUS_FILL, DEFAULT_FILL] as ExpressionSpecification;
+    return ['case', ['==', ['get', 'map_key'], primaryStateKey], STATE_FOCUS_FILL, 'rgba(255,255,255,0)'] as ExpressionSpecification;
   }
   if (mode === 'national-subdivision') {
-    return ['case', ['==', ['get', 'map_focus'], 1], STATE_FOCUS_FILL, DEFAULT_FILL] as ExpressionSpecification;
+    return ['case', ['==', ['get', 'map_focus'], 1], 'rgba(242,213,207,0.32)', 'rgba(255,255,255,0)'] as ExpressionSpecification;
   }
   return DEFAULT_FILL;
 }
@@ -652,8 +652,21 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
     setMapReady(false);
 
     const colorExpr = buildColorExpression(preparedMap.values);
-    const highlightSource: GeoJSONSourceSpecification = { type: 'geojson', data: preparedMap.highlightData as GeoJSON.GeoJSON };
-    const baseSource: GeoJSONSourceSpecification = { type: 'geojson', data: preparedMap.baseData as GeoJSON.GeoJSON };
+    const renderBaseData =
+      activeView === 'state-zoom' && primaryStateKey
+        ? singleFeatureByKey(preparedMap.baseData, primaryStateKey)
+        : activeView === 'subdivision-zoom'
+          ? { type: 'FeatureCollection' as const, features: [] }
+          : preparedMap.baseData;
+    const renderHighlightData =
+      activeView === 'state-zoom' && primaryStateKey
+        ? singleFeatureByKey(preparedMap.highlightData, primaryStateKey)
+        : activeView === 'subdivision-zoom'
+          ? singleFeatureByKey(preparedMap.highlightData, preparedMap.topMatch.key)
+          : preparedMap.highlightData;
+
+    const highlightSource: GeoJSONSourceSpecification = { type: 'geojson', data: renderHighlightData as GeoJSON.GeoJSON };
+    const baseSource: GeoJSONSourceSpecification = { type: 'geojson', data: renderBaseData as GeoJSON.GeoJSON };
     const emphasisKeys =
       activeView === 'comparison'
         ? comparisonKeys
@@ -681,6 +694,14 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
     const onLoad = () => {
+      const basemapOpacity =
+        activeView === 'state-zoom' || activeView === 'subdivision-zoom'
+          ? 0
+          : activeView === 'subdivision'
+            ? 0.08
+            : 0.82;
+      map.setPaintProperty('preview-basemap', 'raster-opacity', basemapOpacity);
+
       // Base layer
       map.addSource('preview-base', baseSource);
       map.addLayer({
@@ -689,18 +710,30 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
           'fill-color': buildBaseFillExpression(preparedMap.displayMode, activeView, comparisonKeys, primaryStateKey),
           'fill-opacity':
             activeView === 'state-zoom'
-              ? 0.7
+              ? 0
+              : activeView === 'subdivision-zoom'
+                ? 0
+                : activeView === 'subdivision'
+                  ? 0.04
               : preparedMap.displayMode === 'national-subdivision'
-                ? 0.38
-                : 0.16,
+                ? 0.2
+                : 0.1,
         },
       });
       map.addLayer({
         id: 'preview-base-line', type: 'line', source: 'preview-base',
         paint: {
           'line-color': DEFAULT_STROKE,
-          'line-width': preparedMap.displayMode === 'focused-subdivision' ? 0.14 : 0.18,
-          'line-opacity': 0.5,
+          'line-width':
+            activeView === 'state-zoom' || activeView === 'subdivision' || activeView === 'subdivision-zoom'
+              ? 0
+              : preparedMap.displayMode === 'focused-subdivision'
+                ? 0
+                : 0.16,
+          'line-opacity':
+            activeView === 'state-zoom' || activeView === 'subdivision' || activeView === 'subdivision-zoom'
+              ? 0
+              : 0.46,
         },
       });
 
@@ -709,13 +742,30 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
       map.addLayer({
         id: 'preview-highlight-fill', type: 'fill', source: 'preview-highlight',
         paint: {
-          'fill-color': colorExpr,
-          'fill-opacity': activeView === 'comparison' ? 0.84 : activeView === 'state-zoom' ? 0.92 : 0.9,
+          'fill-color': activeView === 'state-zoom' ? STATE_FOCUS_FILL : colorExpr,
+          'fill-opacity':
+            activeView === 'comparison'
+              ? 0.9
+              : activeView === 'state-zoom'
+                ? 0.98
+                : activeView === 'subdivision' || activeView === 'subdivision-zoom'
+                  ? 0.96
+                  : 0.9,
         },
       });
       map.addLayer({
         id: 'preview-highlight-line', type: 'line', source: 'preview-highlight',
-        paint: { 'line-color': 'rgba(255,255,255,0.94)', 'line-width': 0.2, 'line-opacity': 0.78 },
+        paint: {
+          'line-color': '#ffffff',
+          'line-width':
+            activeView === 'state-zoom' || activeView === 'subdivision' || activeView === 'subdivision-zoom'
+              ? 0
+              : 0.18,
+          'line-opacity':
+            activeView === 'state-zoom' || activeView === 'subdivision' || activeView === 'subdivision-zoom'
+              ? 0
+              : 0.72,
+        },
       });
 
       map.addLayer({
@@ -729,7 +779,7 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
               ? ([
                   'case',
                   buildKeyMatchExpression(emphasisKeys),
-                  activeView === 'subdivision-zoom' ? 0.6 : 0.52,
+                  activeView === 'subdivision-zoom' ? 0 : 0.52,
                   0,
                 ] as ExpressionSpecification)
               : 0,
@@ -748,7 +798,11 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
       // Selected feature outline (initially hidden)
       map.addLayer({
         id: 'preview-selected-line', type: 'line', source: 'preview-highlight',
-        paint: { 'line-color': '#0f172a', 'line-width': 0.88, 'line-opacity': 0.95 },
+        paint: {
+          'line-color': '#0f172a',
+          'line-width': activeView === 'state-zoom' || activeView === 'subdivision' || activeView === 'subdivision-zoom' ? 0 : 0.78,
+          'line-opacity': activeView === 'state-zoom' || activeView === 'subdivision' || activeView === 'subdivision-zoom' ? 0 : 0.95,
+        },
         filter: ['==', ['get', 'map_key'], ''],
       });
 
@@ -821,8 +875,8 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
   const selectedView = viewOptions.find((option) => option.id === activeView) ?? viewOptions[0] ?? null;
 
   return (
-    <section className={`${isModal ? 'overflow-hidden rounded-[10px] border border-black/5 bg-[var(--surface)]/95 shadow-[0_14px_42px_rgba(15,23,42,0.07)]' : 'mt-3 overflow-hidden rounded-[10px] border border-black/5 bg-[var(--surface)]'}`}>
-      <div className="border-b border-black/5 bg-white/90 px-3 py-3">
+    <section className={`${isModal ? 'overflow-hidden border border-[var(--line)] bg-[var(--surface)]' : 'mt-3 overflow-hidden border border-[var(--line)] bg-[var(--surface)]'}`}>
+      <div className="border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3">
         {viewOptions.length > 1 && (
           <div className="flex flex-wrap gap-2">
             {viewOptions.map((option) => {
@@ -832,10 +886,10 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
                   key={option.id}
                   type="button"
                   onClick={() => setActiveView(option.id)}
-                  className={`inline-flex items-center justify-center rounded-[6px] border px-3 py-1.5 text-[11px] font-medium transition ${
+                  className={`inline-flex items-center justify-center border px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] transition ${
                     selected
                       ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--ink)]'
-                      : 'border-black/6 bg-white text-[var(--muted)] hover:border-[var(--accent)]/30 hover:text-[var(--ink)]'
+                      : 'border-[var(--line)] bg-[var(--surface)] text-[var(--muted)] hover:border-[var(--accent)]/30 hover:text-[var(--ink)]'
                   }`}
                 >
                   {option.label}
@@ -845,8 +899,8 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
           </div>
         )}
         {selectedView && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] leading-5 text-[var(--muted)]">
-            <span className="inline-flex items-center rounded-[6px] border border-black/6 bg-[var(--surface)] px-2 py-1 font-medium text-[var(--ink)]">
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] leading-5 text-[var(--muted)]">
+            <span className="inline-flex items-center border border-[var(--line)] bg-[var(--surface-2)] px-2 py-1 font-medium uppercase tracking-[0.18em] text-[var(--ink)]">
               {selectedView.label}
             </span>
             <span>{selectedView.description}</span>
@@ -854,13 +908,13 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
         )}
       </div>
       {/* Map container */}
-      <div className="map-shell relative bg-[#f8fafc]">
+      <div className="map-shell relative bg-[var(--surface)]">
         <div ref={mapContainerRef} className={`${mapHeight} w-full`} />
 
         {/* Loading overlay */}
         {(loading || !mapReady) && (
-          <div className="absolute inset-0 flex items-center justify-center bg-[var(--surface-2)]/60 backdrop-blur-[1px]">
-            <div className="inline-flex items-center gap-1.5 rounded-[6px] border border-black/6 bg-white px-3 py-1.5 text-[11px] text-[var(--muted)] shadow-sm">
+          <div className="absolute inset-0 flex items-center justify-center bg-[var(--surface)]/82">
+            <div className="inline-flex items-center gap-1.5 border border-[var(--line)] bg-[var(--surface)] px-3 py-1.5 text-[11px] text-[var(--muted)]">
               <Loader2 size={12} className="animate-spin" /> Loading map...
             </div>
           </div>
@@ -868,10 +922,11 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
 
         {/* Hover tooltip (positioned top-left on the map) */}
         {mapReady && hovered && (
-          <div className="absolute left-2.5 top-2.5 z-10 rounded-[6px] border border-black/6 bg-white/95 px-2.5 py-1.5 shadow-sm">
-            <div className="text-[11px] font-medium text-[var(--ink)]">{hovered.label}</div>
+          <div className="absolute left-3 top-3 z-10 border border-[var(--line)] bg-[var(--surface)] px-3 py-2">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--muted)]">{preparedMap.metricLabel}</div>
+            <div className="mt-1 text-[14px] font-semibold text-[var(--ink)]">{hovered.label}</div>
             <div className="mt-0.5 flex items-center gap-2">
-              <span className="font-mono text-[12px] font-semibold text-[var(--ink)]">{formatMetricValue(hovered.value)}</span>
+              <span className="font-mono text-[13px] font-semibold text-[var(--ink)]">{formatMetricValue(hovered.value)}</span>
               {hoveredQuintile && (
                 <span
                   className="inline-block h-2 w-2 rounded-full"
@@ -884,15 +939,15 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
       </div>
 
       {/* Legend bar — dashboard style */}
-      <div className="flex items-center gap-3 border-t border-black/5 px-3 py-2">
-        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wider text-[var(--muted)]">
+      <div className="flex items-center gap-3 border-t border-[var(--line)] px-4 py-3">
+        <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
           {selectedView?.id === 'heat' ? `${preparedMap.metricLabel} · Calculated quintiles` : preparedMap.metricLabel}
         </span>
         <div className="ml-auto flex items-center gap-0.5">
           {QUINTILE_COLORS.map((color, i) => (
             <div key={color} className="flex flex-col items-center">
               <span
-                className="block h-2.5 w-6 first:rounded-l-[3px] last:rounded-r-[3px]"
+                className="block h-2.5 w-6"
                 style={{ backgroundColor: color }}
               />
               <span className="mt-0.5 text-[8px] text-[var(--muted-2)]">{QUINTILE_LABELS[i]}</span>

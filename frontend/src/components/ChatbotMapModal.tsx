@@ -98,32 +98,35 @@ export function ChatbotMapModal({ isOpen, onClose, mapIntent, fallbackRows }: Ch
   if (!isOpen || !mapIntent.enabled) return null;
 
   return (
-    <div className="fixed inset-0 z-[120] bg-slate-950/55 backdrop-blur-md">
+    <div className="fixed inset-0 z-[120] bg-slate-950/28 backdrop-blur-[2px]">
       <div className="absolute inset-0" onClick={onClose} />
-      <div className="absolute inset-3 overflow-hidden rounded-[12px] border border-black/6 bg-[var(--bg)] shadow-[0_22px_64px_rgba(15,23,42,0.18)] sm:inset-5">
-        <header className="flex items-start justify-between gap-4 border-b border-black/4 bg-white/78 px-5 py-4 backdrop-blur sm:px-6">
+      <div className="absolute inset-3 overflow-hidden border border-[var(--line)] bg-[var(--surface)] shadow-[0_18px_48px_rgba(15,23,42,0.08)] sm:inset-5">
+        <header className="flex items-start justify-between gap-4 border-b border-[var(--line)] bg-[var(--surface)] px-5 py-5 sm:px-6">
           <div className="min-w-0">
-            <h2 className="truncate text-lg font-semibold text-[var(--ink)] sm:text-xl">
+            <div className="text-[11px] uppercase tracking-[0.28em] text-[var(--muted)]">
+              Maryland Opportunity Analytics Platform
+            </div>
+            <h2 className="mt-2 truncate font-display text-[29px] leading-none text-[var(--ink)] sm:text-[34px]">
               {mapIntent.title || 'Map View'}
             </h2>
             {mapIntent.subtitle && (
-              <p className="mt-1 text-sm text-[var(--muted)]">{mapIntent.subtitle}</p>
+              <p className="mt-3 text-sm tracking-[0.08em] text-[var(--muted)]">{mapIntent.subtitle}</p>
             )}
             {mapIntent.reason && (
-              <p className="mt-2 max-w-3xl text-[12px] leading-6 text-[var(--muted)]">{mapIntent.reason}</p>
+              <p className="mt-4 max-w-4xl text-[13px] leading-7 text-[var(--muted)]">{mapIntent.reason}</p>
             )}
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close map view"
-            className="rounded-[6px] border border-black/6 bg-white/92 p-2 text-[var(--muted)] shadow-sm transition hover:text-[var(--ink)]"
+            className="border border-[var(--line)] bg-[var(--surface)] p-2 text-[var(--muted)] transition hover:text-[var(--ink)]"
           >
             <X size={16} />
           </button>
         </header>
 
-        <main className="h-[calc(100%-96px)] overflow-auto bg-[radial-gradient(circle_at_top_left,_rgba(248,250,252,0.97),_rgba(241,245,249,0.94))] px-5 py-5 sm:px-6">
+        <main className="h-[calc(100%-132px)] overflow-auto bg-[var(--bg)] px-5 py-5 sm:px-6">
           <ChatbotMapRenderer mapIntent={mapIntent} rows={rows} loading={loading} error={error} />
         </main>
       </div>
