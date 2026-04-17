@@ -205,6 +205,7 @@ def _format_entity_label(value: Any) -> str:
 
 
 def _metric_display_name(metric: str, question: str | None = None) -> str:
+    normalized = metric.lower()
     mapping = {
         "spending_total": "default federal spending",
         "total_flow": "total fund flow",
@@ -213,9 +214,14 @@ def _metric_display_name(metric: str, question: str | None = None) -> str:
         "current_ratio": "current ratio",
         "debt_ratio": "debt ratio",
         "resident_wage": "resident wage",
+        "black": "Black population share",
+        "white": "White population share",
+        "asian": "Asian population share",
+        "hispanic": "Hispanic population share",
+        "below poverty": "poverty rate",
     }
-    if metric in mapping:
-        return mapping[metric]
+    if normalized in mapping:
+        return mapping[normalized]
     return metric.replace("_", " ")
 
 
@@ -698,7 +704,7 @@ def _interpretation_for_ranking(
         if mean_ratio >= 2:
             notes.append("The top result also sits well above the returned-set average, which suggests a concentrated distribution.")
 
-    if len(sorted_df) >= 5:
+    if len(sorted_df) >= 5 and not _is_percent_metric(primary, top_value):
         total = float(sorted_df[primary].dropna().sum())
         top_three = float(sorted_df[primary].dropna().head(3).sum())
         if total > 0:

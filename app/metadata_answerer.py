@@ -25,6 +25,44 @@ def _extract_year_label(question: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _capabilities_answer(question: str) -> str | None:
+    q = _normalize(question)
+    if q not in {
+        "what can you do",
+        "what can you do for me",
+        "what can you help with",
+        "help",
+        "what do you do",
+        "what can i ask",
+    } and not any(
+        phrase in q
+        for phrase in (
+            "what can you do",
+            "what can i ask",
+            "what kinds of questions can you answer",
+            "how can you help",
+        )
+    ):
+        return None
+
+    return (
+        "**I can help across the main Maryland Opportunity Project datasets.**\n\n"
+        "1. **Government Finances:** liabilities, assets, revenue, expenses, debt ratio, current ratio, pension burden.\n"
+        "2. **Federal Spending:** contracts, grants, direct payments, resident wage, and related normalized fields.\n"
+        "3. **Agency Spending:** which agencies dominate spending in a state and how that mix breaks down.\n"
+        "4. **ACS Demographics:** population, poverty, income, education, race/ethnicity, and housing metrics.\n"
+        "5. **FINRA:** financial literacy, financial constraint, alternative financing, and risk aversion.\n"
+        "6. **Fund Flow:** subcontract inflows, outflows, origins, destinations, agencies, and industries.\n\n"
+        "**Good question types:** rankings, state/county/district comparisons, within-state leaderboards, metric explanations, and careful cross-dataset comparisons.\n\n"
+        "**Examples:**\n"
+        "- Which states have the highest debt ratio?\n"
+        "- Which counties in Maryland have the highest financial literacy?\n"
+        "- Compare Maryland and Virginia on contracts in 2024.\n"
+        "- Which agencies account for the most spending in Maryland?\n\n"
+        "**I’ll also tell you when a year, geography, or metric is unsupported instead of guessing.**"
+    )
+
+
 def _dataset_routing_answer(question: str) -> str | None:
     q = _normalize(question)
     if "which dataset should" not in q and "what dataset should" not in q and "which data source" not in q:
@@ -299,6 +337,7 @@ def _coverage_answer(question: str) -> str | None:
 
 def answer_metadata_question(question: str) -> Optional[str]:
     for resolver in (
+        _capabilities_answer,
         _dataset_routing_answer,
         _availability_answer,
         _schema_answer,

@@ -220,6 +220,12 @@ class QueryFrameTests(unittest.TestCase):
         self.assertEqual(frame.metric_hint, "Income >$200K")
         self.assertEqual(frame.intent, "share")
 
+    def test_query_frame_maps_black_ratio_to_builtin_metric(self) -> None:
+        frame = query_frame.infer_query_frame("5 states with maximum black population by ratio.")
+        self.assertEqual(frame.family, "acs")
+        self.assertEqual(frame.metric_hint, "Black")
+        self.assertEqual(frame.intent, "ranking")
+
 
 class MapIntentTests(unittest.TestCase):
     def test_build_map_intent_for_state_ranking(self) -> None:
@@ -366,6 +372,14 @@ class MetadataAnswererTests(unittest.TestCase):
         assert answer is not None
         self.assertIn("needs a dimension", answer.lower())
         self.assertIn("Federal Spending", answer)
+
+    def test_metadata_answer_capabilities_question(self) -> None:
+        answer = answer_metadata_question("What can you do?")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("Government Finances", answer)
+        self.assertIn("Federal Spending", answer)
+        self.assertIn("Fund Flow", answer)
 
 
 class PlanVerifierTests(unittest.TestCase):
