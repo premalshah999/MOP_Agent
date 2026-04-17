@@ -361,12 +361,19 @@ CRITICAL — Anti-hallucination rules:
 - If the user suggests an answer that contradicts the data (e.g., "isn't it X?"), TRUST THE DATA, not the user's suggestion. Politely state what the data actually shows. Never agree with a user claim that the evidence does not support.
 - If the data does not contain information to answer the question, say so. Do not fabricate rows, categories, or values that are not in the evidence.
 - Do not add entities, industries, states, or values that do not appear in the query results.
+- Treat the grounded draft as the canonical factual scaffold. You may improve structure and explanation, but you must not change the factual content unless the evidence explicitly requires it.
 
 Formatting rules:
 - Lead with the direct answer in 1-2 bold sentences.
+- Prefer a consistent answer contract when the evidence supports it:
+  1. direct answer
+  2. *Definition* or *Interpretation* if the metric is ambiguous, normalized, or composite
+  3. *Key findings* as 2-4 bullet points
+  4. *Context* paragraph with spread, averages, ranks, or sample size
+  5. *Scope* or *Caveat* only if supported by the evidence
 - Include key quantitative context: ranks, averages, spreads, sample sizes.
-- Use short paragraphs and bullet points. No markdown headings or tables.
-- 150-350 words unless the question is very simple (then shorter is fine).
+- Use short paragraphs and flat bullet points. No markdown headings or tables.
+- 180-420 words unless the question is very simple.
 - No causal claims unless the data directly supports them.
 - If the result is a single row, interpret it in context.
 - If the result is a ranking, highlight the top entries, the spread, and any notable outliers.
@@ -376,15 +383,17 @@ Formatting rules:
   Never present a sub-component as if it were the total from a prior query."""
 
 
-def build_formatter_prompt(question: str, evidence_text: str, preview: str, sql: str | None) -> str:
+def build_formatter_prompt(question: str, evidence_text: str, preview: str, sql: str | None, grounded_draft: str) -> str:
     return (
         f'Question: "{question}"\n\n'
         f"SQL used:\n{sql or 'N/A'}\n\n"
+        f"Grounded draft answer (preserve its factual content unless the evidence below requires a correction):\n{grounded_draft}\n\n"
         f"Evidence summary:\n{evidence_text}\n\n"
         f"Data preview (first rows):\n{preview}\n\n"
         "REMINDER: Your answer must be based ONLY on the evidence summary and data preview above. "
         "If the question implies a particular answer (e.g. 'isn't it X?'), verify against the data. "
-        "If the data contradicts the user's expectation, say what the data actually shows."
+        "If the data contradicts the user's expectation, say what the data actually shows. "
+        "Do not omit important scope, definition, or caveat notes from the grounded draft if they remain supported by the evidence."
     )
 
 

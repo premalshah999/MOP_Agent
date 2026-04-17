@@ -1,10 +1,13 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { useThreadStore } from '@/hooks/useThreadStore';
 import { AuthScreen } from '@/components/AuthScreen';
 import { ChatArea } from '@/components/ChatArea';
+import { DatasetLibraryWorkspace } from '@/components/DatasetLibraryWorkspace';
 import { Sidebar } from '@/components/Sidebar';
 import { DATASET_GUIDES } from '@/lib/content';
+import { getDatasetCatalog } from '@/lib/api';
+import type { DatasetCatalogEntry } from '@/types/chat';
 
 function Shell() {
   const { user, loading } = useAuth();
@@ -21,20 +24,51 @@ function Shell() {
 
 function Workspace() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const store = useThreadStore('government_finance');
+  const [mainView, setMainView] = useState<'chat' | 'library'>('chat');
+  const [datasetCatalog, setDatasetCatalog] = useState<DatasetCatalogEntry[]>([]);
+  const store = useThreadStore('cross_dataset');
+
+  useEffect(() => {
+    let active = true;
+    void getDatasetCatalog()
+      .then((catalog) => {
+        if (active) setDatasetCatalog(catalog);
+      })
+      .catch((err) => {
+        console.error('[MOP] Failed to load dataset catalog:', err);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const selectedDataset = useMemo(
-    () => DATASET_GUIDES.find((d) => d.id === (store.activeThread?.datasetId || store.selectedDatasetId)) ?? DATASET_GUIDES[0],
+    () =>
+      DATASET_GUIDES.find((d) => d.id === (store.activeThread?.datasetId || store.selectedDatasetId))
+      ?? DATASET_GUIDES.find((d) => d.id === 'cross_dataset')
+      ?? DATASET_GUIDES[0],
     [store.activeThread, store.selectedDatasetId],
   );
 
   const handleNewChat = useCallback(async () => {
-    await store.createThread(store.selectedDatasetId);
+    await store.createThread('cross_dataset');
+    setMainView('chat');
     setMobileSidebarOpen(false);
   }, [store]);
 
+  const handleOpenChat = useCallback(() => {
+    setMainView('chat');
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const handleOpenLibrary = useCallback(() => {
+    setMainView('library');
+    setMobileSidebarOpen(false);
+  }, []);
+
   const handleSelectThread = useCallback((id: string) => {
     store.selectThread(id);
+    setMainView('chat');
     setMobileSidebarOpen(false);
   }, [store]);
 
@@ -59,10 +93,10 @@ function Workspace() {
         datasets={DATASET_GUIDES}
         threads={store.threads}
         activeThreadId={store.activeThreadId}
+        onOpenChat={handleOpenChat}
         onNewChat={() => void handleNewChat()}
         onSelectThread={handleSelectThread}
         onDeleteThread={store.deleteThread}
-        onClearAll={store.clearAll}
         resizable
         className="hidden lg:flex lg:flex-col"
       />
@@ -77,27 +111,77 @@ function Workspace() {
           datasets={DATASET_GUIDES}
           threads={store.threads}
           activeThreadId={store.activeThreadId}
+          onOpenChat={handleOpenChat}
           onNewChat={() => void handleNewChat()}
           onSelectThread={handleSelectThread}
           onDeleteThread={store.deleteThread}
-          onClearAll={store.clearAll}
           onClose={() => setMobileSidebarOpen(false)}
           className={`relative h-full transition-transform duration-200 ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
         />
       </div>
 
-      <ChatArea
-        datasets={DATASET_GUIDES}
-        selectedDataset={selectedDataset}
-        selectedDatasetId={selectedDataset.id}
-        thread={store.activeThread}
-        onOpenSidebar={() => setMobileSidebarOpen(true)}
-        onMessagesChange={(msgs) => store.activeThread && store.updateMessages(store.activeThread.id, msgs)}
-        onUpdateTitle={store.updateThreadTitle}
-        onSelectDataset={(id) => void store.selectDataset(id)}
-        onNewChat={() => void handleNewChat()}
-        onEnsureThread={handleEnsureThread}
-      />
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="shrink-0 border-b border-[var(--line)] bg-[var(--bg)]/95 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-5 py-3 lg:px-8">
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-[var(--muted)]">Workspace</p>
+              <p className="mt-1 text-[13px] text-[var(--ink-soft)]">
+                Keep chat focused. Browse downloads in the separate data library.
+              </p>
+            </div>
+
+            <div className="inline-flex rounded-[10px] border border-[var(--line)] bg-[var(--surface)] p-1 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setMainView('chat')}
+                className={`rounded-[8px] px-4 py-2 text-[12px] font-medium transition ${
+                  mainView === 'chat'
+                    ? 'bg-[var(--ink)] text-white'
+                    : 'text-[var(--muted)] hover:text-[var(--ink)]'
+                }`}
+              >
+                Assistant
+              </button>
+              <button
+                type="button"
+                onClick={() => setMainView('library')}
+                className={`rounded-[8px] px-4 py-2 text-[12px] font-medium transition ${
+                  mainView === 'library'
+                    ? 'bg-[var(--ink)] text-white'
+                    : 'text-[var(--muted)] hover:text-[var(--ink)]'
+                }`}
+              >
+                Data Library
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {mainView === 'chat' ? (
+          <ChatArea
+            datasets={DATASET_GUIDES}
+            selectedDataset={selectedDataset}
+            selectedDatasetId={selectedDataset.id}
+            thread={store.activeThread}
+            onOpenSidebar={() => setMobileSidebarOpen(true)}
+            onMessagesChange={(threadId, msgs) => store.updateMessages(threadId, msgs)}
+            onUpdateTitle={store.updateThreadTitle}
+            onSelectDataset={(id) => void store.selectDataset(id)}
+            onEnsureThread={handleEnsureThread}
+          />
+        ) : (
+          <DatasetLibraryWorkspace
+            datasets={DATASET_GUIDES}
+            datasetCatalog={datasetCatalog}
+            selectedDatasetId={selectedDataset.id}
+            onSelectDataset={(id) => void store.selectDataset(id)}
+            onUseInChat={(id) => {
+              void store.selectDataset(id);
+              setMainView('chat');
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }

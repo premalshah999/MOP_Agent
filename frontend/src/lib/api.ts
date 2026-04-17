@@ -1,4 +1,12 @@
-import type { ApiAskRequest, ApiAskResponse, AuthResponse, ChatThread, HealthSummary, HistoryMessage } from '@/types/chat';
+import type {
+  ApiAskRequest,
+  ApiAskResponse,
+  AuthResponse,
+  ChatThread,
+  DatasetCatalogEntry,
+  HealthSummary,
+  HistoryMessage,
+} from '@/types/chat';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 const TOKEN_KEY = 'mop-token';
@@ -220,4 +228,35 @@ export function buildHistory(messages: { role: string; content: string }[]): His
   return messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
     .map((m) => ({ role: m.role as HistoryMessage['role'], content: m.content }));
+}
+
+export async function getDatasetCatalog(): Promise<DatasetCatalogEntry[]> {
+  const res = await fetch(buildApiUrl('/api/datasets'));
+  if (!res.ok) throw new Error(await parseErrorBody(res));
+  const body = await res.json();
+  return (body.datasets ?? []) as DatasetCatalogEntry[];
+}
+
+export interface MapValuesParams {
+  dataset: string;
+  level: string;
+  variable: string;
+  year?: string;
+  state?: string;
+  agency?: string;
+}
+
+export async function getMapValues(params: MapValuesParams): Promise<Record<string, unknown>[]> {
+  const search = new URLSearchParams();
+  search.set('dataset', params.dataset);
+  search.set('level', params.level);
+  search.set('variable', params.variable);
+  if (params.year) search.set('year', params.year);
+  if (params.state) search.set('state', params.state);
+  if (params.agency) search.set('agency', params.agency);
+
+  const res = await fetch(buildApiUrl(`/api/values?${search.toString()}`));
+  if (!res.ok) throw new Error(await parseErrorBody(res));
+  const body = await res.json();
+  return (body.rows ?? []) as Record<string, unknown>[];
 }

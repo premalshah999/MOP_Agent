@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Any, Optional
 
-from openai import OpenAI
-
+from app.llm import llm_available, llm_complete, llm_model
 from app.metadata_utils import (
     agency_spending_total_expression,
     available_tables,
@@ -24,6 +22,15 @@ from app.metadata_utils import (
     table_metadata,
     table_year_column,
 )
+from app.query_frame import (
+    STATE_TO_POSTAL,
+    US_STATE_NAMES,
+    detect_geo_level as detect_geo_level_from_frame,
+    extract_period_label,
+    extract_state_name as extract_state_name_from_frame,
+    infer_query_frame,
+    state_postal_code as state_postal_code_from_frame,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -33,67 +40,25 @@ MANIFEST_PATH = Path("data/schema/manifest.json")
 METADATA = load_metadata()
 
 # ---------------------------------------------------------------------------
-# State / geography constants
-# ---------------------------------------------------------------------------
-US_STATE_NAMES = [
-    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
-    "connecticut", "delaware", "district of columbia", "florida", "georgia",
-    "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky",
-    "louisiana", "maine", "maryland", "massachusetts", "michigan", "minnesota",
-    "mississippi", "missouri", "montana", "nebraska", "nevada", "new hampshire",
-    "new jersey", "new mexico", "new york", "north carolina", "north dakota",
-    "ohio", "oklahoma", "oregon", "pennsylvania", "rhode island",
-    "south carolina", "south dakota", "tennessee", "texas", "utah", "vermont",
-    "virginia", "washington", "west virginia", "wisconsin", "wyoming",
-]
-
-STATE_TO_POSTAL = {
-    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
-    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
-    "district of columbia": "DC", "florida": "FL", "georgia": "GA", "hawaii": "HI",
-    "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA",
-    "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME",
-    "maryland": "MD", "massachusetts": "MA", "michigan": "MI", "minnesota": "MN",
-    "mississippi": "MS", "missouri": "MO", "montana": "MT", "nebraska": "NE",
-    "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM",
-    "new york": "NY", "north carolina": "NC", "north dakota": "ND", "ohio": "OH",
-    "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI",
-    "south carolina": "SC", "south dakota": "SD", "tennessee": "TN", "texas": "TX",
-    "utah": "UT", "vermont": "VT", "virginia": "VA", "washington": "WA",
-    "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
-}
-
-
-# ---------------------------------------------------------------------------
 # Geography helpers
 # ---------------------------------------------------------------------------
 def detect_geo_level(question: str) -> Optional[str]:
-    q = question.lower()
-    if "county" in q or "counties" in q:
-        return "county"
-    if "district" in q or "congress" in q:
-        return "congress"
-    if "state" in q or "states" in q:
-        return "state"
-    return None
+    return detect_geo_level_from_frame(question)
 
 
 def extract_state_name(question: str) -> Optional[str]:
-    q = question.lower()
-    for state in sorted(US_STATE_NAMES, key=len, reverse=True):
-        if re.search(rf"\b{re.escape(state)}\b", q):
-            return state
-    return None
+    return extract_state_name_from_frame(question)
 
 
 def state_postal_code(question: str) -> Optional[str]:
-    state = extract_state_name(question)
-    return STATE_TO_POSTAL.get(state) if state else None
+    return state_postal_code_from_frame(question)
 
 
 def extract_year(question: str) -> Optional[str]:
-    match = re.search(r"\b(19\d{2}|20\d{2})\b", question)
-    return match.group(1) if match else None
+    period = extract_period_label(question)
+    if period and period.isdigit():
+        return period
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -132,27 +97,9 @@ Tables available (pick 1-4 needed to answer the question):
 # ---------------------------------------------------------------------------
 def _keyword_route(question: str) -> list[str]:
     """Fast keyword-based table routing as fallback."""
-    q = question.lower()
-    geo = detect_geo_level(question)
-    datasets: set[str] = set()
-
-    if any(k in q for k in ["census", "acs", "demographic", "population", "poverty", "education", "income", "race", "hispanic", "household"]):
-        datasets.add("acs")
-    if any(k in q for k in ["government finance", "liabilities", "assets", "net position", "pension", "opeb", "debt", "current ratio", "free cash flow", "revenue", "expenses"]):
-        datasets.add("gov")
-    if any(k in q for k in ["finra", "financial literacy", "financial constraint", "alternative financing", "risk averse"]):
-        datasets.add("finra")
-    if any(k in q for k in ["federal spending", "contracts", "grants", "direct payments", "resident wage", "federal residents", "employment", "employees"]):
-        datasets.add("contract")
-    if any(k in q for k in ["agency", "department of", "defense", "treasury"]):
-        datasets.add("spending_state_agency")
-        datasets.discard("contract")
-    if any(k in q for k in ["fund flow", "subaward", "subawardee", "flow", "awardee"]):
-        datasets.add("flow")
-
-    # Default: gov + acs (most common)
-    if not datasets:
-        datasets.update({"gov", "acs"})
+    frame = infer_query_frame(question)
+    geo = frame.geo_level
+    family = frame.family
 
     tables: set[str] = set()
 
@@ -166,17 +113,27 @@ def _keyword_route(question: str) -> list[str]:
         else:
             tables.add(f"{prefix}_state")
 
-    for ds in datasets:
-        if ds in ("acs", "gov", "finra", "contract"):
-            add_geo(ds)
-        elif ds == "spending_state_agency":
+    if family in ("acs", "gov", "finra", "contract"):
+        add_geo(family)
+    elif family == "agency":
+        if geo == "county":
+            tables.add("contract_county_agency")
+        elif geo == "congress":
+            tables.add("contract_cd_agency")
+        else:
             tables.add("spending_state_agency")
-        elif ds == "flow":
-            has_time = any(k in q for k in ["fiscal year", "by year", "over time", "trend"])
-            if has_time:
-                tables.add("county_flow" if geo == "county" else "congress_flow" if geo == "congress" else "county_flow")
-            else:
-                tables.add("state_flow" if geo != "county" and geo != "congress" else f"{'county' if geo == 'county' else 'congress'}_flow")
+    elif family == "breakdown":
+        if frame.wants_agency_dimension or frame.wants_jobs_metric:
+            tables.add("spending_state_agency")
+        else:
+            tables.add("spending_state")
+    elif family == "flow":
+        if frame.intent == "trend":
+            tables.add("county_flow" if geo == "county" else "congress_flow" if geo == "congress" else "county_flow")
+        else:
+            tables.add("state_flow" if geo not in {"county", "congress"} else f"{'county' if geo == 'county' else 'congress'}_flow")
+    else:
+        tables.update({"gov_state", "acs_state"})
 
     available = _available_tables()
     return sorted(t for t in tables if t in available)
@@ -191,21 +148,12 @@ def route_tables(question: str) -> list[str]:
     if deterministic:
         return deterministic
 
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
+    if not llm_available():
         return deterministic
 
     try:
-        client = OpenAI(
-            api_key=api_key,
-            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-            timeout=float(os.getenv("DEEPSEEK_TIMEOUT", "15")),
-        )
-        response = client.chat.completions.create(
-            model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-            temperature=0,
-            max_tokens=100,
-            messages=[
+        raw = llm_complete(
+            [
                 {
                     "role": "system",
                     "content": (
@@ -218,8 +166,10 @@ def route_tables(question: str) -> list[str]:
                 },
                 {"role": "user", "content": question},
             ],
+            model=llm_model(),
+            temperature=0,
+            max_tokens=100,
         )
-        raw = (response.choices[0].message.content or "").strip()
         # Parse JSON array from response
         match = re.search(r"\[.*\]", raw, re.DOTALL)
         if match:

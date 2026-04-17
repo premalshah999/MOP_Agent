@@ -19,10 +19,9 @@ interface ChatAreaProps {
   selectedDatasetId: string;
   thread?: ChatThread;
   onOpenSidebar?: () => void;
-  onMessagesChange: (messages: ChatMessage[]) => void;
+  onMessagesChange: (threadId: string, messages: ChatMessage[]) => void;
   onUpdateTitle: (threadId: string, title: string) => void;
   onSelectDataset: (id: string) => void;
-  onNewChat: () => void;
   onEnsureThread: () => Promise<string | null>;
 }
 
@@ -35,7 +34,6 @@ export function ChatArea({
   onMessagesChange,
   onUpdateTitle,
   onSelectDataset,
-  onNewChat,
   onEnsureThread,
 }: ChatAreaProps) {
   const [input, setInput] = useState('');
@@ -82,7 +80,7 @@ export function ChatArea({
 
     const userMsg: ChatMessage = { id: makeId(), role: 'user', content: q, ts: new Date().toISOString() };
     const next = [...messages, userMsg];
-    onMessagesChange(next);
+    onMessagesChange(threadId, next);
     setInput('');
     setIsLoading(true);
 
@@ -111,9 +109,10 @@ export function ChatArea({
         rowCount: response.row_count ?? 0,
         chart: response.chart ?? undefined,
         error: response.error ?? undefined,
+        mapIntent: response.mapIntent ?? undefined,
       };
 
-      onMessagesChange([...updatedNext, assistantMsg]);
+      onMessagesChange(threadId, [...updatedNext, assistantMsg]);
 
       // Update thread title from first user message
       if (messages.length === 0 && threadId) {
@@ -133,7 +132,7 @@ export function ChatArea({
       const msg = raw.startsWith('Failed to fetch')
         ? 'Cannot reach the server. Check your connection and try again.'
         : raw;
-      onMessagesChange([
+      onMessagesChange(threadId, [
         ...next,
         { id: makeId(), role: 'assistant', ts: new Date().toISOString(), content: msg, error: msg },
       ]);
@@ -147,11 +146,11 @@ export function ChatArea({
   const detailMsg = detail ? messages.find((m) => m.id === detail.messageId) : undefined;
 
   return (
-    <div className="flex h-screen flex-1 overflow-hidden">
+    <div className="flex h-full flex-1 overflow-hidden">
       {/* Chat column */}
-      <main className="flex h-full flex-1 flex-col overflow-hidden bg-[var(--bg)]">
+      <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg)]">
         {/* Header */}
-        <header className="shrink-0 border-b border-[var(--line)] bg-[var(--bg)]/95 backdrop-blur">
+        <header className="shrink-0 border-b border-black/5 bg-[var(--bg)]/95 backdrop-blur">
           <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-5 py-2.5">
             <div className="flex min-w-0 items-center gap-2.5">
               {onOpenSidebar && (
@@ -164,8 +163,8 @@ export function ChatArea({
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-[10px] text-[var(--muted)]">
-              <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
-              {healthStatus === 'ok' ? 'Connected' : healthStatus === 'offline' ? 'Offline' : '...'}
+                <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
+                {healthStatus === 'ok' ? 'Connected' : healthStatus === 'offline' ? 'Offline' : '...'}
             </div>
           </div>
         </header>
@@ -173,7 +172,7 @@ export function ChatArea({
         {messages.length === 0 ? (
           /* Empty state */
           <div className="flex flex-1 items-center justify-center overflow-y-auto px-4">
-            <div className="w-full max-w-2xl">
+            <div className="w-full max-w-6xl py-8">
               <h1 className="text-center font-display text-3xl font-semibold tracking-tight text-[var(--ink)] sm:text-4xl">
                 What would you like to know?
               </h1>
@@ -182,7 +181,7 @@ export function ChatArea({
               </p>
 
               {/* Dataset selector */}
-              <div className="mx-auto mt-8 flex max-w-lg flex-wrap justify-center gap-1.5">
+              <div className="mx-auto mt-8 flex max-w-2xl flex-wrap justify-center gap-1.5">
                 {datasets.map((ds) => (
                   <button
                     key={ds.id}
@@ -200,7 +199,7 @@ export function ChatArea({
               </div>
 
               {/* Composer */}
-              <div className="mt-6">
+              <div className="mx-auto mt-6 max-w-2xl">
                 <Composer
                   input={input}
                   isLoading={isLoading}
@@ -210,18 +209,18 @@ export function ChatArea({
                   onSend={() => void send()}
                 />
               </div>
-
             </div>
           </div>
         ) : (
           /* Chat view */
           <>
-            <div className="flex-1 overflow-y-auto px-4 pb-32 pt-6">
+            <div className="flex-1 overflow-y-auto px-4 pb-10 pt-6">
               <div className="mx-auto w-full max-w-4xl space-y-5">
                 {messages.map((msg) => (
                   <Message
                     key={msg.id}
                     {...msg}
+                    datasetId={thread?.datasetId ?? selectedDatasetId}
                     activeDetailTab={detail?.messageId === msg.id ? detail.tab : null}
                     onOpenDetail={(tab) =>
                       setDetail((prev) =>
@@ -241,7 +240,7 @@ export function ChatArea({
             </div>
 
             {/* Bottom composer */}
-            <div className="shrink-0 border-t border-[var(--line)] bg-[var(--bg)]/95 backdrop-blur">
+            <div className="shrink-0 border-t border-black/5 bg-[var(--surface)]/96 backdrop-blur">
               <div className="mx-auto max-w-4xl px-4 py-2.5">
                 <Composer
                   input={input}
@@ -290,7 +289,7 @@ function Composer({ input, isLoading, placeholder, textareaRef, onChangeInput, o
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); onSend(); }}
-      className={`flex items-end gap-2 border border-[var(--line)] bg-[var(--surface)] px-3 ${compact ? 'py-1.5' : 'py-2.5'}`}
+      className={`flex items-end gap-2 border border-black/6 bg-[var(--surface)] px-3 ${compact ? 'py-1.5' : 'py-2.5'}`}
     >
       <textarea
         ref={textareaRef}

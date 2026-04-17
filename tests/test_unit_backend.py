@@ -19,8 +19,13 @@ from app import safety  # noqa: E402
 from app import sql_utils  # noqa: E402
 from app import router  # noqa: E402
 from app import formatter  # noqa: E402
+from app import map_intent  # noqa: E402
 from app import prompts  # noqa: E402
 from app import planner  # noqa: E402
+from app import plan_verifier  # noqa: E402
+from app import query_frame  # noqa: E402
+from app import semantic_registry  # noqa: E402
+from app.metadata_answerer import answer_metadata_question  # noqa: E402
 
 
 # ===================================================================
@@ -146,6 +151,11 @@ class RouterTests(unittest.TestCase):
         tables = router._keyword_route("Department of Defense spending by state")
         self.assertIn("spending_state_agency", tables)
 
+    def test_keyword_route_free_cash_flow_stays_in_gov(self) -> None:
+        tables = router._keyword_route("What state is highest on Free_Cash_Flow in Government Finances?")
+        self.assertIn("gov_state", tables)
+        self.assertFalse(any("flow" in t for t in tables))
+
     def test_keyword_route_default_fallback(self) -> None:
         tables = router._keyword_route("Tell me something interesting")
         self.assertTrue(len(tables) > 0)
@@ -159,6 +169,238 @@ class RouterTests(unittest.TestCase):
         ctx = router.build_schema_context(["gov_state", "acs_state"])
         self.assertIn("TABLE: gov_state", ctx)
         self.assertIn("TABLE: acs_state", ctx)
+
+
+class SemanticRegistryTests(unittest.TestCase):
+    def test_semantic_catalog_marks_missing_runtime_agency_geos(self) -> None:
+        catalog = semantic_registry.semantic_catalog()
+        agency = catalog["agency"]
+        self.assertIn("county", agency["missing_runtime_geographies"])
+        self.assertIn("congress", agency["missing_runtime_geographies"])
+        self.assertIn("state", agency["available_geographies"])
+
+    def test_schema_fact_cd_118(self) -> None:
+        fact = semantic_registry.schema_fact("cd_118")
+        self.assertIsNotNone(fact)
+        assert fact is not None
+        self.assertIn("MD-05", fact)
+
+
+class QueryFrameTests(unittest.TestCase):
+    def test_query_frame_classifies_free_cash_flow_as_gov(self) -> None:
+        frame = query_frame.infer_query_frame("What state is highest on Free_Cash_Flow in Government Finances?")
+        self.assertEqual(frame.family, "gov")
+        self.assertEqual(frame.metric_hint, "Free_Cash_Flow")
+
+    def test_query_frame_extracts_congress_state_scope(self) -> None:
+        frame = query_frame.infer_query_frame("Within Maryland congressional districts, which district is highest on Free_Cash_Flow?")
+        self.assertEqual(frame.geo_level, "congress")
+        self.assertEqual(frame.primary_state, "maryland")
+        self.assertEqual(frame.state_postal, "MD")
+
+    def test_query_frame_maps_income_above_200k_to_builtin_metric(self) -> None:
+        frame = query_frame.infer_query_frame(
+            "Which states have the largest share of households with income above $200K in 2023?"
+        )
+        self.assertEqual(frame.family, "acs")
+        self.assertEqual(frame.metric_hint, "Income >$200K")
+        self.assertEqual(frame.intent, "share")
+
+
+class MapIntentTests(unittest.TestCase):
+    def test_build_map_intent_for_state_ranking(self) -> None:
+        df = pd.DataFrame(
+            [
+                {"state": "california", "Total_Liabilities": 154300485231},
+                {"state": "florida", "Total_Liabilities": 76136644395},
+                {"state": "maryland", "Total_Liabilities": 56874205850},
+                {"state": "new york", "Total_Liabilities": 55336798755},
+                {"state": "virginia", "Total_Liabilities": 41510908739},
+            ]
+        )
+        intent = map_intent.build_map_intent(
+            "Which state has the highest total liabilities?",
+            df,
+            ["gov_state"],
+        )
+        self.assertTrue(intent["enabled"])
+        self.assertEqual(intent["dataset"], "gov_spending")
+        self.assertEqual(intent["level"], "state")
+        self.assertIn(intent["mapType"], {"atlas-single-metric", "top-n-highlight"})
+        self.assertIn(intent.get("buttonLabel"), {"Open heat map", "Open map view"})
+        self.assertEqual(intent.get("defaultView"), "heat")
+
+    def test_build_map_intent_disabled_for_flow_answer(self) -> None:
+        df = pd.DataFrame(
+            [
+                {"rcpt_state_name": "Virginia", "total_flow": 8_130_000_000},
+                {"rcpt_state_name": "Texas", "total_flow": 5_130_000_000},
+                {"rcpt_state_name": "Maryland", "total_flow": 4_000_000_000},
+                {"rcpt_state_name": "California", "total_flow": 1_060_000_000},
+            ]
+        )
+        intent = map_intent.build_map_intent(
+            "Which states send the most subcontract inflow into Maryland?",
+            df,
+            ["state_flow"],
+        )
+        self.assertFalse(intent["enabled"])
+
+    def test_build_map_intent_disabled_for_single_row_lookup(self) -> None:
+        df = pd.DataFrame(
+            [{"state": "mississippi", "total_liabilities": 1_830_000_000, "metric_rank": 34, "total_states": 50}]
+        )
+        intent = map_intent.build_map_intent(
+            "Where does Mississippi stand on total liabilities?",
+            df,
+            ["gov_state"],
+        )
+        self.assertFalse(intent["enabled"])
+
+    def test_build_map_intent_includes_comparison_ids(self) -> None:
+        df = pd.DataFrame(
+            [
+                {"state": "maryland", "Contracts": 46_230_238_790},
+                {"state": "virginia", "Contracts": 87_510_000_000},
+                {"state": "california", "Contracts": 63_100_000_000},
+                {"state": "texas", "Contracts": 44_800_000_000},
+            ]
+        )
+        intent = map_intent.build_map_intent(
+            "Compare Maryland and Virginia on contracts in 2024.",
+            df,
+            ["contract_state"],
+        )
+        self.assertTrue(intent["enabled"])
+        self.assertEqual(intent["mapType"], "atlas-comparison")
+        self.assertEqual(intent["comparisonIds"], ["MD", "VA"])
+        self.assertEqual(intent["comparisonLabels"], ["Maryland", "Virginia"])
+        self.assertEqual(intent.get("buttonLabel"), "Open comparison map")
+        self.assertEqual(intent.get("defaultView"), "comparison")
+
+
+class MetadataAnswererTests(unittest.TestCase):
+    def test_metadata_answer_breakdown_state_only(self) -> None:
+        answer = answer_metadata_question("Is Federal Spending Breakdown available below the state level?")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("state-only", answer.lower())
+
+    def test_metadata_answer_cd_118(self) -> None:
+        answer = answer_metadata_question("What does cd_118 mean in these tables?")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("congressional district", answer.lower())
+
+    def test_metadata_answer_non_numeric_years(self) -> None:
+        answer = answer_metadata_question("Are all year fields numeric in the project?")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("2020-2024", answer)
+        self.assertIn("Fiscal Year 2023", answer)
+
+    def test_metadata_answer_relative_exposure(self) -> None:
+        answer = answer_metadata_question("If a user asks for the largest relative exposure in Contracts, what field should be used?")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("Contracts Per 1000", answer)
+
+    def test_metadata_answer_unsupported_gov_year(self) -> None:
+        answer = answer_metadata_question("What was Maryland liabilities in 2021?")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("Fiscal Year 2023", answer)
+
+    def test_metadata_answer_ambiguous_funding_source(self) -> None:
+        answer = answer_metadata_question("What is the biggest funding source in Maryland?")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("ambiguous", answer.lower())
+
+    def test_metadata_answer_causal_question(self) -> None:
+        answer = answer_metadata_question("Do direct payments cause lower poverty?")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("avoid causal claims", answer.lower())
+
+    def test_metadata_answer_dependent_on_federal_money_is_ambiguous(self) -> None:
+        answer = answer_metadata_question("Which state is most dependent on federal money?")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("ambiguous", answer.lower())
+        self.assertIn("per 1000", answer.lower())
+
+    def test_metadata_answer_custom_score_requires_definition(self) -> None:
+        answer = answer_metadata_question(
+            "Can you rank Maryland districts by a custom score that combines grants (2024), financial literacy (2021), and bachelor's attainment (2023)?"
+        )
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("custom", answer.lower())
+        self.assertIn("weights", answer.lower())
+
+    def test_metadata_answer_clarifies_compare_without_metric(self) -> None:
+        answer = answer_metadata_question("Compare Maryland and Virginia.")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("need the metric first", answer.lower())
+        self.assertIn("Government Finances", answer)
+
+    def test_metadata_answer_clarifies_state_overview_without_metric(self) -> None:
+        answer = answer_metadata_question("Tell me about Maryland.")
+        self.assertIsNotNone(answer)
+        assert answer is not None
+        self.assertIn("needs a dimension", answer.lower())
+        self.assertIn("Federal Spending", answer)
+
+
+class PlanVerifierTests(unittest.TestCase):
+    def test_verifier_requires_normalized_metric_for_relative_questions(self) -> None:
+        result = plan_verifier.verify_execution_candidate(
+            "Which state has the largest relative exposure in Contracts?",
+            "SELECT state, Contracts FROM contract_state ORDER BY Contracts DESC LIMIT 15",
+            ["contract_state"],
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIsNotNone(result.error)
+        assert result.error is not None
+        self.assertIn("normalized", result.error.lower())
+
+    def test_verifier_requires_md_scope_for_maryland_congress_queries(self) -> None:
+        result = plan_verifier.verify_execution_candidate(
+            "Within Maryland congressional districts, which district is highest on Free_Cash_Flow?",
+            "SELECT cd_118, Free_Cash_Flow FROM gov_congress ORDER BY Free_Cash_Flow DESC LIMIT 15",
+            ["gov_congress"],
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIsNotNone(result.error)
+        assert result.error is not None
+        self.assertIn("MD-scoped", result.error)
+
+    def test_verifier_returns_direct_answer_for_missing_runtime_agency_geo(self) -> None:
+        with patch("app.plan_verifier.runtime_table_loaded", return_value=False):
+            result = plan_verifier.verify_execution_candidate(
+                "Within Maryland counties in 2024, which counties have the highest Department of Defense contracts?",
+                "SELECT county, Contracts FROM contract_county_agency WHERE lower(state) = 'maryland' AND year = '2024' ORDER BY Contracts DESC LIMIT 15",
+                ["contract_county_agency"],
+            )
+
+        self.assertFalse(result.ok)
+        self.assertIsNotNone(result.answer)
+        assert result.answer is not None
+        self.assertIn("not available", result.answer.lower())
+
+    def test_verifier_allows_builtin_acs_share_metric_without_custom_denominator(self) -> None:
+        result = plan_verifier.verify_execution_candidate(
+            "Which states have the largest share of households with income above $200K in 2023?",
+            'SELECT state, "Income >$200K" FROM acs_state WHERE Year = 2023 ORDER BY "Income >$200K" DESC LIMIT 15',
+            ["acs_state"],
+        )
+
+        self.assertTrue(result.ok)
+        self.assertIsNone(result.error)
 
 
 # ===================================================================
@@ -261,9 +503,11 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("HHS", result)
         self.assertIn("default federal spending", result)
         self.assertIn("**", result)
-        self.assertIn("*Top 5:*", result)
-        self.assertIn("*Leader profile:*", result)
-        self.assertIn("top 3 together account for", result.lower())
+        self.assertIn("**Top 5:**", result)
+        self.assertIn("**Leader profile:**", result)
+        self.assertIn("**Context:**", result)
+        self.assertIn("**Interpretation:**", result)
+        self.assertIn("**You could ask next:**", result)
 
     def test_format_result_single_row_spending_includes_definition_and_composition(self) -> None:
         df = pd.DataFrame({
@@ -274,10 +518,10 @@ class FormatterTests(unittest.TestCase):
             "spending_total": [104_272_010_418.15],
         })
         result = formatter.format_result("How much federal money goes to Maryland?", df, sql="SELECT ... FROM contract_state WHERE year = '2024'")
-        self.assertIn("*Definition:*", result)
-        self.assertIn("*Breakdown:*", result)
-        self.assertIn("*Composition:*", result)
-        self.assertIn("*Scope:*", result)
+        self.assertIn("**Definition:**", result)
+        self.assertIn("**Breakdown:**", result)
+        self.assertIn("**Composition:**", result)
+        self.assertIn("**Scope:**", result)
 
     def test_format_result_uses_flow_pair_labels(self) -> None:
         df = pd.DataFrame({
@@ -288,6 +532,53 @@ class FormatterTests(unittest.TestCase):
         result = formatter.format_result("biggest federal fund flow?", df)
         self.assertIn("Virginia -> Virginia", result)
         self.assertIn("Texas -> California", result)
+
+    def test_format_result_handles_focus_top_bottom_leaderboard_bundle(self) -> None:
+        df = pd.DataFrame({
+            "row_kind": ["focus", "nearby", "nearby", "top", "top", "bottom", "bottom"],
+            "state": ["maryland", "virginia", "california", "illinois", "connecticut", "wyoming", "vermont"],
+            "Debt_Ratio": [0.65, 0.67, 0.63, 0.89, 0.85, 0.12, 0.10],
+            "metric_rank": [12, 11, 13, 1, 2, 49, 50],
+            "total_states": [50, 50, 50, 50, 50, 50, 50],
+            "national_average": [0.41, 0.41, 0.41, 0.41, 0.41, 0.41, 0.41],
+            "list_position": [0, 1, 2, 1, 2, 1, 2],
+        })
+        result = formatter.format_result(
+            "Where does Maryland rank nationally for debt ratio, and what are the top 2 and bottom 2 states?",
+            df,
+            sql="SELECT * FROM gov_state",
+        )
+        self.assertIn("Maryland", result)
+        self.assertIn("12th", result)
+        self.assertIn("50", result)
+        self.assertIn("**Around Maryland:**", result)
+        self.assertIn("**Top 2:**", result)
+        self.assertIn("**Bottom 2:**", result)
+
+    def test_format_result_adds_normalized_definition_note(self) -> None:
+        df = pd.DataFrame({
+            "state": ["maryland", "virginia", "alaska"],
+            "Contracts Per 1000": [1200.0, 980.0, 910.0],
+        })
+        result = formatter.format_result(
+            "Which state has the largest relative exposure in Contracts?",
+            df,
+            sql="SELECT state, \"Contracts Per 1000\" FROM contract_state WHERE year = '2024' ORDER BY 2 DESC LIMIT 15",
+        )
+        self.assertIn("normalized", result.lower())
+        self.assertIn("relative exposure", result.lower())
+
+    def test_format_result_adds_processed_congress_scope_note(self) -> None:
+        df = pd.DataFrame({
+            "cd_118": ["MD-05", "MD-03", "MD-04"],
+            "Free_Cash_Flow": [-548_230_000.0, -614_360_000.0, -717_240_000.0],
+        })
+        result = formatter.format_result(
+            "Within Maryland congressional districts, which district is highest on Free_Cash_Flow?",
+            df,
+            sql="SELECT cd_118, Free_Cash_Flow FROM gov_congress WHERE UPPER(cd_118) LIKE 'MD-%' ORDER BY Free_Cash_Flow DESC LIMIT 15",
+        )
+        self.assertIn("processed congress-level government finance", result.lower())
 
     def test_fallback_answer_no_api_key(self) -> None:
         df = pd.DataFrame({
@@ -370,13 +661,14 @@ class AgentIntegrationTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
             with patch("app.agent.classify", return_value="DATA_QUERY"):
-                with patch("app.agent.route_tables", return_value=["gov_state"]):
-                    with patch("app.agent._generate_sql", return_value="SELECT 1 UNION ALL SELECT 1, 2"):
-                        with patch(
-                            "app.agent._execute_with_repair",
-                            return_value=(None, "SELECT ...", "Set operations can only apply to expressions with same column count"),
-                        ):
-                            result = agent.ask_agent("Compare things", [])
+                with patch("app.agent.plan_query", return_value=None):
+                    with patch("app.agent.route_tables", return_value=["gov_state"]):
+                        with patch("app.agent._generate_sql", return_value="SELECT 1 UNION ALL SELECT 1, 2"):
+                            with patch(
+                                "app.agent._execute_with_repair",
+                                return_value=(None, "SELECT ...", "Set operations can only apply to expressions with same column count"),
+                            ):
+                                result = agent.ask_agent("Compare Maryland and Virginia on debt ratio.", [])
 
         self.assertIn("error", result)
         # Error should be user-friendly, not raw SQL error
@@ -391,6 +683,98 @@ class AgentIntegrationTests(unittest.TestCase):
         self.assertIn("sql", result)
         self.assertIn("spending_state_agency", result["sql"])
         self.assertGreater(result["row_count"], 0)
+
+    def test_ask_agent_answers_metadata_question_without_sql(self) -> None:
+        from app import agent
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": ""}, clear=False):
+            result = agent.ask_agent("Are all year fields numeric in the project?", [])
+
+        self.assertIn("answer", result)
+        self.assertIsNone(result["sql"])
+        self.assertIn("2020-2024", result["answer"])
+
+    def test_ask_agent_metadata_guard_runs_before_conceptual_fallback(self) -> None:
+        from app import agent
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("app.agent.classify", return_value="CONCEPTUAL"):
+                with patch("app.agent.llm_complete", side_effect=AssertionError("LLM should not run")):
+                    result = agent.ask_agent(
+                        "If the user asks for “the biggest funding source” without specifying whether they mean contracts, grants, direct payments, or a composite, what should the chatbot do?",
+                        [],
+                    )
+
+        self.assertIn("answer", result)
+        self.assertIn("ambiguous", result["answer"].lower())
+        self.assertIsNone(result["sql"])
+
+    def test_ask_agent_uses_verifier_caveat_before_query_execution(self) -> None:
+        from app import agent
+
+        question = "Within Maryland counties in 2024, which counties have the highest Department of Defense contracts?"
+        sql = (
+            "SELECT county, Contracts FROM contract_county_agency "
+            "WHERE lower(state) = 'maryland' AND year = '2024' "
+            "ORDER BY Contracts DESC LIMIT 15"
+        )
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("app.agent.classify", return_value="DATA_QUERY"):
+                with patch("app.agent.plan_query", return_value=None):
+                    with patch("app.agent.route_tables", return_value=["contract_county_agency"]):
+                        with patch("app.agent.build_schema_context", return_value="schema"):
+                            with patch("app.agent._generate_sql", return_value=sql):
+                                with patch("app.plan_verifier.runtime_table_loaded", return_value=False):
+                                    with patch("app.agent.execute_query", side_effect=AssertionError("execute_query should not run")):
+                                        result = agent.ask_agent(question, [])
+
+        self.assertIn("answer", result)
+        self.assertIn("not available", result["answer"].lower())
+        self.assertEqual(result["row_count"], 0)
+
+    def test_explicit_metric_position_question_is_not_forced_into_followup(self) -> None:
+        from app import agent
+
+        agent._last_query.clear()
+        intent = agent._classify_intent(
+            "Where does Mississippi stand on total liabilities?",
+            [{"role": "user", "content": "Which state has the highest total liabilities?"}],
+        )
+        self.assertNotEqual(intent, "FOLLOWUP")
+
+    def test_ask_agent_returns_rank_for_mississippi_position_lookup(self) -> None:
+        from app import agent
+
+        agent._last_query.clear()
+        history = [
+            {"role": "user", "content": "Which state has the highest total liabilities?"},
+            {"role": "assistant", "content": "California has the highest total liabilities."},
+        ]
+        result = agent.ask_agent("Where does Mississippi stand on total liabilities?", history)
+        self.assertIn("Mississippi", result["answer"])
+        self.assertIn("ranks", result["answer"])
+        self.assertIn("34th", result["answer"])
+
+    def test_ask_agent_clarifies_compare_without_metric(self) -> None:
+        from app import agent
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            result = agent.ask_agent("Compare Maryland and Virginia.", [])
+
+        self.assertIn("answer", result)
+        self.assertIn("need the metric first", result["answer"].lower())
+        self.assertIsNone(result["sql"])
+
+    def test_ask_agent_clarifies_state_overview_without_metric(self) -> None:
+        from app import agent
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            result = agent.ask_agent("Tell me about Maryland.", [])
+
+        self.assertIn("answer", result)
+        self.assertIn("needs a dimension", result["answer"].lower())
+        self.assertIsNone(result["sql"])
 
 
 class ChartGeneratorTests(unittest.TestCase):
@@ -529,6 +913,22 @@ class FollowupResolverTests(unittest.TestCase):
         agent._last_query["sql"] = "SELECT * FROM state_flow;"
         intent = agent._classify_intent("What department was this flow?", [{"role": "user", "content": "biggest flow"}])
         self.assertEqual(intent, "FOLLOWUP")
+
+    def test_short_state_context_question_is_followup(self) -> None:
+        from app import agent
+        agent._last_query["sql"] = "SELECT state, Total_Liabilities FROM gov_state ORDER BY Total_Liabilities DESC LIMIT 15;"
+        intent = agent._classify_intent(
+            "where does Mississipi stand?",
+            [{"role": "user", "content": "Which state has the highest total liabilities?"}],
+        )
+        self.assertEqual(intent, "FOLLOWUP")
+
+    def test_short_state_followup_inherits_previous_metric(self) -> None:
+        from app import agent
+        agent._last_query["question"] = "Which state has the highest total liabilities?"
+        result = agent._resolve_followup("where does Mississipi stand?", [])
+        self.assertIn("Which state has the highest total liabilities?", result)
+        self.assertIn("Mississippi", result)
 
 
 class JsonInMessageTests(unittest.TestCase):
@@ -678,6 +1078,79 @@ class PlannerTests(unittest.TestCase):
         assert plan is not None
         self.assertEqual(plan.table_names, ["finra_state"])
         self.assertIn("SELECT Year AS period", plan.sql)
+
+    def test_planner_routes_free_cash_flow_to_gov_state(self) -> None:
+        plan = planner.plan_query("What state is highest on Free_Cash_Flow in Government Finances?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["gov_state"])
+        self.assertIn("Free_Cash_Flow", plan.sql)
+        self.assertNotIn("state_flow", plan.sql)
+
+    def test_planner_filters_maryland_congressional_districts(self) -> None:
+        plan = planner.plan_query("Within Maryland congressional districts, which district is highest on Free_Cash_Flow?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["gov_congress"])
+        self.assertIn("UPPER(cd_118) LIKE 'MD-%'", plan.sql)
+        self.assertIn("Free_Cash_Flow", plan.sql)
+
+    def test_planner_builds_state_position_lookup_with_top_and_bottom_lists(self) -> None:
+        plan = planner.plan_query(
+            "Where does Maryland rank nationally for debt ratio, and what are the top 10 and bottom 10 states?"
+        )
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["gov_state"])
+        self.assertIn("row_kind", plan.sql)
+        self.assertIn("nearby_rows", plan.sql)
+        self.assertIn("top_rows", plan.sql)
+        self.assertIn("bottom_rows", plan.sql)
+        self.assertIn("UNION ALL", plan.sql)
+        self.assertIn("LOWER(state) = 'maryland'", plan.sql)
+        self.assertIn("ORDER BY Debt_Ratio DESC", plan.sql)
+
+    def test_planner_leaderboard_sql_executes(self) -> None:
+        from app.db import execute_query
+
+        plan = planner.plan_query(
+            "Where does Maryland rank nationally for debt ratio, and what are the top 10 and bottom 10 states?"
+        )
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        df = execute_query(plan.sql)
+        self.assertGreaterEqual(len(df), 21)
+        self.assertIn("row_kind", df.columns)
+
+    def test_planner_maps_jobs_to_employees_for_agency_questions(self) -> None:
+        plan = planner.plan_query("For Virginia in 2024, which agencies dominate jobs?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["spending_state_agency"])
+        self.assertIn("Employees", plan.sql)
+        self.assertNotIn("spending_total", plan.sql)
+
+    def test_planner_uses_explicit_federal_period_label(self) -> None:
+        plan = planner.plan_query("In the 2020-2024 period, which state is highest on Contracts?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["contract_state"])
+        self.assertIn("year = '2020-2024'", plan.sql)
+
+    def test_planner_builds_position_lookup_for_single_state_followup(self) -> None:
+        plan = planner.plan_query("Which state has the highest total liabilities? For Mississippi, show the current value and rank.")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.table_names, ["gov_state"])
+        self.assertIn("metric_rank", plan.sql)
+        self.assertIn("total_states", plan.sql)
+        self.assertIn("LOWER(state) = 'mississippi'", plan.sql)
+
+    def test_planner_returns_data_not_available_for_missing_agency_geo_runtime(self) -> None:
+        plan = planner.plan_query("Within Maryland counties in 2024, which counties have the highest Department of Defense contracts?")
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertIn("DATA_NOT_AVAILABLE", plan.sql)
 
 
 if __name__ == "__main__":

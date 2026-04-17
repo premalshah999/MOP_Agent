@@ -88,8 +88,8 @@ export const DATASET_GUIDES: DatasetGuide[] = [
   },
   {
     id: 'cross_dataset',
-    name: 'Cross-Dataset Analysis',
-    shortLabel: 'Cross',
+    name: 'Cross Reference',
+    shortLabel: 'Cross Ref',
     description: 'Questions that compare metrics across dashboards, such as poverty versus grants or literacy versus debt.',
     helper: 'Best for relationships, contrasts, and joined evidence across multiple datasets.',
     starterQuestions: [

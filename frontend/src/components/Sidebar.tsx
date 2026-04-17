@@ -18,10 +18,10 @@ interface SidebarProps {
   datasets: DatasetGuide[];
   threads: ChatThread[];
   activeThreadId: string | null;
+  onOpenChat: () => void;
   onNewChat: () => void;
   onSelectThread: (id: string) => void;
   onDeleteThread: (id: string) => void;
-  onClearAll: () => void;
   className?: string;
   onClose?: () => void;
   /** If true, sidebar manages its own width via drag handle. If false (mobile), uses fixed 280px. */
@@ -32,10 +32,10 @@ export function Sidebar({
   datasets,
   threads,
   activeThreadId,
+  onOpenChat,
   onNewChat,
   onSelectThread,
   onDeleteThread,
-  onClearAll,
   className = '',
   onClose,
   resizable = false,
@@ -83,7 +83,10 @@ export function Sidebar({
 
           <button
             type="button"
-            onClick={onNewChat}
+            onClick={() => {
+              onOpenChat();
+              onNewChat();
+            }}
             className="mt-4 flex w-full items-center justify-center gap-1.5 border border-[var(--sidebar-line)] py-2 text-[11px] font-medium tracking-wide text-[var(--sidebar-ink)] transition hover:bg-[var(--sidebar-hover)]"
           >
             <Plus size={12} />
@@ -91,7 +94,7 @@ export function Sidebar({
           </button>
         </div>
 
-        {/* Threads */}
+        {/* Body */}
         <div className="flex-1 overflow-y-auto px-2 pb-2">
           <div className="px-2 pb-2 text-[10px] font-medium uppercase tracking-widest text-[var(--sidebar-muted)]">
             Recent
@@ -109,7 +112,10 @@ export function Sidebar({
               >
                 <button
                   type="button"
-                  onClick={() => onSelectThread(thread.id)}
+                  onClick={() => {
+                    onOpenChat();
+                    onSelectThread(thread.id);
+                  }}
                   className="min-w-0 flex-1 text-left"
                 >
                   <div className="truncate text-[13px] leading-5 text-[var(--sidebar-ink)]">

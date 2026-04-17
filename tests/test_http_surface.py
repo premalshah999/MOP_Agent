@@ -50,6 +50,13 @@ class HttpSurfaceTests(unittest.TestCase):
         self.assertEqual(response.headers["x-content-type-options"], "nosniff")
         self.assertEqual(response.headers["cache-control"], "no-store")
 
+    def test_api_health_alias_matches(self) -> None:
+        with TestClient(app) as client:
+            response = client.get("/api/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+
     def test_api_ask_requires_auth(self) -> None:
         with TestClient(app) as client:
             response = client.post("/api/ask", json={"question": "test", "history": []})
@@ -99,6 +106,39 @@ class HttpSurfaceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["type"], "FeatureCollection")
         self.assertTrue(payload["features"])
+
+    def test_dataset_catalog_lists_downloadable_tables(self) -> None:
+        with TestClient(app) as client:
+            response = client.get("/api/datasets")
+
+        self.assertEqual(response.status_code, 200)
+        datasets = response.json()["datasets"]
+        gov = next(entry for entry in datasets if entry["id"] == "government_finance")
+        self.assertTrue(gov["tables"])
+        self.assertIn("downloads", gov["tables"][0])
+
+    def test_dataset_download_serves_parquet(self) -> None:
+        with TestClient(app) as client:
+            response = client.get("/api/datasets/download/gov_state?format=parquet")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("attachment", response.headers.get("content-disposition", ""))
+
+    def test_values_endpoint_returns_rows(self) -> None:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/values",
+                params={
+                    "dataset": "gov_spending",
+                    "level": "state",
+                    "variable": "Total_Liabilities",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertGreater(body["row_count"], 0)
+        self.assertTrue(body["rows"])
 
 
 class AuthTests(unittest.TestCase):

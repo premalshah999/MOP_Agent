@@ -2,7 +2,7 @@
 
 Production-oriented chat agent for Maryland Opportunities Platform datasets.
 
-- Backend: FastAPI + DuckDB + DeepSeek (OpenAI-compatible API)
+- Backend: FastAPI + DuckDB + Gemini or DeepSeek
 - Frontend: React + TypeScript + Vite + Tailwind v4
 - Data pipeline: Excel uploads -> Parquet -> DuckDB views
 
@@ -53,7 +53,14 @@ cd ..
 cp .env.example .env
 ```
 
-Set `DEEPSEEK_API_KEY` in `.env`.
+Set an LLM key in `.env`.
+
+Recommended:
+- `LLM_PROVIDER=gemini`
+- `GEMINI_API_KEY=...`
+
+Optional fallback:
+- `DEEPSEEK_API_KEY=...`
 
 ### 3) Convert data
 

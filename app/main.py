@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agent import ask_agent
+from app.dataset_catalog import build_dataset_catalog, dataset_download_path
 from app.auth import (
     AuthResponse,
     LoginRequest,
@@ -40,6 +41,7 @@ from app.database import (
     update_thread,
 )
 from app.db import get_registered_tables, register_all_tables
+from app.map_api import fetch_map_values
 from app.query_logger import log_query
 
 
@@ -203,6 +205,11 @@ class CreateThreadRequest(BaseModel):
 class UpdateThreadRequest(BaseModel):
     title: str | None = None
     dataset_id: str | None = None
+
+
+class MapValuesResponse(BaseModel):
+    rows: list[dict[str, Any]]
+    row_count: int
 
 
 # ── Auth routes ──
@@ -375,6 +382,65 @@ def list_messages(thread_id: str, request: Request, current_user: dict = Depends
     )
 
 
+@app.get("/api/datasets")
+def list_datasets(request: Request):
+    request_id = getattr(request.state, "request_id", None)
+    return _json_response(
+        200,
+        {"datasets": build_dataset_catalog()},
+        request_id=request_id,
+    )
+
+
+@app.get("/api/datasets/download/{table_name}")
+def download_dataset(table_name: str, request: Request, format: str = "parquet"):
+    try:
+        path, filename = dataset_download_path(table_name, format)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    media_type = "application/octet-stream"
+    if filename.endswith(".parquet"):
+        media_type = "application/vnd.apache.parquet"
+    elif filename.endswith(".xlsx"):
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return FileResponse(str(path), filename=filename, media_type=media_type)
+
+
+@app.get("/api/values")
+def values(
+    request: Request,
+    dataset: str,
+    level: str,
+    variable: str,
+    year: str | None = None,
+    state: str | None = None,
+    agency: str | None = None,
+):
+    request_id = getattr(request.state, "request_id", None)
+    try:
+        rows = fetch_map_values(
+            dataset=dataset,
+            level=level,
+            variable=variable,
+            year=year,
+            state=state,
+            agency=agency,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return _json_response(
+        200,
+        {"rows": rows, "row_count": len(rows)},
+        request_id=request_id,
+    )
+
+
 # ── Main query endpoint (requires auth, persists to DB) ──
 
 
@@ -499,6 +565,12 @@ def ask(body: AskRequest, request: Request, current_user: dict = Depends(get_cur
 
 @app.get("/health")
 def health(request: Request):
+    request_id = getattr(request.state, "request_id", None)
+    return _json_response(200, _health_payload(), request_id=request_id)
+
+
+@app.get("/api/health")
+def api_health(request: Request):
     request_id = getattr(request.state, "request_id", None)
     return _json_response(200, _health_payload(), request_id=request_id)
 

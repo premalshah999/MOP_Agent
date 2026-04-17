@@ -14,12 +14,21 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
-from openai import OpenAI
 
 from app.chart_generator import generate_chart_spec
 from app.classifier import classify
 from app.db import execute_query
 from app.formatter import format_result
+from app.llm import (
+    llm_available,
+    llm_complete,
+    llm_missing_key_message,
+    llm_model,
+    llm_reasoner_model,
+)
+from app.map_intent import build_map_intent
+from app.metadata_answerer import answer_metadata_question
+from app.plan_verifier import verify_execution_candidate
 from app.planner import plan_query
 from app.prompts import (
     CONCEPTUAL_SYSTEM,
@@ -30,20 +39,12 @@ from app.prompts import (
     get_relevant_examples,
     lookup_definition,
 )
+from app.query_frame import infer_query_frame
 from app.router import build_schema_context, route_tables
 from app.safety import is_safe
 from app.sql_utils import extract_sql, prepare_sql
 
 load_dotenv()
-
-# ---------------------------------------------------------------------------
-# LLM client
-# ---------------------------------------------------------------------------
-client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-    timeout=float(os.getenv("DEEPSEEK_TIMEOUT", "45")),
-)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -56,14 +57,15 @@ SQL_PREFLIGHT_ENABLED = os.getenv("SQL_PREFLIGHT_ENABLED", "1").strip().lower() 
 
 SQL_REPAIR_MODELS = [
     m.strip()
-    for m in os.getenv("SQL_REPAIR_MODELS", "deepseek-chat,deepseek-reasoner").split(",")
+    for m in os.getenv("SQL_REPAIR_MODELS", f"{llm_model()},{llm_reasoner_model()}").split(",")
     if m.strip()
-] or [os.getenv("DEEPSEEK_MODEL", "deepseek-chat")]
+] or [llm_model()]
 
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+ACTIVE_LLM_MODEL = llm_model()
 
 # Server-side follow-up context (last SQL per pseudo-session)
 _last_query: dict[str, str] = {}  # "question" and "sql"
+_VERIFIER_ANSWER_PREFIX = "VERIFIER_ANSWER::"
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +92,40 @@ def _normalize_history(history: list[Any]) -> list[dict[str, str]]:
     return out
 
 
+def _verifier_answer_frame(answer: str) -> pd.DataFrame:
+    return pd.DataFrame({"message": [f"{_VERIFIER_ANSWER_PREFIX}{answer}"]})
+
+
+def _clarification_answer(frame, question: str) -> str | None:
+    q = question.lower().strip()
+
+    if frame.intent == "compare" and len(frame.state_names) >= 2 and frame.metric_hint is None:
+        states = " and ".join(" ".join(part.capitalize() for part in state.split()) for state in frame.state_names[:3])
+        return (
+            f"**I can compare {states}, but I need the metric first.** "
+            f"Good options in this project are total liabilities, total assets, contracts, grants, median household income, poverty, or financial literacy."
+        )
+
+    if (
+        len(frame.state_names) == 1
+        and frame.metric_hint is None
+        and any(token in q for token in ("tell me about", "show me", "show", "profile", "overview", "open"))
+    ):
+        state_label = " ".join(part.capitalize() for part in frame.state_names[0].split())
+        return (
+            f"**I can do that, but `{state_label}` needs a dimension.** "
+            f"For example: total liabilities, contracts, grants, poverty, household income, or financial literacy."
+        )
+
+    if frame.metric_hint is None and frame.family is None and frame.intent in {"compare", "ranking"}:
+        return (
+            "**I need the measure before I answer this reliably.** "
+            "Please name the metric you want, such as liabilities, contracts, grants, poverty, household income, or financial literacy."
+        )
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Intent classification (with smarter bypass)
 # ---------------------------------------------------------------------------
@@ -98,11 +134,22 @@ DATA_SIGNALS = [
     "compare", "show me", "list", "rank", "which states", "which counties",
     "which districts", "correlation", "relationship",
 ]
+CONTEXTUAL_FOLLOWUP_SIGNALS = [
+    "how about",
+    "what about",
+    "where does",
+    "where is",
+    "and ",
+    "what's ",
+    "whats ",
+]
 
 
 def _classify_intent(question: str, history: list[dict[str, str]]) -> str:
     q = question.lower().strip()
     words = q.split()
+    frame = infer_query_frame(question)
+    has_explicit_metric_context = frame.metric_hint is not None or frame.family is not None
 
     # Short questions with pronouns/demonstratives are follow-ups when there's history
     words_clean = [w.strip("?.,!") for w in words]
@@ -111,6 +158,22 @@ def _classify_intent(question: str, history: list[dict[str, str]]) -> str:
             return "FOLLOWUP"
     if any(phrase in q for phrase in ["which one", "what one"]):
         if history or _last_query.get("sql"):
+            return "FOLLOWUP"
+
+    # Short contextual geography/entity questions should inherit the previous metric instead of
+    # being treated as brand-new free-form prompts.
+    if history or _last_query.get("sql"):
+        has_contextual_signal = any(signal in q for signal in CONTEXTUAL_FOLLOWUP_SIGNALS)
+        has_entity_only = bool(frame.state_names or frame.geo_level or frame.wants_agency_dimension)
+        missing_metric_context = frame.metric_hint is None and frame.family is None
+        if (
+            len(words_clean) <= 8
+            and has_entity_only
+            and (
+                missing_metric_context
+                or (has_contextual_signal and not has_explicit_metric_context)
+            )
+        ):
             return "FOLLOWUP"
 
     # Only bypass to DATA_QUERY for clear data-seeking patterns
@@ -147,14 +210,30 @@ def _resolve_followup(question: str, history: list[dict[str, str]]) -> str:
     parts = [f"Follow-up request: {question}"]
     if last_q:
         parts.append(f"Previous question: {last_q}")
-    if last_answer:
-        parts.append(f"Previous answer (first 200 chars): {last_answer}")
     if last_row_count:
         parts.append(f"Previous result had {last_row_count} rows.")
     if last_sql:
         parts.append(f"Previous SQL (modify as needed): {last_sql}")
 
     q_lower = question.lower().strip()
+    frame = infer_query_frame(question)
+
+    # If the follow-up already names the metric/family explicitly, keep it self-contained
+    # instead of leaking previous-answer entities into the rewritten question.
+    if frame.metric_hint is not None and frame.family is not None:
+        return question
+
+    if last_q:
+        # Compact geography/entity follow-ups should inherit the prior metric directly.
+        short_contextual = (
+            len(q_lower.split()) <= 8
+            and frame.state_names
+            and frame.metric_hint is None
+        )
+        if short_contextual:
+            if frame.state_names:
+                state_label = " ".join(part.capitalize() for part in frame.state_names[0].split())
+                return f"{last_q} For {state_label}, show the current value and rank."
 
     # Detect detail-seeking follow-ups ("what is it?", "which flow is it?", "show me the details")
     is_detail_seeking = any(pat in q_lower for pat in DETAIL_SEEKING_PATTERNS)
@@ -162,6 +241,16 @@ def _resolve_followup(question: str, history: list[dict[str, str]]) -> str:
     if not is_detail_seeking and len(q_lower.split()) <= 6:
         if any(w in q_lower for w in ["it", "that", "them", "those"]):
             is_detail_seeking = True
+
+    needs_answer_snippet = (
+        is_detail_seeking
+        or frame.metric_hint is None
+        or frame.family is None
+        or any(w in q_lower.split() for w in ["it", "that", "them", "those", "this", "these"])
+    )
+
+    if last_answer and needs_answer_snippet:
+        parts.append(f"Previous answer (first 200 chars): {last_answer}")
 
     if is_detail_seeking and last_sql:
         parts.append(
@@ -211,19 +300,19 @@ def _answer_conceptually(question: str, history: list[dict[str, str]]) -> dict[s
     if definition:
         return {"answer": definition, "sql": None, "data": [], "row_count": 0}
 
-    if not os.getenv("DEEPSEEK_API_KEY"):
-        return {"answer": "Please configure DEEPSEEK_API_KEY to enable answers.", "sql": None, "data": [], "row_count": 0}
+    if not llm_available():
+        return {"answer": llm_missing_key_message(), "sql": None, "data": [], "row_count": 0}
 
-    response = client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        max_tokens=CONCEPTUAL_MAX_TOKENS,
-        temperature=0,
-        messages=[{"role": "system", "content": CONCEPTUAL_SYSTEM}]
+    answer = llm_complete(
+        [{"role": "system", "content": CONCEPTUAL_SYSTEM}]
         + history[-4:]
         + [{"role": "user", "content": question}],
+        model=ACTIVE_LLM_MODEL,
+        max_tokens=CONCEPTUAL_MAX_TOKENS,
+        temperature=0,
     )
     return {
-        "answer": (response.choices[0].message.content or "").strip(),
+        "answer": answer.strip(),
         "sql": None,
         "data": [],
         "row_count": 0,
@@ -251,24 +340,23 @@ def _generate_sql(question: str, schema_ctx: str, history: list[dict[str, str]],
         return _generate_sql_structured(messages)
 
     # Fallback: free-text generation
-    response = client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
+    raw = llm_complete(
+        messages,
+        model=ACTIVE_LLM_MODEL,
         max_tokens=SQL_MAX_TOKENS,
         temperature=0,
-        messages=messages,
     )
-    return extract_sql((response.choices[0].message.content or "").strip())
+    return extract_sql(raw.strip())
 
 
 def _generate_sql_structured(messages: list[dict[str, str]]) -> str:
     """Generate SQL via JSON-in-message for reliable structured extraction from DeepSeek."""
-    response = client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
+    raw = llm_complete(
+        messages,
+        model=ACTIVE_LLM_MODEL,
         max_tokens=SQL_MAX_TOKENS,
         temperature=0,
-        messages=messages,
-    )
-    raw = (response.choices[0].message.content or "").strip()
+    ).strip()
 
     # Try to parse JSON response (the prompt asks for {"reasoning": ..., "sql": ...})
     try:
@@ -291,16 +379,16 @@ def _generate_sql_structured(messages: list[dict[str, str]]) -> str:
 # ---------------------------------------------------------------------------
 def _repair_sql(question: str, failed_sql: str, error: str, schema_ctx: str, model: str) -> str:
     user_prompt = build_repair_prompt(question, failed_sql, error, schema_ctx)
-    response = client.chat.completions.create(
-        model=model,
-        max_tokens=SQL_MAX_TOKENS,
-        temperature=0,
-        messages=[
+    raw = llm_complete(
+        [
             {"role": "system", "content": SQL_REPAIR_SYSTEM},
             {"role": "user", "content": user_prompt},
         ],
+        model=model,
+        max_tokens=SQL_MAX_TOKENS,
+        temperature=0,
     )
-    return extract_sql((response.choices[0].message.content or "").strip())
+    return extract_sql(raw.strip())
 
 
 # ---------------------------------------------------------------------------
@@ -364,21 +452,27 @@ def _execute_with_repair(
     last_sql = prepared
     errors: list[str] = []
 
-    # Try preflight
-    preflight_err = _preflight_sql(last_sql)
-    if preflight_err:
-        errors.append(preflight_err)
+    verification = verify_execution_candidate(question, last_sql, table_names)
+    if verification.answer:
+        return _verifier_answer_frame(verification.answer), last_sql, None
+    if verification.error:
+        errors.append(verification.error)
     else:
-        try:
-            df = execute_query(last_sql)
-            # Validate result — catch empty/unreasonable results
-            validation_hint = _validate_result(df, question)
-            if validation_hint is None:
-                return df, last_sql, None
-            # Result is suspicious — treat as an error for repair
-            errors.append(validation_hint)
-        except Exception as exc:
-            errors.append(str(exc))
+        # Try preflight
+        preflight_err = _preflight_sql(last_sql)
+        if preflight_err:
+            errors.append(preflight_err)
+        else:
+            try:
+                df = execute_query(last_sql)
+                # Validate result — catch empty/unreasonable results
+                validation_hint = _validate_result(df, question)
+                if validation_hint is None:
+                    return df, last_sql, None
+                # Result is suspicious — treat as an error for repair
+                errors.append(validation_hint)
+            except Exception as exc:
+                errors.append(str(exc))
 
     # Repair loop
     for attempt in range(SQL_REPAIR_ATTEMPTS):
@@ -390,6 +484,14 @@ def _execute_with_repair(
 
         repaired = prepare_sql(repaired, question)
         if not repaired or not is_safe(repaired):
+            continue
+
+        verification = verify_execution_candidate(question, repaired, table_names)
+        if verification.answer:
+            return _verifier_answer_frame(verification.answer), repaired, None
+        if verification.error:
+            errors.append(verification.error)
+            last_sql = repaired
             continue
 
         preflight_err = _preflight_sql(repaired)
@@ -411,6 +513,12 @@ def _execute_with_repair(
             last_sql = repaired
 
     # If the last attempt produced data (even if suspicious), return it rather than an error
+    verification = verify_execution_candidate(question, last_sql, table_names)
+    if verification.answer:
+        return _verifier_answer_frame(verification.answer), last_sql, None
+    if verification.error:
+        return None, last_sql, verification.error
+
     try:
         df = execute_query(last_sql)
         if not df.empty:
@@ -430,8 +538,21 @@ _ERROR_PATTERNS = [
     (r"Binder Error", "The query has a structural error. Try asking the question differently."),
     (r"conversion error", "Data type mismatch — this often happens with year columns. Try rephrasing."),
     (r"Parser Error", "SQL syntax error. Try rephrasing your question more simply."),
-    (r"DEEPSEEK_API_KEY", "API key not configured. Add DEEPSEEK_API_KEY to .env."),
+    (r"(DEEPSEEK_API_KEY|GEMINI_API_KEY|LLM_API_KEY)", "LLM API key not configured. Add GEMINI_API_KEY, LLM_API_KEY, or DEEPSEEK_API_KEY to .env."),
 ]
+_VERIFIER_ERROR_MARKERS = (
+    "Relative-exposure questions",
+    "Congressional district query",
+    "Share-style questions",
+    "Jobs-focused questions",
+    "Expected explicit period filter",
+    "Inflow ",
+    "Outflow ",
+    "Displayed-flow questions",
+    "Internal-flow questions",
+    "Agency flow breakdowns",
+    "Industry flow breakdowns",
+)
 
 
 def _format_error(raw: str) -> str:
@@ -443,6 +564,8 @@ def _format_error(raw: str) -> str:
 
 def _user_friendly_error(raw: str) -> str:
     """Ensure errors returned to users are always sanitized."""
+    if any(marker in raw for marker in _VERIFIER_ERROR_MARKERS):
+        return raw
     return _format_error(raw)
 
 
@@ -451,20 +574,28 @@ def _user_friendly_error(raw: str) -> str:
 # ---------------------------------------------------------------------------
 def ask_agent(question: str, history: list[Any]) -> dict[str, Any]:
     clean_history = _normalize_history(history)
+    initial_frame = infer_query_frame(question)
 
     # Step 1: Classify intent
     intent = _classify_intent(question, clean_history)
 
-    # Step 2: Handle conceptual questions (definitions, explanations)
-    if intent == "CONCEPTUAL":
-        return _answer_conceptually(question, clean_history)
-
-    # Step 3: Resolve follow-ups
+    # Step 2: Resolve follow-ups
     effective_question = question
     if intent == "FOLLOWUP":
         effective_question = _resolve_followup(question, clean_history)
 
-    # Step 4: Try deterministic metadata-driven planning first
+    # Step 3: Handle deterministic metadata / availability / safety questions
+    metadata_answer = answer_metadata_question(effective_question)
+    if metadata_answer:
+        return {"answer": metadata_answer, "sql": None, "data": [], "row_count": 0, "mapIntent": {"enabled": False, "mapType": "none"}}
+
+    # Step 4: Handle conceptual questions (definitions, explanations)
+    if intent == "CONCEPTUAL":
+        conceptual = _answer_conceptually(question, clean_history)
+        conceptual["mapIntent"] = {"enabled": False, "mapType": "none"}
+        return conceptual
+
+    # Step 5: Try deterministic metadata-driven planning first
     plan = plan_query(effective_question)
     table_names = plan.table_names if plan else route_tables(effective_question)
     schema_ctx = build_schema_context(table_names)
@@ -474,45 +605,89 @@ def ask_agent(question: str, history: list[Any]) -> dict[str, Any]:
     error: Optional[str]
 
     if plan:
-        df, final_sql, error = _execute_with_repair(effective_question, plan.sql, schema_ctx)
+        df, final_sql, error = _execute_with_repair(
+            effective_question,
+            plan.sql,
+            schema_ctx,
+            table_names=plan.table_names,
+        )
     else:
-        # Step 5: LLM fallback only when deterministic planning cannot cover the question
-        if not os.getenv("DEEPSEEK_API_KEY"):
+        clarification = _clarification_answer(infer_query_frame(effective_question), effective_question)
+        if clarification:
             return {
-                "error": "DEEPSEEK_API_KEY is not set and this question requires LLM SQL generation.",
+                "answer": clarification,
                 "sql": None,
                 "data": [],
                 "row_count": 0,
+                "mapIntent": {"enabled": False, "mapType": "none"},
+            }
+        # Step 6: LLM fallback only when deterministic planning cannot cover the question
+        if not llm_available():
+            return {
+                "error": llm_missing_key_message(),
+                "sql": None,
+                "data": [],
+                "row_count": 0,
+                "mapIntent": {"enabled": False, "mapType": "none"},
             }
         sql = _generate_sql(effective_question, schema_ctx, clean_history, table_names)
-        df, final_sql, error = _execute_with_repair(effective_question, sql, schema_ctx)
+        df, final_sql, error = _execute_with_repair(
+            effective_question,
+            sql,
+            schema_ctx,
+            table_names=table_names,
+        )
 
     # If the deterministic planner failed, fall back to LLM before returning an error.
-    if error and plan and os.getenv("DEEPSEEK_API_KEY"):
+    if error and plan and llm_available():
+        clarification = _clarification_answer(infer_query_frame(effective_question), effective_question)
+        if clarification and initial_frame.metric_hint is None:
+            return {
+                "answer": clarification,
+                "sql": None,
+                "data": [],
+                "row_count": 0,
+                "mapIntent": {"enabled": False, "mapType": "none"},
+            }
         table_names = route_tables(effective_question)
         schema_ctx = build_schema_context(table_names)
         sql = _generate_sql(effective_question, schema_ctx, clean_history, table_names)
-        df, final_sql, error = _execute_with_repair(effective_question, sql, schema_ctx)
+        df, final_sql, error = _execute_with_repair(
+            effective_question,
+            sql,
+            schema_ctx,
+            table_names=table_names,
+        )
 
     if error:
-        return {"error": _user_friendly_error(error), "sql": final_sql, "data": [], "row_count": 0}
+        return {"error": _user_friendly_error(error), "sql": final_sql, "data": [], "row_count": 0, "mapIntent": {"enabled": False, "mapType": "none"}}
 
     # Check for DATA_NOT_AVAILABLE sentinel
     if (
         len(df.columns) == 1
         and df.columns[0] == "message"
         and len(df) >= 1
-        and str(df.iloc[0]["message"]) == "DATA_NOT_AVAILABLE"
     ):
-        return {
-            "answer": "The requested data is not available in the current dataset.",
-            "sql": final_sql,
-            "data": [],
-            "row_count": 0,
-        }
+        message = str(df.iloc[0]["message"])
+        if message == "DATA_NOT_AVAILABLE":
+            return {
+                "answer": "The requested data is not available in the current dataset.",
+                "sql": final_sql,
+                "data": [],
+                "row_count": 0,
+                "mapIntent": {"enabled": False, "mapType": "none"},
+            }
+        if message.startswith(_VERIFIER_ANSWER_PREFIX):
+            return {
+                "answer": message.removeprefix(_VERIFIER_ANSWER_PREFIX),
+                "sql": final_sql,
+                "data": [],
+                "row_count": 0,
+                "mapIntent": {"enabled": False, "mapType": "none"},
+            }
 
     # Step 9: Format the answer
-    answer = format_result(question, df, sql=final_sql)
+    answer = format_result(effective_question, df, sql=final_sql)
 
     # Step 10: Generate chart spec
     chart_spec = generate_chart_spec(df, question, sql=final_sql)
@@ -531,4 +706,5 @@ def ask_agent(question: str, history: list[Any]) -> dict[str, Any]:
     }
     if chart_spec:
         result["chart"] = chart_spec
+    result["mapIntent"] = build_map_intent(effective_question, df, table_names)
     return result

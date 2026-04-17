@@ -1,12 +1,14 @@
-import { BarChart3, Database, TerminalSquare } from 'lucide-react';
+import { Database, TerminalSquare } from 'lucide-react';
 import { motion } from 'motion/react';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage } from '@/types/chat';
 import type { ReactNode } from 'react';
+import { ChatbotMapButton } from './ChatbotMapButton';
 
 const VegaChart = lazy(() => import('./VegaChart').then((m) => ({ default: m.VegaChart })));
+const ChatbotMapModal = lazy(() => import('./ChatbotMapModal').then((m) => ({ default: m.ChatbotMapModal })));
 
 /* ── Helpers ── */
 
@@ -76,13 +78,21 @@ interface MessageProps extends ChatMessage {
   onOpenDetail?: (tab: 'sql' | 'data') => void;
   /** Which tab is currently active in the detail panel for this message (if any) */
   activeDetailTab?: 'sql' | 'data' | null;
+  datasetId?: string;
 }
 
-export function Message({ role, content, sqlQuery, data, rowCount, chart, error, ts, onOpenDetail, activeDetailTab }: MessageProps) {
+export function Message({ role, content, sqlQuery, data, rowCount, chart, error, ts, mapIntent, datasetId, onOpenDetail, activeDetailTab }: MessageProps) {
   const rows = data ?? [];
   const hasSql = Boolean(sqlQuery);
   const hasData = rows.length > 0;
   const hasChart = Boolean(chart);
+  const [mapOpen, setMapOpen] = useState(false);
+  const effectiveMapIntent = mapIntent ?? null;
+  const hasMap = Boolean(
+    effectiveMapIntent?.enabled &&
+    ['atlas-single-metric', 'atlas-comparison', 'atlas-within-state', 'single-state-spotlight', 'single-state-ranked-subregions', 'top-n-highlight'].includes(effectiveMapIntent.mapType) &&
+    !error,
+  );
 
   if (role === 'user') {
     return (
@@ -125,6 +135,9 @@ export function Message({ role, content, sqlQuery, data, rowCount, chart, error,
               <Database size={11} /> Data
             </Btn>
           )}
+          {hasMap && (
+            <ChatbotMapButton onClick={() => setMapOpen(true)} label={effectiveMapIntent?.buttonLabel} />
+          )}
         </div>
       </div>
 
@@ -143,6 +156,17 @@ export function Message({ role, content, sqlQuery, data, rowCount, chart, error,
       {/* Error */}
       {error && (
         <div className="mt-3 border-l-2 border-red-300 bg-red-50 px-3 py-2 text-[13px] text-[var(--danger)]">{error}</div>
+      )}
+
+      {hasMap && effectiveMapIntent && (
+        <Suspense fallback={null}>
+          <ChatbotMapModal
+            isOpen={mapOpen}
+            onClose={() => setMapOpen(false)}
+            mapIntent={effectiveMapIntent}
+            fallbackRows={rows}
+          />
+        </Suspense>
       )}
     </motion.div>
   );

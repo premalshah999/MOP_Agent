@@ -7,10 +7,12 @@ import maplibregl, {
   type StyleSpecification,
 } from 'maplibre-gl';
 import { buildApiUrl } from '@/lib/api';
+import type { ChatbotMapIntent } from '@/types/chat';
 
 type DataRow = Record<string, unknown>;
 type GeoLevel = 'state' | 'county' | 'congress';
 type DisplayMode = 'state' | 'focused-subdivision' | 'national-subdivision';
+type PreviewView = 'heat' | 'comparison' | 'state-zoom' | 'subdivision' | 'subdivision-zoom';
 type BoundsTuple = [number, number, number, number];
 
 interface GeoFeature {
@@ -49,12 +51,19 @@ interface PreparedMap {
   highlightData: GeoCollection;
 }
 
+interface ViewOption {
+  id: PreviewView;
+  label: string;
+  description: string;
+}
+
 /* ── Constants ── */
 
 const DEFAULT_BOUNDS: BoundsTuple = [-125, 24, -66.5, 49.5];
-const DEFAULT_FILL = '#edf2f7';
+const DEFAULT_FILL = '#eef3f8';
 const DEFAULT_STROKE = '#cbd5e1';
-const STATE_FOCUS_FILL = '#fee2e2';
+const STATE_FOCUS_FILL = '#f8e6e3';
+const COMPARISON_FILL = '#e3edf9';
 
 // Dashboard quintile palette (sequential red, matching Maryland Opportunities Dashboard)
 const QUINTILE_COLORS = ['#fee5d9', '#fcae91', '#fb6a4a', '#de2d26', '#a50f15'];
@@ -409,20 +418,171 @@ function detectDescriptor(rows: DataRow[]): MapDescriptor | null {
   return null;
 }
 
-function buildBaseFillExpression(mode: DisplayMode): string | ExpressionSpecification {
-  if (mode === 'national-subdivision') return ['case', ['==', ['get', 'map_focus'], 1], STATE_FOCUS_FILL, DEFAULT_FILL] as ExpressionSpecification;
-  return DEFAULT_FILL;
-}
-
 function buildHoverValue(props: Record<string, unknown> | undefined, fallback: MatchValue) {
   const label = typeof props?.map_label === 'string' ? props.map_label : fallback.label;
   const value = getNumber(props?.map_value) ?? fallback.value;
   return { label, value };
 }
 
+function featureCollectionByKeys(collection: GeoCollection, keys: readonly string[]): GeoCollection {
+  if (!keys.length) return { type: 'FeatureCollection', features: [] };
+  const keySet = new Set(keys);
+  return {
+    type: 'FeatureCollection',
+    features: collection.features.filter((feature) => keySet.has(String(feature.properties.map_key ?? ''))),
+  };
+}
+
+function singleFeatureByKey(collection: GeoCollection, key: string | null | undefined): GeoCollection {
+  if (!key) return { type: 'FeatureCollection', features: [] };
+  return featureCollectionByKeys(collection, [key]);
+}
+
+function buildKeyMatchExpression(keys: readonly string[]): ExpressionSpecification {
+  if (keys.length === 1) {
+    return ['==', ['get', 'map_key'], keys[0]] as ExpressionSpecification;
+  }
+  return ['match', ['get', 'map_key'], [...keys], true, false] as ExpressionSpecification;
+}
+
+function buildBaseFillExpression(
+  mode: DisplayMode,
+  view: PreviewView,
+  comparisonKeys: readonly string[],
+  primaryStateKey: string | null,
+): string | ExpressionSpecification {
+  if (view === 'comparison' && comparisonKeys.length) {
+    return ['case', buildKeyMatchExpression(comparisonKeys), COMPARISON_FILL, DEFAULT_FILL] as ExpressionSpecification;
+  }
+  if (view === 'state-zoom' && primaryStateKey) {
+    return ['case', ['==', ['get', 'map_key'], primaryStateKey], STATE_FOCUS_FILL, DEFAULT_FILL] as ExpressionSpecification;
+  }
+  if (mode === 'national-subdivision') {
+    return ['case', ['==', ['get', 'map_focus'], 1], STATE_FOCUS_FILL, DEFAULT_FILL] as ExpressionSpecification;
+  }
+  return DEFAULT_FILL;
+}
+
+function resolveViewOptions(
+  preparedMap: PreparedMap | null,
+  descriptor: MapDescriptor | null,
+  mapIntent: ChatbotMapIntent | undefined,
+): ViewOption[] {
+  if (!preparedMap || !descriptor) return [];
+
+  const subdivisionLabel = descriptor.geography === 'congress' ? 'District view' : 'County view';
+  const zoomedSubdivisionLabel = descriptor.geography === 'congress' ? 'Zoomed district' : 'Zoomed county';
+  const options: ViewOption[] = [
+    {
+      id: 'heat',
+      label: 'Heat map',
+      description: 'Calculated quintile shading across the returned values.',
+    },
+  ];
+
+  if (mapIntent?.mapType === 'atlas-comparison' && (mapIntent.comparisonIds?.length ?? 0) >= 2) {
+    options.unshift({
+      id: 'comparison',
+      label: 'Comparison',
+      description: 'Emphasizes the requested comparison geographies while keeping the national backdrop.',
+    });
+  }
+
+  if (preparedMap.displayMode === 'state' && mapIntent && mapIntent.state && mapIntent.mapType !== 'atlas-comparison') {
+    options.push({
+      id: 'state-zoom',
+      label: 'State zoom',
+      description: 'Zooms tightly into the focal state while preserving nearby context.',
+    });
+  }
+
+  if (preparedMap.displayMode !== 'state') {
+    options.push({
+      id: 'subdivision',
+      label: subdivisionLabel,
+      description: 'Shows the county or district pattern at the full available geography.',
+    });
+    options.push({
+      id: 'subdivision-zoom',
+      label: zoomedSubdivisionLabel,
+      description: 'Zooms further into the lead county or district for a tighter local read.',
+    });
+  }
+
+  return options;
+}
+
+function defaultPreviewView(mapIntent: ChatbotMapIntent | undefined, options: ViewOption[]): PreviewView {
+  const available = new Set(options.map((option) => option.id));
+  const preferred: PreviewView =
+    mapIntent?.defaultView ??
+    (mapIntent?.mapType === 'atlas-comparison'
+      ? 'comparison'
+      : mapIntent?.mapType === 'single-state-spotlight'
+        ? 'state-zoom'
+        : mapIntent?.mapType === 'atlas-within-state' || mapIntent?.mapType === 'single-state-ranked-subregions'
+          ? 'subdivision'
+          : 'heat');
+
+  if (available.has(preferred)) return preferred;
+  return options[0]?.id ?? 'heat';
+}
+
+function boundsForView(
+  preparedMap: PreparedMap,
+  view: PreviewView,
+  comparisonKeys: readonly string[],
+  primaryStateKey: string | null,
+): { bounds: BoundsTuple; padding: number; maxZoom: number } {
+  const defaultPadding = preparedMap.displayMode === 'focused-subdivision' ? 18 : 24;
+  const defaultMaxZoom = preparedMap.displayMode === 'focused-subdivision' ? 6.9 : 5.4;
+
+  if (view === 'comparison' && comparisonKeys.length) {
+    const comparisonFeatures = featureCollectionByKeys(preparedMap.baseData, comparisonKeys).features;
+    if (comparisonFeatures.length) {
+      return { bounds: computeBounds(comparisonFeatures), padding: 42, maxZoom: 4.8 };
+    }
+  }
+
+  if (view === 'state-zoom' && primaryStateKey) {
+    const focusFeature = singleFeatureByKey(preparedMap.baseData, primaryStateKey).features;
+    if (focusFeature.length) {
+      return { bounds: computeBounds(focusFeature), padding: 28, maxZoom: 6.4 };
+    }
+  }
+
+  if (view === 'subdivision') {
+    return {
+      bounds: computeBounds(preparedMap.baseData.features.length ? preparedMap.baseData.features : preparedMap.highlightData.features),
+      padding: preparedMap.displayMode === 'national-subdivision' ? 24 : 18,
+      maxZoom: preparedMap.displayMode === 'national-subdivision' ? 5.5 : 7.1,
+    };
+  }
+
+  if (view === 'subdivision-zoom') {
+    const leadFeature = singleFeatureByKey(preparedMap.highlightData, preparedMap.topMatch.key).features;
+    if (leadFeature.length) {
+      return {
+        bounds: computeBounds(leadFeature),
+        padding: 32,
+        maxZoom: preparedMap.headline.toLowerCase().includes('district') ? 7.8 : 8.8,
+      };
+    }
+  }
+
+  return { bounds: preparedMap.bounds, padding: defaultPadding, maxZoom: defaultMaxZoom };
+}
+
 /* ── Component ── */
 
-export default function MapPreview({ rows }: { rows: DataRow[] }) {
+interface MapPreviewProps {
+  rows: DataRow[];
+  variant?: 'card' | 'modal';
+  mapHeightClassName?: string;
+  mapIntent?: ChatbotMapIntent;
+}
+
+export default function MapPreview({ rows, variant = 'card', mapHeightClassName, mapIntent }: MapPreviewProps) {
   const descriptor = useMemo(() => detectDescriptor(rows), [rows]);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -432,6 +592,25 @@ export default function MapPreview({ rows }: { rows: DataRow[] }) {
   const [errored, setErrored] = useState(false);
   const [hovered, setHovered] = useState<{ label: string; value: number } | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  const viewOptions = useMemo(() => resolveViewOptions(preparedMap, descriptor, mapIntent), [preparedMap, descriptor, mapIntent]);
+  const [activeView, setActiveView] = useState<PreviewView>('heat');
+  const comparisonKeys = useMemo(
+    () => (mapIntent?.comparisonIds ?? []).map((value) => String(value).toUpperCase()),
+    [mapIntent?.comparisonIds],
+  );
+  const primaryStateKey = useMemo(() => {
+    if (!mapIntent?.state) return null;
+    return toStateAbbr(mapIntent.state)?.toUpperCase() ?? null;
+  }, [mapIntent?.state]);
+
+  useEffect(() => {
+    if (!viewOptions.length) return;
+    setActiveView((current) =>
+      viewOptions.some((option) => option.id === current)
+        ? current
+        : defaultPreviewView(mapIntent, viewOptions),
+    );
+  }, [mapIntent, viewOptions]);
 
   // Data preparation
   useEffect(() => {
@@ -475,6 +654,15 @@ export default function MapPreview({ rows }: { rows: DataRow[] }) {
     const colorExpr = buildColorExpression(preparedMap.values);
     const highlightSource: GeoJSONSourceSpecification = { type: 'geojson', data: preparedMap.highlightData as GeoJSON.GeoJSON };
     const baseSource: GeoJSONSourceSpecification = { type: 'geojson', data: preparedMap.baseData as GeoJSON.GeoJSON };
+    const emphasisKeys =
+      activeView === 'comparison'
+        ? comparisonKeys
+        : activeView === 'state-zoom' && primaryStateKey
+          ? [primaryStateKey]
+          : activeView === 'subdivision-zoom'
+            ? [preparedMap.topMatch.key]
+            : [];
+    const focusBounds = boundsForView(preparedMap, activeView, comparisonKeys, primaryStateKey);
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
@@ -498,16 +686,21 @@ export default function MapPreview({ rows }: { rows: DataRow[] }) {
       map.addLayer({
         id: 'preview-base-fill', type: 'fill', source: 'preview-base',
         paint: {
-          'fill-color': buildBaseFillExpression(preparedMap.displayMode),
-          'fill-opacity': preparedMap.displayMode === 'national-subdivision' ? 0.52 : 0.32,
+          'fill-color': buildBaseFillExpression(preparedMap.displayMode, activeView, comparisonKeys, primaryStateKey),
+          'fill-opacity':
+            activeView === 'state-zoom'
+              ? 0.7
+              : preparedMap.displayMode === 'national-subdivision'
+                ? 0.38
+                : 0.16,
         },
       });
       map.addLayer({
         id: 'preview-base-line', type: 'line', source: 'preview-base',
         paint: {
           'line-color': DEFAULT_STROKE,
-          'line-width': preparedMap.displayMode === 'focused-subdivision' ? 0.8 : 1,
-          'line-opacity': 0.9,
+          'line-width': preparedMap.displayMode === 'focused-subdivision' ? 0.14 : 0.18,
+          'line-opacity': 0.5,
         },
       });
 
@@ -515,26 +708,58 @@ export default function MapPreview({ rows }: { rows: DataRow[] }) {
       map.addSource('preview-highlight', highlightSource);
       map.addLayer({
         id: 'preview-highlight-fill', type: 'fill', source: 'preview-highlight',
-        paint: { 'fill-color': colorExpr, 'fill-opacity': 0.88 },
+        paint: {
+          'fill-color': colorExpr,
+          'fill-opacity': activeView === 'comparison' ? 0.84 : activeView === 'state-zoom' ? 0.92 : 0.9,
+        },
       });
       map.addLayer({
         id: 'preview-highlight-line', type: 'line', source: 'preview-highlight',
-        paint: { 'line-color': '#ffffff', 'line-width': 1.2, 'line-opacity': 1 },
+        paint: { 'line-color': 'rgba(255,255,255,0.94)', 'line-width': 0.2, 'line-opacity': 0.78 },
+      });
+
+      map.addLayer({
+        id: 'preview-emphasis-line',
+        type: 'line',
+        source: activeView === 'state-zoom' ? 'preview-base' : 'preview-highlight',
+        paint: {
+          'line-color': activeView === 'comparison' ? '#1e293b' : '#0f172a',
+          'line-width':
+            emphasisKeys.length > 0
+              ? ([
+                  'case',
+                  buildKeyMatchExpression(emphasisKeys),
+                  activeView === 'subdivision-zoom' ? 0.6 : 0.52,
+                  0,
+                ] as ExpressionSpecification)
+              : 0,
+          'line-opacity':
+            emphasisKeys.length > 0
+              ? ([
+                  'case',
+                  buildKeyMatchExpression(emphasisKeys),
+                  0.9,
+                  0,
+                ] as ExpressionSpecification)
+              : 0,
+        },
       });
 
       // Selected feature outline (initially hidden)
       map.addLayer({
         id: 'preview-selected-line', type: 'line', source: 'preview-highlight',
-        paint: { 'line-color': '#111318', 'line-width': 2.5, 'line-opacity': 1 },
+        paint: { 'line-color': '#0f172a', 'line-width': 0.88, 'line-opacity': 0.95 },
         filter: ['==', ['get', 'map_key'], ''],
       });
 
       // Fit bounds
-      map.fitBounds(preparedMap.bounds as LngLatBoundsLike, {
-        padding: preparedMap.displayMode === 'focused-subdivision' ? 16 : 24,
+      map.fitBounds(focusBounds.bounds as LngLatBoundsLike, {
+        padding: focusBounds.padding,
         duration: 0,
-        maxZoom: preparedMap.displayMode === 'focused-subdivision' ? 6.8 : 5.3,
+        maxZoom: focusBounds.maxZoom,
       });
+      map.resize();
+      window.requestAnimationFrame(() => map.resize());
 
       // Interaction
       map.on('mouseenter', 'preview-highlight-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
@@ -560,8 +785,14 @@ export default function MapPreview({ rows }: { rows: DataRow[] }) {
     };
 
     map.on('load', onLoad);
-    return () => { map.remove(); mapRef.current = null; };
-  }, [preparedMap]);
+    const onResize = () => map.resize();
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      map.remove();
+      mapRef.current = null;
+    };
+  }, [activeView, comparisonKeys, preparedMap, primaryStateKey]);
 
   if (!rows.length || !descriptor) return null;
 
@@ -585,17 +816,51 @@ export default function MapPreview({ rows }: { rows: DataRow[] }) {
 
   const breaks = computeQuintileBreaks(preparedMap.values);
   const hoveredQuintile = hovered ? getQuintile(hovered.value, breaks) : null;
+  const isModal = variant === 'modal';
+  const mapHeight = mapHeightClassName ?? (isModal ? 'h-[min(72vh,760px)]' : 'h-[240px]');
+  const selectedView = viewOptions.find((option) => option.id === activeView) ?? viewOptions[0] ?? null;
 
   return (
-    <section className="mt-3 overflow-hidden rounded border border-[var(--line)] bg-[var(--surface)]">
+    <section className={`${isModal ? 'overflow-hidden rounded-[10px] border border-black/5 bg-[var(--surface)]/95 shadow-[0_14px_42px_rgba(15,23,42,0.07)]' : 'mt-3 overflow-hidden rounded-[10px] border border-black/5 bg-[var(--surface)]'}`}>
+      <div className="border-b border-black/5 bg-white/90 px-3 py-3">
+        {viewOptions.length > 1 && (
+          <div className="flex flex-wrap gap-2">
+            {viewOptions.map((option) => {
+              const selected = option.id === activeView;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setActiveView(option.id)}
+                  className={`inline-flex items-center justify-center rounded-[6px] border px-3 py-1.5 text-[11px] font-medium transition ${
+                    selected
+                      ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--ink)]'
+                      : 'border-black/6 bg-white text-[var(--muted)] hover:border-[var(--accent)]/30 hover:text-[var(--ink)]'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {selectedView && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] leading-5 text-[var(--muted)]">
+            <span className="inline-flex items-center rounded-[6px] border border-black/6 bg-[var(--surface)] px-2 py-1 font-medium text-[var(--ink)]">
+              {selectedView.label}
+            </span>
+            <span>{selectedView.description}</span>
+          </div>
+        )}
+      </div>
       {/* Map container */}
       <div className="map-shell relative bg-[#f8fafc]">
-        <div ref={mapContainerRef} className="h-[240px] w-full" />
+        <div ref={mapContainerRef} className={`${mapHeight} w-full`} />
 
         {/* Loading overlay */}
         {(loading || !mapReady) && (
           <div className="absolute inset-0 flex items-center justify-center bg-[var(--surface-2)]/60 backdrop-blur-[1px]">
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[11px] text-[var(--muted)] shadow-sm">
+            <div className="inline-flex items-center gap-1.5 rounded-[6px] border border-black/6 bg-white px-3 py-1.5 text-[11px] text-[var(--muted)] shadow-sm">
               <Loader2 size={12} className="animate-spin" /> Loading map...
             </div>
           </div>
@@ -603,7 +868,7 @@ export default function MapPreview({ rows }: { rows: DataRow[] }) {
 
         {/* Hover tooltip (positioned top-left on the map) */}
         {mapReady && hovered && (
-          <div className="absolute left-2.5 top-2.5 z-10 rounded bg-white/95 px-2.5 py-1.5 shadow-sm ring-1 ring-black/5">
+          <div className="absolute left-2.5 top-2.5 z-10 rounded-[6px] border border-black/6 bg-white/95 px-2.5 py-1.5 shadow-sm">
             <div className="text-[11px] font-medium text-[var(--ink)]">{hovered.label}</div>
             <div className="mt-0.5 flex items-center gap-2">
               <span className="font-mono text-[12px] font-semibold text-[var(--ink)]">{formatMetricValue(hovered.value)}</span>
@@ -619,15 +884,15 @@ export default function MapPreview({ rows }: { rows: DataRow[] }) {
       </div>
 
       {/* Legend bar — dashboard style */}
-      <div className="flex items-center gap-3 border-t border-[var(--line)] px-3 py-2">
+      <div className="flex items-center gap-3 border-t border-black/5 px-3 py-2">
         <span className="shrink-0 text-[10px] font-medium uppercase tracking-wider text-[var(--muted)]">
-          {preparedMap.metricLabel}
+          {selectedView?.id === 'heat' ? `${preparedMap.metricLabel} · Calculated quintiles` : preparedMap.metricLabel}
         </span>
         <div className="ml-auto flex items-center gap-0.5">
           {QUINTILE_COLORS.map((color, i) => (
             <div key={color} className="flex flex-col items-center">
               <span
-                className="block h-2.5 w-6 first:rounded-l last:rounded-r"
+                className="block h-2.5 w-6 first:rounded-l-[3px] last:rounded-r-[3px]"
                 style={{ backgroundColor: color }}
               />
               <span className="mt-0.5 text-[8px] text-[var(--muted-2)]">{QUINTILE_LABELS[i]}</span>

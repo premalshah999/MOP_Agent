@@ -291,6 +291,10 @@ def column_match_score(table_name: str, column_name: str, question: str) -> floa
         score += 4.0
     if "payments" in q_tokens and column_name == "Direct Payments":
         score += 4.0
+    if {"job", "jobs", "workforce", "employment"} & q_tokens and column_name == "Employees":
+        score += 5.0
+    if {"payroll", "salary", "wage", "wages"} & q_tokens and column_name == "Employees Wage":
+        score += 4.0
     if "ratio" not in q_tokens and column_name.endswith("Ratio"):
         score -= 2.5
     if "per capita" not in normalize_text(question) and column_name.endswith("_per_capita"):

@@ -3,15 +3,10 @@ from __future__ import annotations
 import os
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from app.llm import llm_available, llm_complete, llm_model
 
 
 load_dotenv()
-
-client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-)
 
 CLASSIFIER_PROMPT = """Classify this user message into exactly one of:
 - DATA_QUERY: requires a NEW database lookup or data retrieval (not referencing prior results)
@@ -48,22 +43,27 @@ def _fallback_classifier(question: str) -> str:
 
 
 def classify(question: str) -> str:
-    if not os.getenv("DEEPSEEK_API_KEY"):
+    if not llm_available():
         return _fallback_classifier(question)
 
     try:
-        response = client.chat.completions.create(
-            model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-            temperature=0,
-            max_tokens=10,
-            messages=[
+        label = llm_complete(
+            [
                 {"role": "system", "content": CLASSIFIER_PROMPT},
                 {"role": "user", "content": question},
             ],
-        )
-        label = (response.choices[0].message.content or "").strip().upper()
+            model=llm_model(),
+            temperature=0,
+            max_tokens=32,
+        ).strip().upper()
         if label in {"DATA_QUERY", "FOLLOWUP", "CONCEPTUAL"}:
             return label
+        if label.startswith("DATA"):
+            return "DATA_QUERY"
+        if label.startswith("FOLLOW"):
+            return "FOLLOWUP"
+        if label.startswith("CONCEPT"):
+            return "CONCEPTUAL"
     except Exception:
         pass
 
