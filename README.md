@@ -1,45 +1,56 @@
-# MOP Research Agent
+# MOP Controlled Analytics Assistant
 
-Production-oriented chat agent for Maryland Opportunities Platform datasets.
+This is a clean rebuild of the MOP assistant around a controlled multi-mode analytics architecture.
 
-- Backend: FastAPI + DuckDB + Gemini or DeepSeek
-- Frontend: React + TypeScript + Vite + Tailwind v4
-- Data pipeline: Excel uploads -> Parquet -> DuckDB views
-
-## Repository Layout
+The backend is not a generic LLM-to-DuckDB chatbot. It first routes the user message into the right assistant workflow, then uses the controlled SQL pipeline only when the workflow actually needs SQL:
 
 ```text
-mop-agent/
-├── app/                     # FastAPI API + NL-to-SQL agent
-├── data/
-│   ├── uploads/             # Raw Excel files
-│   ├── parquet/             # Generated parquet tables (gitignored)
-│   ├── schema/
-│   │   ├── metadata.json    # Table/column semantics and warnings
-│   │   └── manifest.json    # Generated conversion manifest
-│   └── query_log.jsonl      # Runtime query logs (gitignored)
-├── frontend/                # React client integrated with backend API
-├── scripts/
-│   ├── convert_excel.py     # Excel -> parquet converter
-│   └── run_local_prod.py    # Local production launcher
-├── tests/
-│   ├── test_http_surface.py
-│   ├── test_production_smoke.py
-│   └── test_unit_backend.py
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── OPERATIONS.md
-│   └── CODE_REVIEW.md
-├── .env.example
-└── requirements.txt
+Chat API
+  -> conversation state manager
+  -> assistant router
+  -> workflow selector
+  -> help / dataset discovery / metric definition / analytics workflow
+  -> intent classifier
+  -> semantic retrieval
+  -> query planner
+  -> plan validator
+  -> SQL generator
+  -> SQL validator
+  -> DuckDB executor
+  -> result verifier
+  -> grounded answer generator
 ```
 
-## Setup
+## What Is Preserved
 
-### 1) Install dependencies
+- `data/uploads/` raw Excel sources
+- `data/parquet/` runtime Parquet tables
+- `data/boundaries/` map boundary assets
+- `data/schema/manifest.json`
+- `data/schema/metadata.json`
+- `reports/` benchmark/evaluation artifacts
+- `docs/` rebuild notes and handoff material
+- `frontend/` visual/design source
+
+## New Backend Layout
+
+```text
+app/
+  api/                 # FastAPI-facing auth, dataset, thread helpers
+  core/                # Router, conversation state, orchestrator, planner, verifier, answer writer
+  duckdb/              # Curated DuckDB view registration and execution
+  evals/               # Golden questions and regression runner
+  observability/       # Structured JSONL pipeline logs
+  schemas/             # Pydantic contracts between stages
+  semantic/            # Metadata registry, retrieval, plan validation
+  sql/                 # SQL generation, validation, execution adapter
+  storage/             # SQLite auth/thread/message storage
+  main.py              # FastAPI application
+```
+
+## Install
 
 ```bash
-# from mop-agent/
 pip install -r requirements.txt
 
 cd frontend
@@ -47,93 +58,128 @@ npm install
 cd ..
 ```
 
-### 2) Configure environment
+## Run Backend
 
 ```bash
-cp .env.example .env
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Set an LLM key in `.env`.
-
-Recommended:
-- `LLM_PROVIDER=gemini`
-- `GEMINI_API_KEY=...`
-
-Optional fallback:
-- `DEEPSEEK_API_KEY=...`
-
-### 3) Convert data
-
-```bash
-/usr/bin/python3 scripts/convert_excel.py
-```
-
-### 4) Run development services
-
-Backend:
-
-```bash
-/usr/bin/python3 -m uvicorn app.main:app --reload --port 8000
-```
-
-Frontend:
+## Run Frontend
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-- Frontend: `http://127.0.0.1:5173`
-- Backend: `http://127.0.0.1:8000`
+Backend: `http://127.0.0.1:8000`
 
-## Production Checks
+Frontend: `http://127.0.0.1:5173`
 
-```bash
-/usr/bin/python3 -m compileall app scripts tests
-/usr/bin/python3 -m unittest tests.test_unit_backend tests.test_http_surface tests.test_production_smoke -v
-cd frontend && npm run check && cd ..
-```
-
-## Local Production Mode
+## Test
 
 ```bash
-/usr/bin/python3 scripts/run_local_prod.py --host 127.0.0.1 --port 8000
+pytest tests/test_database.py tests/test_unit_backend.py tests/test_http_surface.py tests/test_production_smoke.py -q
+python -m app.evals.run_evals
+cd frontend && npm run typecheck
 ```
 
-FastAPI serves the built SPA from `frontend/dist` and the API from `/api/*`. The launcher builds the frontend first, then starts Uvicorn without reload.
-
-## API
-
-- `GET /health`
-- `POST /api/ask`
-
-Example:
+## Production Build
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question":"Which states have the highest total liabilities per capita? Show top 10.","history":[]}'
+cp deploy/.env.production.example .env
+# edit JWT_SECRET, ALLOWED_ORIGINS, and TRUSTED_HOSTS
+docker compose build
+docker compose up -d
+curl http://127.0.0.1:8000/health
 ```
 
-## Tests
+The Docker image runs FastAPI and serves the built React app from `frontend/dist`. The committed runtime assets are the curated Parquet tables, schema metadata, map boundaries, and raw uploads for dataset downloads. Generated runtime state stays in the `mop_agent_runtime` Docker volume.
+
+## Semantic Audit
+
+Run the coverage audit whenever data, metadata, or metric definitions change:
 
 ```bash
-/usr/bin/python3 -m unittest tests.test_http_surface -v
-/usr/bin/python3 -m unittest tests.test_unit_backend -v
-/usr/bin/python3 -m unittest tests.test_production_smoke -v
-cd frontend && npm run check && cd ..
+python -m app.semantic.audit --format markdown
 ```
 
-## Quality and Reliability Notes
+The audit compares the runtime manifest, semantic metadata, and in-memory registry. It reports documented-but-not-loaded tables, loaded-but-undocumented columns, metric/dimension coverage, semantic variant groups, and registry quality warnings. This is the first robustness gate: new behavior should come from better metadata coverage, not one-off planner branches.
 
-- API responses include request IDs, security headers, gzip compression, and trusted-host enforcement.
-- `/health` reports manifest presence, registered table count, and frontend build readiness.
-- SQL extraction supports both `WITH` and `SELECT` queries without truncating CTEs.
-- Failed SQL is auto-repaired with configurable retries (`SQL_REPAIR_ATTEMPTS`, `SQL_REPAIR_MODELS`).
-- SQL preflight linting/binding checks run before execution (`SQL_PREFLIGHT_ENABLED`) to catch set-op and window/group errors early.
-- Ranking questions default to analytical result depth (`DEFAULT_TOP_K`, `MAX_TOP_K`).
-- Formatter generates long-form analyst answers with dynamic word targets and evidence, with a minimum floor (`MIN_ANALYTIC_WORDS`).
-- Conceptual responses can be expanded with `CONCEPTUAL_MAX_TOKENS`.
-- Runtime env defaults also support `APP_VERSION`, `TRUSTED_HOSTS`, and `GZIP_MINIMUM_SIZE`.
+## Current Capability
 
-See `docs/` for architecture, ops runbook, and review notes.
+The controlled slice now supports:
+
+- assistant help / identity answers
+- dataset discovery
+- metric definitions
+- rankings
+- direct lookups
+- comparisons
+- trends
+- agency breakouts
+- fund-flow inflow/outflow rankings
+- metadata/availability answers
+- unsupported metric refusal with alternatives
+- ambiguity clarification for broad federal-money questions
+- follow-up inheritance for missing slots only
+- metric variant switching from registry metadata, such as amount/count vs share/ratio vs per-capita/per-1,000
+
+The assistant router can run in two modes:
+
+- `ASSISTANT_ROUTER_MODE=local`: offline semantic router used by tests and local development.
+- `ASSISTANT_ROUTER_MODE=llm`: optional LLM router through `OPENAI_API_KEY`, with local fallback if the model call is unavailable.
+
+```text
+top 10 counties in maryland with maximum funding
+```
+
+is resolved as:
+
+- dataset: `contract_county`
+- metric: `total_federal_funding`
+- filter: `state = Maryland`
+- default period: `2024`
+- executor: validated SQL over `mart_contract_county`
+
+The response includes:
+
+- final answer
+- SQL
+- rows
+- chart intent/spec where useful
+- map intent where the contract supports it
+- `resultPackage`
+- `contract`
+- `pipelineTrace`
+- quality warnings/confidence
+
+Important regression examples:
+
+```text
+top counties with maximum crime
+```
+
+returns unsupported with nearest supported alternatives.
+
+```text
+How much federal money goes to Maryland?
+```
+
+asks for clarification instead of silently choosing a funding family.
+
+```text
+the first one
+```
+
+after that clarification resolves back to Maryland and returns the scoped total funding value, not a national ranking.
+
+```text
+grants in maryland
+compare Maryland vs Virginia
+```
+
+inherits grants and the period into the follow-up comparison.
+
+## Design Rule
+
+Future work should extend the semantic registry and deterministic contracts first. UI polish and answer styling come only after the resolver, validator, executor, and evaluator are strong.

@@ -101,6 +101,15 @@ export interface ApiMessage {
   sqlQuery?: string;
   data?: Record<string, unknown>[];
   rowCount?: number;
+  chart?: Record<string, unknown>;
+  charts?: import('@/types/chat').ChartBlock[];
+  evidence?: import('@/types/chat').EvidenceBlock;
+  resolution?: import('@/types/chat').ApiAskResponse['resolution'];
+  mapIntent?: import('@/types/chat').ChatbotMapIntent | null;
+  resultPackage?: import('@/types/chat').ResultPackage;
+  contract?: import('@/types/chat').QueryContract;
+  pipelineTrace?: import('@/types/chat').PipelineTrace;
+  quality?: import('@/types/chat').PipelineQuality;
   error?: string;
 }
 

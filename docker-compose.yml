@@ -1,27 +1,26 @@
 services:
   mop-agent:
-    build: .
-    container_name: mop-agent
+    build:
+      context: .
+    image: mop-agent:latest
     restart: unless-stopped
-    ports:
-      - "${PORT:-8000}:8000"
-    env_file:
-      - .env
     environment:
-      - SQLITE_DB_PATH=/app/data/runtime/mop.sqlite3
-      - DUCKDB_PATH=/app/data/runtime/mop.duckdb
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
-      - TRUSTED_HOSTS=${TRUSTED_HOSTS:-*}
+      APP_VERSION: ${APP_VERSION:-production}
+      JWT_SECRET: ${JWT_SECRET:-change-me-before-public-use}
+      JWT_EXPIRY_SECONDS: ${JWT_EXPIRY_SECONDS:-86400}
+      SQLITE_DB_PATH: /app/data/runtime/mop.sqlite3
+      DUCKDB_PATH: /app/data/runtime/mop.duckdb
+      MAX_RETURN_ROWS: ${MAX_RETURN_ROWS:-250}
+      QUERY_TIMEOUT_SECONDS: ${QUERY_TIMEOUT_SECONDS:-15}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1}
+      ASSISTANT_ROUTER_MODE: ${ASSISTANT_ROUTER_MODE:-local}
+      ASSISTANT_ROUTER_MODEL: ${ASSISTANT_ROUTER_MODEL:-gpt-4.1-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "127.0.0.1:${MOP_AGENT_PORT:-8000}:8000"
     volumes:
-      # Persist SQLite database and query logs across restarts
-      - mop-data:/app/data/runtime
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      - mop_agent_runtime:/app/data/runtime
 
 volumes:
-  mop-data:
-    driver: local
+  mop_agent_runtime:

@@ -2,100 +2,34 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
-  # ── Backend: Python unit tests ──────────────────────────────────────────────
   backend:
-    name: Backend tests
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+      - run: python -m app.evals.run_evals
+      - run: python -m app.semantic.audit --format json
 
-      - name: Install Python dependencies
-        run: pip install --no-cache-dir -r requirements.txt
-
-      - name: Run unit tests
-        env:
-          # Dummy key — prevents LLM calls during unit tests
-          DEEPSEEK_API_KEY: "ci-dummy-key"
-        run: python -m pytest tests/test_unit_backend.py -v --tb=short
-
-  # ── Frontend: TypeScript check + Vite build ─────────────────────────────────
   frontend:
-    name: Frontend build
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: frontend
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Install npm dependencies
-        run: npm ci --no-audit --no-fund
-
-      - name: TypeScript check
-        run: npm run typecheck
-
-      - name: Vite build
-        env:
-          # Dummy backend URL for build-time check — not used at runtime
-          VITE_API_BASE_URL: "https://example.com"
-        run: npm run build
-
-  # ── Docker build smoke test ──────────────────────────────────────────────────
-  docker:
-    name: Docker build
-    runs-on: ubuntu-latest
-    # Only run on main branch pushes (not every PR) — saves CI minutes
-    if: github.ref == 'refs/heads/main'
-    needs: [backend, frontend]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build Docker image
-        run: docker build -t mop-agent:ci .
-
-      - name: Smoke test health endpoint
-        run: |
-          docker run -d --name mop-ci \
-            -p 8000:8000 \
-            -e DEEPSEEK_API_KEY=ci-dummy \
-            -e JWT_SECRET=ci-secret \
-            mop-agent:ci
-          # Wait for startup
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:8000/health; then
-              echo "Health check passed"
-              break
-            fi
-            if [ $i -eq 20 ]; then
-              echo "Health check failed"
-              docker logs mop-ci
-              exit 1
-            fi
-            sleep 3
-          done
-
-      - name: Clean up
-        if: always()
-        run: docker rm -f mop-ci || true
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend

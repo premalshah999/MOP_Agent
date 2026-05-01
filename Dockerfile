@@ -1,54 +1,40 @@
-# ── Stage 1: Build frontend ──
-FROM node:20-slim AS frontend-build
+FROM node:22-bookworm-slim AS frontend-build
+
 WORKDIR /app/frontend
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci --no-audit --no-fund
+COPY frontend/package*.json ./
+RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# ── Stage 2: Python backend ──
-FROM python:3.12-slim AS production
+
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 
-# System deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Python deps
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt ./
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
 
-# App code
-COPY app/ app/
-COPY data/boundaries/ data/boundaries/
-COPY data/schema/ data/schema/
-COPY data/parquet/ data/parquet/
-COPY scripts/ scripts/
+COPY app ./app
+COPY data/schema ./data/schema
+COPY data/parquet ./data/parquet
+COPY data/boundaries ./data/boundaries
+COPY data/uploads ./data/uploads
+COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
-# Built frontend from stage 1
-COPY --from=frontend-build /app/frontend/dist frontend/dist
-
-# Runtime directories
-RUN mkdir -p data/runtime
-
-# Non-root user
-RUN groupadd -r mop && useradd -r -g mop -s /bin/false mop
-RUN chown -R mop:mop /app/data
-USER mop
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+RUN mkdir -p /app/data/runtime
 
 EXPOSE 8000
 
-# Gunicorn with uvicorn workers for production
-CMD ["python", "-m", "uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--workers", "1", \
-     "--log-level", "info", \
-     "--access-log", \
-     "--proxy-headers", \
-     "--forwarded-allow-ips", "*"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8000/health >/dev/null || exit 1
+
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -31,6 +31,15 @@ function toMessage(api: ApiMessage): ChatMessage {
     sqlQuery: api.sqlQuery,
     data: api.data,
     rowCount: api.rowCount,
+    chart: api.chart,
+    charts: (api as ApiMessage & { charts?: ChatMessage['charts'] }).charts,
+    evidence: api.evidence,
+    resolution: api.resolution,
+    mapIntent: api.mapIntent ?? undefined,
+    resultPackage: api.resultPackage,
+    contract: api.contract,
+    pipelineTrace: api.pipelineTrace,
+    quality: api.quality,
     error: api.error,
   };
 }

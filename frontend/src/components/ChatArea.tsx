@@ -108,8 +108,15 @@ export function ChatArea({
         data: response.data ?? [],
         rowCount: response.row_count ?? 0,
         chart: response.chart ?? undefined,
+        charts: response.charts ?? undefined,
+        evidence: response.evidence ?? undefined,
+        resolution: response.resolution ?? undefined,
         error: response.error ?? undefined,
         mapIntent: response.mapIntent ?? undefined,
+        resultPackage: response.resultPackage,
+        contract: response.contract,
+        pipelineTrace: response.pipelineTrace,
+        quality: response.quality,
       };
 
       onMessagesChange(threadId, [...updatedNext, assistantMsg]);

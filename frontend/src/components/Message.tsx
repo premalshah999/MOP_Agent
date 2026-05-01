@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { lazy, Suspense, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatMessage } from '@/types/chat';
+import type { ChatMessage, EvidenceBlock, EvidenceCard, EvidenceSection } from '@/types/chat';
 import type { ReactNode } from 'react';
 import { ChatbotMapButton } from './ChatbotMapButton';
 
@@ -59,12 +59,26 @@ function Md({ content, tone }: { content: string; tone: 'user' | 'assistant' }) 
       remarkPlugins={[remarkGfm]}
       components={{
         p: ({ children }) => <p className={`m-0 text-[14px] leading-7 ${cls}`}>{children}</p>,
+        h1: ({ children }) => <h1 className={`m-0 text-[18px] font-semibold leading-7 ${cls}`}>{children}</h1>,
+        h2: ({ children }) => <h2 className={`m-0 text-[16px] font-semibold leading-7 ${cls}`}>{children}</h2>,
+        h3: ({ children }) => <h3 className={`m-0 text-[14px] font-semibold leading-7 ${cls}`}>{children}</h3>,
         strong: ({ children }) => <strong className={`font-semibold ${cls}`}>{children}</strong>,
         em: ({ children }) => <em className={`italic ${m}`}>{children}</em>,
         ul: ({ children }) => <ul className={`m-0 list-disc space-y-1.5 pl-5 text-[14px] leading-7 ${cls}`}>{children}</ul>,
         ol: ({ children }) => <ol className={`m-0 list-decimal space-y-1.5 pl-5 text-[14px] leading-7 ${cls}`}>{children}</ol>,
         li: ({ children }) => <li className={cls}>{children}</li>,
         code: ({ children }) => <code className={`bg-[var(--surface-2)] px-1 py-0.5 font-mono text-[0.9em] ${cls}`}>{children}</code>,
+        table: ({ children }) => (
+          <div className="overflow-x-auto border border-[var(--line)]">
+            <table className={`w-full border-collapse text-left text-[13px] leading-6 ${cls}`}>{children}</table>
+          </div>
+        ),
+        th: ({ children }) => (
+          <th className="border-b border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+            {children}
+          </th>
+        ),
+        td: ({ children }) => <td className="border-b border-[var(--line)] px-3 py-2 align-top">{children}</td>,
       }}
     >
       {toMd(content)}
@@ -81,11 +95,13 @@ interface MessageProps extends ChatMessage {
   datasetId?: string;
 }
 
-export function Message({ role, content, sqlQuery, data, rowCount, chart, error, ts, mapIntent, datasetId, onOpenDetail, activeDetailTab }: MessageProps) {
+export function Message({ role, content, sqlQuery, data, rowCount, chart, charts, evidence, resolution, error, ts, mapIntent, datasetId, onOpenDetail, activeDetailTab }: MessageProps) {
   const rows = data ?? [];
   const hasSql = Boolean(sqlQuery);
   const hasData = rows.length > 0;
   const hasChart = Boolean(chart);
+  const chartBlocks = charts ?? [];
+  const hasChartBlocks = chartBlocks.length > 0;
   const [mapOpen, setMapOpen] = useState(false);
   const effectiveMapIntent = mapIntent ?? null;
   const hasMap = Boolean(effectiveMapIntent?.enabled && effectiveMapIntent.mapType !== 'none' && !error);
@@ -142,8 +158,34 @@ export function Message({ role, content, sqlQuery, data, rowCount, chart, error,
         <Md content={content} tone="assistant" />
       </div>
 
+      {resolution && resolution !== 'answered' && (
+        <div className="mt-3 border border-[var(--line)] bg-[var(--surface)] px-4 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--muted)]">
+          {resolution === 'partially_answered' ? 'Partial coverage' : resolution === 'needs_clarification' ? 'Needs clarification' : resolution}
+        </div>
+      )}
+
+      {evidence && <EvidencePanel evidence={evidence} />}
+
       {/* Inline chart */}
-      {hasChart && (
+      {hasChartBlocks && (
+        <div className="space-y-3">
+          {chartBlocks.map((block, index) => (
+            <div key={`${block.title}-${index}`} className="space-y-2">
+              <div className="space-y-0.5">
+                <h4 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+                  {block.title}
+                </h4>
+                {block.subtitle && <p className="text-[11px] text-[var(--muted-2)]">{block.subtitle}</p>}
+              </div>
+              <Suspense fallback={<div className="h-32 animate-pulse rounded-lg bg-[var(--surface-2)]" />}>
+                <VegaChart spec={block.spec} />
+              </Suspense>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!hasChartBlocks && hasChart && (
         <Suspense fallback={<div className="mt-3 h-32 animate-pulse rounded-lg bg-[var(--surface-2)]" />}>
           <VegaChart spec={chart!} />
         </Suspense>
@@ -165,6 +207,89 @@ export function Message({ role, content, sqlQuery, data, rowCount, chart, error,
         </Suspense>
       )}
     </motion.div>
+  );
+}
+
+function EvidencePanel({ evidence }: { evidence: EvidenceBlock }) {
+  const cards = evidence.cards ?? [];
+  const sections = evidence.sections ?? [];
+  if (cards.length === 0 && sections.length === 0 && !evidence.note) return null;
+
+  return (
+    <div className="mt-4 space-y-3">
+      {cards.length > 0 && (
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {cards.map((card, index) => (
+            <EvidenceCardView key={`${card.label}-${index}`} card={card} />
+          ))}
+        </div>
+      )}
+      {sections.length > 0 && (
+        <div className="grid gap-3">
+          {sections.map((section, index) => (
+            <EvidenceSectionView key={`${section.title}-${index}`} section={section} />
+          ))}
+        </div>
+      )}
+      {evidence.note && (
+        <div className="border border-[var(--line)] bg-[var(--surface)] px-4 py-3 text-[12px] leading-6 text-[var(--muted)]">
+          {evidence.note}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EvidenceCardView({ card }: { card: EvidenceCard }) {
+  return (
+    <div className="border border-[var(--line)] bg-[var(--surface)] px-4 py-3">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{card.label}</div>
+      <div className="mt-1 text-[20px] font-semibold tracking-tight text-[var(--ink)]">{card.value}</div>
+      {card.meta && <div className="mt-1 text-[11px] text-[var(--muted-2)]">{card.meta}</div>}
+    </div>
+  );
+}
+
+function EvidenceSectionView({ section }: { section: EvidenceSection }) {
+  const cards = section.cards ?? [];
+  const items = section.items ?? [];
+  const rows = section.rows ?? [];
+  return (
+    <section className="border border-[var(--line)] bg-[var(--surface)] px-4 py-4">
+      <div className="space-y-0.5">
+        <h4 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{section.title}</h4>
+        {section.subtitle && <p className="text-[11px] text-[var(--muted-2)]">{section.subtitle}</p>}
+      </div>
+      {cards.length > 0 && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {cards.map((card, index) => (
+            <EvidenceCardView key={`${section.title}-${card.label}-${index}`} card={card} />
+          ))}
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div className="mt-3 divide-y divide-[var(--line)] border-y border-[var(--line)]">
+          {rows.map((row, index) => (
+            <div key={`${section.title}-${row.label}-${index}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 py-2.5">
+              <div className="min-w-0">
+                <div className="truncate text-[13px] font-medium leading-6 text-[var(--ink)]">{row.label}</div>
+                {row.meta && <div className="text-[11px] text-[var(--muted-2)]">{row.meta}</div>}
+              </div>
+              <div className="text-right text-[13px] font-semibold leading-6 text-[var(--ink)]">{row.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {items.length > 0 && (
+        <ul className="mt-3 space-y-1.5 text-[13px] leading-6 text-[var(--ink)]">
+          {items.map((item, index) => (
+            <li key={`${section.title}-${index}`} className="border-t border-[var(--line)] pt-2 first:border-t-0 first:pt-0">
+              {item}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

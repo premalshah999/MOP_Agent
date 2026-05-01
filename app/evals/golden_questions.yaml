@@ -1,0 +1,327 @@
+- id: q001
+  question: top 10 counties in maryland with maximum funding
+  expected_intent: AGGREGATION
+  expected_dataset: contract_county
+  expected_metric: total_federal_funding
+  checks:
+    - sql_executes
+    - uses_correct_metric
+    - applies_state_filter
+    - answer_contains_ranking
+
+- id: q002
+  question: who are you?
+  expected_intent: ASSISTANT_HELP
+  expected_dataset: null
+  expected_metric: null
+  checks:
+    - no_sql
+    - identity_answer
+
+- id: q003
+  question: top 5 states by poverty rate
+  expected_intent: AGGREGATION
+  expected_dataset: acs_state
+  expected_metric: poverty_rate
+  checks:
+    - sql_executes
+    - uses_correct_metric
+
+- id: q004
+  question: top 10 states by debt ratio
+  expected_intent: AGGREGATION
+  expected_dataset: gov_state
+  expected_metric: debt_ratio
+  checks:
+    - sql_executes
+    - uses_correct_metric
+
+- id: q005
+  question: top 15 states by financial literacy
+  expected_intent: AGGREGATION
+  expected_dataset: finra_state
+  expected_metric: financial_literacy
+  checks:
+    - sql_executes
+    - uses_correct_metric
+
+- id: q006
+  question: top counties with maximum crime
+  expected_intent: UNANSWERABLE
+  expected_dataset: null
+  expected_metric: null
+  checks:
+    - no_sql
+    - unsupported_metric
+
+- id: q007
+  question: How much federal money goes to Maryland?
+  expected_intent: AMBIGUOUS
+  expected_dataset: null
+  expected_metric: null
+  checks:
+    - no_sql
+    - clarification
+
+- id: q008
+  question: grants in maryland
+  expected_intent: DIRECT_LOOKUP
+  expected_dataset: contract_state
+  expected_metric: grants
+  checks:
+    - sql_executes
+    - applies_state_filter
+
+- id: q009
+  question: compare Maryland vs Virginia on grants
+  expected_intent: COMPARISON
+  expected_dataset: contract_state
+  expected_metric: grants
+  checks:
+    - sql_executes
+    - comparison_rows
+
+- id: q010
+  question: which agencies provide the most grants to Maryland
+  expected_intent: AGGREGATION
+  expected_dataset: spending_state_agency
+  expected_metric: grants
+  checks:
+    - sql_executes
+    - agency_breakout
+
+- id: q011
+  question: subcontract inflow to Maryland
+  expected_intent: DIRECT_LOOKUP
+  expected_dataset: state_flow
+  expected_metric: subaward_amount
+  checks:
+    - sql_executes
+    - flow_result
+
+- id: q012
+  question: trend financial literacy by year
+  expected_intent: TREND
+  expected_dataset: finra_state
+  expected_metric: financial_literacy
+  checks:
+    - sql_executes
+    - trend_rows
+
+- id: q013
+  question: compare Maryland vs Virginia on poverty
+  expected_intent: COMPARISON
+  expected_dataset: acs_state
+  expected_metric: poverty_rate
+  checks:
+    - sql_executes
+    - uses_correct_metric
+
+- id: q014
+  question: top 10 counties in Maryland by liabilities per capita
+  expected_intent: AGGREGATION
+  expected_dataset: gov_county
+  expected_metric: liabilities_per_capita
+  checks:
+    - sql_executes
+    - no_year_filter
+
+- id: q015
+  question: what years are available for FINRA county data?
+  expected_intent: METRIC_DEFINITION
+  expected_dataset: null
+  expected_metric: null
+  checks:
+    - no_sql
+    - metadata_answer
+
+- id: q016
+  question: why did financial literacy change over time?
+  expected_intent: ROOT_CAUSE
+  expected_dataset: finra_state
+  expected_metric: financial_literacy
+  checks:
+    - sql_executes
+    - trend_diagnostic
+
+- id: q017
+  question: how can you help me?
+  expected_intent: ASSISTANT_HELP
+  expected_dataset: null
+  expected_metric: null
+  checks:
+    - no_sql
+    - assistant_help
+
+- id: q018
+  question: what kind of questions can I ask?
+  expected_intent: ASSISTANT_HELP
+  expected_dataset: null
+  expected_metric: null
+  checks:
+    - no_sql
+    - assistant_help
+
+- id: q019
+  question: what data do you have?
+  expected_intent: DATASET_DISCOVERY
+  expected_dataset: null
+  expected_metric: null
+  checks:
+    - no_sql
+    - dataset_discovery
+
+- id: q020
+  question: what does grants mean?
+  expected_intent: METRIC_DEFINITION
+  expected_dataset: null
+  expected_metric: null
+  checks:
+    - no_sql
+    - metric_definition
+
+- id: q021
+  question: top asset county in california
+  expected_intent: AGGREGATION
+  expected_dataset: gov_county
+  expected_metric: total_assets
+  checks:
+    - sql_executes
+    - uses_correct_metric
+    - applies_state_filter
+
+- id: q022
+  question: p asset county in california
+  expected_intent: DIRECT_LOOKUP
+  expected_dataset: gov_county
+  expected_metric: total_assets_per_capita
+  checks:
+    - sql_executes
+    - uses_correct_metric
+    - applies_state_filter
+
+- id: q023
+  question: counties in CA with biggest assets
+  expected_intent: AGGREGATION
+  expected_dataset: gov_county
+  expected_metric: total_assets
+  checks:
+    - sql_executes
+    - state_abbreviation
+
+- id: q024
+  question: highest liabilities p/c in md counties
+  expected_intent: AGGREGATION
+  expected_dataset: gov_county
+  expected_metric: liabilities_per_capita
+  checks:
+    - sql_executes
+    - per_capita_shorthand
+
+- id: q025
+  question: top ten states by fin lit
+  expected_intent: AGGREGATION
+  expected_dataset: finra_state
+  expected_metric: financial_literacy
+  checks:
+    - sql_executes
+    - shorthand_metric
+
+- id: q026
+  question: financial stress counties in tx
+  expected_intent: DIRECT_LOOKUP
+  expected_dataset: finra_county
+  expected_metric: financial_constraint
+  checks:
+    - sql_executes
+    - semantic_alias
+
+- id: q027
+  question: top counties in Maryland by college degree
+  expected_intent: AGGREGATION
+  expected_dataset: acs_county
+  expected_metric: bachelors_attainment
+  checks:
+    - sql_executes
+    - semantic_alias
+
+- id: q028
+  question: largest grant money counties in CA
+  expected_intent: AGGREGATION
+  expected_dataset: contract_county
+  expected_metric: grants
+  checks:
+    - sql_executes
+    - semantic_alias
+
+- id: q029
+  question: federal jobs per capita in VA
+  expected_intent: DIRECT_LOOKUP
+  expected_dataset: contract_state
+  expected_metric: employees_per_1000
+  checks:
+    - sql_executes
+    - semantic_alias
+
+- id: q030
+  question: Maryland congressional districts by free cash flow
+  expected_intent: BREAKDOWN
+  expected_dataset: gov_congress
+  expected_metric: free_cash_flow
+  checks:
+    - sql_executes
+    - cash_flow_not_fund_flow
+
+- id: q031
+  question: Where does Maryland rank nationally for debt ratio?
+  expected_intent: AGGREGATION
+  expected_dataset: gov_state
+  expected_metric: debt_ratio
+  checks:
+    - sql_executes
+    - rank_context
+
+- id: q032
+  question: Where does California stand on assets?
+  expected_intent: DIRECT_LOOKUP
+  expected_dataset: gov_state
+  expected_metric: total_assets
+  checks:
+    - sql_executes
+    - rank_context
+
+- id: q033
+  question: rank top 10 counties in maryland based on employment
+  expected_intent: AGGREGATION
+  expected_dataset: contract_county
+  expected_metric: federal_residents
+  checks:
+    - sql_executes
+    - documented_proxy
+
+- id: q034
+  question: rank agencies in Maryland by federal employees
+  expected_intent: AGGREGATION
+  expected_dataset: spending_state_agency
+  expected_metric: employees
+  checks:
+    - sql_executes
+    - agency_breakout
+
+- id: q035
+  question: Where is the maximum asian population?
+  expected_intent: AGGREGATION
+  expected_dataset: acs_state
+  expected_metric: asian_population_count
+  checks:
+    - sql_executes
+    - derived_count_metric
+
+- id: q036
+  question: top states by asian population share
+  expected_intent: AGGREGATION
+  expected_dataset: acs_state
+  expected_metric: asian_share
+  checks:
+    - sql_executes
+    - share_metric

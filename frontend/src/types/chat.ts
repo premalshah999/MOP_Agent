@@ -18,11 +18,77 @@ export interface ApiAskResponse {
   row_count?: number;
   error?: string;
   chart?: Record<string, unknown>;
+  charts?: ChartBlock[];
+  evidence?: EvidenceBlock;
+  resolution?: 'answered' | 'answered_with_assumptions' | 'partially_answered' | 'needs_clarification' | 'unsupported';
   mapIntent?: ChatbotMapIntent | null;
+  resultPackage?: ResultPackage;
+  contract?: QueryContract;
+  pipelineTrace?: PipelineTrace;
+  quality?: PipelineQuality;
   thread_id?: string;
   user_message_id?: string;
   assistant_message_id?: string;
   request_id?: string;
+}
+
+export interface QueryContract {
+  contract_type?: string | null;
+  family?: string | null;
+  metric?: string | null;
+  unit?: string | null;
+  geography_level?: string | null;
+  year?: string | number | null;
+  focus_state?: string | null;
+  focus_entity?: string | null;
+  compare_entities?: string[];
+  sort_direction?: string | null;
+  top_k?: number | null;
+  tables?: string[];
+  supported?: boolean;
+  missing_slots?: string[];
+  assumptions?: string[];
+  validation_message?: string | null;
+}
+
+export interface PipelineStage {
+  name: string;
+  status: string;
+  detail?: string;
+  data?: Record<string, unknown>;
+}
+
+export interface PipelineTrace {
+  version: string;
+  stages: PipelineStage[];
+  prompt_profile?: Record<string, unknown>;
+  visual_decision?: Record<string, unknown>;
+}
+
+export interface PipelineQuality {
+  status: 'ok' | 'warning';
+  warnings: string[];
+}
+
+export interface ResultPackage {
+  status?: string;
+  contract_type?: string | null;
+  family?: string | null;
+  metric?: string | null;
+  unit?: string | null;
+  scope?: Record<string, unknown>;
+  assumptions?: string[];
+  sql?: string | null;
+  rows?: Record<string, unknown>[];
+  statistics?: Record<string, unknown>;
+  ranking_context?: Record<string, unknown> | null;
+  methodology_notes?: string[];
+  map_intent?: ChatbotMapIntent | null;
+  chart_intent?: Record<string, unknown>;
+  alternatives?: Record<string, unknown>[];
+  contract?: QueryContract;
+  pipeline?: PipelineTrace;
+  quality?: PipelineQuality;
 }
 
 export interface HealthSummary {
@@ -33,6 +99,18 @@ export interface HealthSummary {
     manifest_present?: boolean;
     registered_table_count?: number;
     frontend_built?: boolean;
+    pipeline_ready?: boolean;
+  };
+  pipeline?: {
+    status?: string;
+    version?: string;
+    required_table_count?: number;
+    manifest_table_count?: number;
+    registered_table_count?: number | null;
+    missing_required_manifest_tables?: string[];
+    missing_required_registered_tables?: string[];
+    documented_not_loaded_tables?: string[];
+    checks?: Record<string, boolean>;
   };
 }
 
@@ -45,8 +123,41 @@ export interface ChatMessage {
   data?: Record<string, unknown>[];
   rowCount?: number;
   chart?: Record<string, unknown>;
+  charts?: ChartBlock[];
+  evidence?: EvidenceBlock;
+  resolution?: 'answered' | 'answered_with_assumptions' | 'partially_answered' | 'needs_clarification' | 'unsupported';
   error?: string | null;
   mapIntent?: ChatbotMapIntent | null;
+  resultPackage?: ResultPackage;
+  contract?: QueryContract;
+  pipelineTrace?: PipelineTrace;
+  quality?: PipelineQuality;
+}
+
+export interface ChartBlock {
+  title: string;
+  subtitle?: string;
+  spec: Record<string, unknown>;
+}
+
+export interface EvidenceCard {
+  label: string;
+  value: string;
+  meta?: string;
+}
+
+export interface EvidenceSection {
+  title: string;
+  subtitle?: string;
+  cards?: EvidenceCard[];
+  items?: string[];
+  rows?: EvidenceCard[];
+}
+
+export interface EvidenceBlock {
+  cards?: EvidenceCard[];
+  sections?: EvidenceSection[];
+  note?: string;
 }
 
 export interface ChatThread {

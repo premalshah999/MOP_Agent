@@ -393,7 +393,7 @@ function detectDescriptor(rows: DataRow[]): MapDescriptor | null {
       return;
     }
 
-    const county = pickFirstValue(row, ['county', 'county_name', 'rcpt_county_name', 'subawardee_county_name']);
+    const county = pickFirstValue(row, ['county', 'county_name', 'rcpt_county_name', 'subawardee_county_name', 'label']);
     const countyState = toStateAbbr(row.state) ?? toStateAbbr(row.state_abbr) ?? toStateAbbr(row.rcpt_state_name) ?? toStateAbbr(row.subawardee_state_name);
     if (county && countyState) {
       const k = `${countyState}:${normalizeText(county)}`;
@@ -401,7 +401,7 @@ function detectDescriptor(rows: DataRow[]): MapDescriptor | null {
       return;
     }
 
-    const state = pickFirstValue(row, ['state', 'state_name', 'rcpt_state_name', 'subawardee_state_name']);
+    const state = pickFirstValue(row, ['state', 'state_name', 'rcpt_state_name', 'subawardee_state_name', 'label']);
     const abbr = state ? toStateAbbr(state) : null;
     if (abbr) stateMatches.set(abbr, { key: abbr, label: titleCase(POSTAL_TO_STATE[abbr] ?? abbr), value, stateAbbr: abbr });
   });

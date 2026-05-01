@@ -107,6 +107,7 @@ function rowLabel(row: Record<string, unknown>): string {
   if (typeof row.cd_118 === 'string') return row.cd_118;
   if (typeof row.state === 'string') return prettyText(row.state);
   if (typeof row.agency === 'string') return prettyText(row.agency);
+  if (typeof row.label === 'string') return prettyText(row.label);
   return 'Selected geography';
 }
 

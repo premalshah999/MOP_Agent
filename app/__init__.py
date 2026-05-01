@@ -1,1 +1,0 @@
-# MOP chat agent package
