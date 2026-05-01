@@ -419,6 +419,30 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(definition["contract"]["contract_type"], "METRIC_DEFINITION")
         self.assertIn("sql expression", definition["answer"].lower())
 
+    def test_family_definition_is_metadata_not_sql(self) -> None:
+        result = answer_question("what is FINRA?")
+        self.assertEqual(result["resolution"], "answered")
+        self.assertIsNone(result["sql"])
+        self.assertEqual(result["contract"]["contract_type"], "METRIC_DEFINITION")
+        self.assertIn("finra", result["answer"].lower())
+        self.assertIn("loaded runtime tables", result["answer"].lower())
+
+    def test_complete_metric_question_after_help_is_not_forced_into_followup(self) -> None:
+        history = [
+            {"role": "user", "content": "hi, how can you help?"},
+            {
+                "role": "assistant",
+                "content": "I can help with rankings, comparisons, metadata, maps, and charts.",
+                "contract": {"contract_type": "ASSISTANT_HELP"},
+            },
+        ]
+        result = answer_question("maximum asian population by count", history)
+        self.assertEqual(result["resolution"], "answered")
+        self.assertEqual(result["contract"]["family"], "acs_state")
+        self.assertEqual(result["contract"]["metric"], "asian_population_count")
+        self.assertEqual(result["contract"]["operation"], "ranking")
+        self.assertEqual(result["row_count"], 10)
+
     def test_clarification_response_resolves_prior_ambiguity_with_scope(self) -> None:
         first = answer_question("How much federal money goes to Maryland?")
         history = [

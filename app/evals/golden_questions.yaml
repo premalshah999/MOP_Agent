@@ -344,3 +344,22 @@
   checks:
     - sql_executes
     - scoped_lookup_not_top_one
+
+- id: q039
+  question: maximum asian population by count
+  expected_intent: AGGREGATION
+  expected_dataset: acs_state
+  expected_metric: asian_population_count
+  checks:
+    - sql_executes
+    - complete_question_not_followup
+    - derived_count_metric
+
+- id: q040
+  question: what is FINRA?
+  expected_intent: METRIC_DEFINITION
+  expected_dataset:
+  expected_metric:
+  checks:
+    - no_sql
+    - metadata_definition

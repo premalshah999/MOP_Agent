@@ -635,7 +635,15 @@ def create_query_plan(
         not _has_domain_signal(question) or looks_like_metric_variant_follow_up(question) or scope_correction
     )
     shape_question = f"{inherited_question} {question}" if should_use_inherited_shape else question
-    if intent_payload.get("mode") == "FOLLOW_UP_ANALYTICS" and not inherited_metric and (not _has_domain_signal(question) or looks_like_metric_variant_follow_up(question)):
+    standalone_dataset = _choose_dataset(question, context, intent)
+    standalone_metric = _choose_metric(standalone_dataset, question, context)
+    standalone_resolves = bool(standalone_dataset and standalone_metric)
+    if (
+        intent_payload.get("mode") == "FOLLOW_UP_ANALYTICS"
+        and not inherited_metric
+        and not standalone_resolves
+        and (not _has_domain_signal(question) or looks_like_metric_variant_follow_up(question))
+    ):
         return QueryPlan(
             interpreted_question=question,
             intent="AMBIGUOUS",

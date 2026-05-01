@@ -5,6 +5,24 @@ import re
 from app.schemas.query_plan import Intent
 
 
+_METADATA_SUBJECT_TERMS = (
+    "finra", "acs", "census", "government finance", "federal spending",
+    "federal funding", "fund flow", "fund-flow", "subaward", "metadata",
+)
+
+
+def _is_metadata_subject_question(q: str) -> bool:
+    starts_like_definition = bool(re.match(r"^(what is|what are|what's|explain|tell me about)\b", q))
+    has_runtime_scope = any(
+        term in q
+        for term in (
+            " in ", " for ", " at ", "county", "counties", "state", "states", "district",
+            "maryland", "california", "virginia", "texas", "202", "top", "rank", "maximum", "minimum",
+        )
+    )
+    return starts_like_definition and not has_runtime_scope and any(term in q for term in _METADATA_SUBJECT_TERMS)
+
+
 def classify_intent(question: str) -> dict:
     q = question.strip().lower()
     if not q:
@@ -14,6 +32,8 @@ def classify_intent(question: str) -> dict:
         return {"intent": "DEFINITION", "requires_sql": False, "requires_multiple_queries": False, "reason": "Assistant identity/help question."}
     if any(phrase in q for phrase in ("what years", "which years", "available years", "what metrics", "available metrics", "what datasets")):
         return {"intent": "DEFINITION", "requires_sql": False, "requires_multiple_queries": False, "reason": "Metadata availability request."}
+    if _is_metadata_subject_question(q):
+        return {"intent": "DEFINITION", "requires_sql": False, "requires_multiple_queries": False, "reason": "Dataset or metadata definition request."}
     if any(phrase in q for phrase in ("what does", "define", "definition of", "what is the meaning")):
         return {"intent": "DEFINITION", "requires_sql": False, "requires_multiple_queries": False, "reason": "Definition request."}
     if any(phrase in q for phrase in ("why did", "why has", "root cause", "what drove", "driver")):

@@ -5,6 +5,99 @@ from app.schemas.final_answer import FinalAnswer
 from app.semantic.registry import load_registry
 
 
+_FAMILY_DEFINITIONS = {
+    "finra": {
+        "title": "FINRA financial capability",
+        "summary": (
+            "FINRA refers here to the FINRA Investor Education Foundation financial capability data loaded into this assistant. "
+            "It is used for state, county, and congressional-district indicators such as financial literacy, financial satisfaction, "
+            "financial constraint, alternative financing, and risk aversion."
+        ),
+        "family": "finra",
+    },
+    "acs": {
+        "title": "ACS / Census demographics",
+        "summary": (
+            "ACS means American Community Survey data. In this assistant, ACS tables cover demographics and socioeconomic indicators "
+            "such as population, race and ethnicity shares/counts, poverty, household income, education, homeownership, and renters."
+        ),
+        "family": "acs",
+    },
+    "census": {
+        "title": "ACS / Census demographics",
+        "summary": (
+            "Census questions in this assistant are answered from the processed ACS demographic tables, not from live Census APIs."
+        ),
+        "family": "acs",
+    },
+    "government finance": {
+        "title": "Government finance",
+        "summary": (
+            "Government finance tables describe fiscal-position metrics such as assets, liabilities, revenue, expenses, debt ratio, "
+            "current ratio, pension liability, net position, and free cash flow."
+        ),
+        "family": "government_finance",
+    },
+    "federal spending": {
+        "title": "Federal spending / agency breakdown",
+        "summary": (
+            "Federal spending tables summarize contracts, grants, direct payments, resident wages, employees, and related per-1,000 metrics. "
+            "The agency table can break those measures down by department or agency."
+        ),
+        "family": "federal_spending",
+    },
+    "federal funding": {
+        "title": "Federal funding by geography",
+        "summary": (
+            "Federal funding tables summarize geography-level contracts, grants, resident wages, direct payments, federal residents, "
+            "and employment-related measures where available."
+        ),
+        "family": "federal_funding",
+    },
+    "fund flow": {
+        "title": "Subaward fund flow",
+        "summary": (
+            "Fund flow means directional subaward or subcontract movement between places. It is different from total federal spending received by a geography."
+        ),
+        "family": "fund_flow",
+    },
+}
+
+
+def _family_definition_answer(q: str) -> FinalAnswer | None:
+    registry = load_registry()
+    matched = next((definition for term, definition in _FAMILY_DEFINITIONS.items() if term in q), None)
+    if not matched:
+        return None
+    datasets = [dataset for dataset in registry.datasets.values() if dataset.family == matched["family"]]
+    metrics = sorted({metric.label for dataset in datasets for metric in dataset.metrics.values()})
+    periods = []
+    for dataset in datasets:
+        if dataset.available_years:
+            periods.append(f"{dataset.id}: {', '.join(str(item) for item in dataset.available_years)}")
+    caveats = []
+    for dataset in datasets:
+        for caveat in dataset.caveats:
+            if caveat not in caveats:
+                caveats.append(caveat)
+    lines = [
+        f"**{matched['title']}**",
+        "",
+        matched["summary"],
+        "",
+        "Loaded runtime tables:",
+        *[f"- `{dataset.id}` ({dataset.geography})" for dataset in datasets],
+        "",
+        "Common metrics I can answer with:",
+        "- " + ", ".join(metrics[:10]) if metrics else "- Metadata only.",
+    ]
+    if periods:
+        lines.extend(["", "Available periods:", *[f"- {item}" for item in periods]])
+    if caveats:
+        lines.extend(["", "Important caveats:", *[f"- {item}" for item in caveats[:3]]])
+    return FinalAnswer(answer="\n".join(lines), confidence="high", caveats=caveats[:3])
+
+
 def assistant_help_answer() -> FinalAnswer:
     lines = [
         f"I’m the {PROFILE.name}.",
@@ -70,6 +163,9 @@ def dataset_discovery_answer() -> FinalAnswer:
 def metric_definition_answer(question: str) -> FinalAnswer:
     q = question.lower()
     registry = load_registry()
+    family_answer = _family_definition_answer(q)
+    if family_answer:
+        return family_answer
     matches = []
     for dataset in registry.datasets.values():
         for metric in dataset.metrics.values():
