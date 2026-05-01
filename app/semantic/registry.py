@@ -264,7 +264,7 @@ def _contract_metrics(columns: list[str]) -> dict[str, MetricDefinition]:
             default_for=["funding per 1000", "federal funding per 1000", "funding per resident"],
         )
     metric_specs = {
-        "Contracts": ("contracts", "Contracts", "dollars", ["contracts", "contract", "contract funding", "procurement"]),
+        "Contracts": ("contracts", "Contracts", "dollars", ["contracts", "contract", "contract funding", "procurement", "deals", "deal", "biggest deals", "awards", "award obligations"]),
         "Grants": ("grants", "Grants", "dollars", ["grants", "grant", "grant funding", "grant money"]),
         "Resident Wage": ("resident_wage", "Resident wage", "dollars", ["resident wage", "resident wages", "wages", "payroll"]),
         "Direct Payments": ("direct_payments", "Direct payments", "dollars", ["direct payments", "direct payment", "payments", "benefits"]),

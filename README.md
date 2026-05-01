@@ -127,7 +127,7 @@ The controlled slice now supports:
 The assistant router can run in two modes:
 
 - `ASSISTANT_ROUTER_MODE=local`: offline semantic router used by tests and local development.
-- `ASSISTANT_ROUTER_MODE=llm`: optional LLM router through `OPENAI_API_KEY`, with local fallback if the model call is unavailable.
+- `ASSISTANT_ROUTER_MODE=llm`: optional LLM router through `DEEPSEEK_API_KEY` and the OpenAI-compatible `ASSISTANT_ROUTER_BASE_URL`, with local fallback if the model call is unavailable.
 
 ```text
 top 10 counties in maryland with maximum funding

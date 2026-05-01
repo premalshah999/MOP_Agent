@@ -26,16 +26,30 @@ _DEFINITION_PATTERNS = (
 )
 _VISUAL_PATTERNS = ("map", "chart", "plot", "visualize", "show that", "graph")
 _OUT_OF_SCOPE_PATTERNS = ("joke", "poem", "recipe", "weather", "sports", "stock price")
+_FRUSTRATION_PATTERNS = (
+    "are you crazy", "are you crasy", "you are wrong", "that's wrong", "that is wrong",
+    "not what i asked", "this is bad", "terrible", "shitty", "stupid", "wtf",
+)
 _CLARIFICATION_PATTERNS = (
     "first", "first one", "the first one", "option one", "1", "second", "the second one", "third",
     "total federal funding received by the geography", "subcontract", "fund-flow", "specific channel",
 )
 
 
+def _chat_completion_endpoint(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    return f"{base}/chat/completions"
+
+
 def _route_with_llm(question: str, state: ConversationState) -> RouterOutput | None:
-    api_key = os.getenv("OPENAI_API_KEY")
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+    api_key = deepseek_key or os.getenv("OPENAI_API_KEY")
     if not api_key or os.getenv("ASSISTANT_ROUTER_MODE", "local").lower() != "llm":
         return None
+    base_url = os.getenv("ASSISTANT_ROUTER_BASE_URL") or ("https://api.deepseek.com" if deepseek_key else "https://api.openai.com/v1")
+    model = os.getenv("ASSISTANT_ROUTER_MODEL") or os.getenv("DEEPSEEK_MODEL") or ("deepseek-chat" if deepseek_key else "gpt-4.1-mini")
     prompt = {
         "task": "Classify this user message for a multi-mode public-policy analytics assistant. Return JSON only.",
         "modes": [
@@ -49,6 +63,7 @@ def _route_with_llm(question: str, state: ConversationState) -> RouterOutput | N
             "FOLLOW_UP_ANALYTICS",
             "VISUALIZATION_REQUEST",
             "CLARIFICATION_RESPONSE",
+            "CONVERSATION_REPAIR",
             "OUT_OF_SCOPE",
         ],
         "examples": {
@@ -61,6 +76,8 @@ def _route_with_llm(question: str, state: ConversationState) -> RouterOutput | N
             "why did financial literacy change?": "ROOT_CAUSE_ANALYSIS",
             "the first one": "CLARIFICATION_RESPONSE",
             "show it on a map": "VISUALIZATION_REQUEST",
+            "are you crazy?": "CONVERSATION_REPAIR",
+            "I meant counties, not states": "FOLLOW_UP_ANALYTICS",
         },
         "pending_clarification": bool(state.pending_clarification_question),
         "last_user_question": state.last_user_question,
@@ -79,16 +96,25 @@ def _route_with_llm(question: str, state: ConversationState) -> RouterOutput | N
     }
     body = json.dumps(
         {
-            "model": os.getenv("ASSISTANT_ROUTER_MODEL", "gpt-4.1-mini"),
+            "model": model,
             "temperature": 0,
             "messages": [
-                {"role": "system", "content": "You are a strict analytics assistant router. Return valid JSON only."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict router for a production public-policy analytics assistant. "
+                        "Classify intent, not data. Be typo-tolerant: 'defence' means defense, 'dept' means department, "
+                        "'deals' usually means contract dollars, and misspelled county/state corrections are follow-ups. "
+                        "If the user is frustrated or says the answer was wrong, route to CONVERSATION_REPAIR. "
+                        "Return valid JSON only."
+                    ),
+                },
                 {"role": "user", "content": json.dumps(prompt)},
             ],
         }
     ).encode()
     request = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
+        _chat_completion_endpoint(base_url),
         data=body,
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
         method="POST",
@@ -111,6 +137,8 @@ def route_message(question: str, state: ConversationState) -> RouterOutput:
         return RouterOutput(mode="GENERAL_ASSISTANT", confidence="high", reason="Empty message.")
     if state.pending_clarification_question and any(re.fullmatch(rf".*\b{re.escape(pattern)}\b.*", q) for pattern in _CLARIFICATION_PATTERNS):
         return RouterOutput(mode="CLARIFICATION_RESPONSE", confidence="high", requires_sql=True, is_follow_up=True, reason="Reply resolves a pending clarification.")
+    if any(pattern in q for pattern in _FRUSTRATION_PATTERNS):
+        return RouterOutput(mode="CONVERSATION_REPAIR", confidence="high", requires_sql=False, requires_metadata=True, is_follow_up=True, reason="User is correcting or expressing frustration.")
     if any(pattern in q for pattern in _OUT_OF_SCOPE_PATTERNS):
         return RouterOutput(mode="OUT_OF_SCOPE", confidence="medium", reason="Likely outside the analytics assistant scope.")
     if any(pattern in q for pattern in _HELP_PATTERNS):
@@ -126,7 +154,7 @@ def route_message(question: str, state: ConversationState) -> RouterOutput:
     if state.previous_user_messages and (
         re.match(r"^(what about|how about|and|only|just|compare|versus|vs)\b", q)
         or looks_like_metric_variant_follow_up(q)
-        or any(phrase in q for phrase in ("what you gave", "that was", "instead", "same thing"))
+        or any(phrase in q for phrase in ("what you gave", "that was", "instead", "same thing", "i meant", "not states", "not state", "not counties", "not county", "countis"))
     ):
         return RouterOutput(mode="FOLLOW_UP_ANALYTICS", confidence="high", requires_sql=True, requires_metadata=True, is_follow_up=True, reason="Follow-up wording.")
     if any(phrase in q for phrase in ("compare", " versus ", " vs ", "break down", "breakdown", "by ", "explain")):

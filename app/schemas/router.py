@@ -16,6 +16,7 @@ AssistantMode = Literal[
     "FOLLOW_UP_ANALYTICS",
     "VISUALIZATION_REQUEST",
     "CLARIFICATION_RESPONSE",
+    "CONVERSATION_REPAIR",
     "OUT_OF_SCOPE",
 ]
 
@@ -29,4 +30,3 @@ class RouterOutput(BaseModel):
     needs_clarification: bool = False
     clarification_question: str | None = None
     reason: str = ""
-

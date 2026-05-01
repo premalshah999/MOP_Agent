@@ -115,3 +115,15 @@ def out_of_scope_answer() -> FinalAnswer:
         confidence="high",
     )
 
+
+def conversation_repair_answer() -> FinalAnswer:
+    return FinalAnswer(
+        answer=(
+            "You’re right to call that out. I should not keep running the previous state-level interpretation after you correct the scope.\n\n"
+            "What went wrong: I over-carried the earlier state-level context instead of treating your follow-up as a correction. "
+            "For a correction like “I meant counties in Maryland,” the assistant should rebuild the query with county geography, keep only the still-valid metric concept, and clearly say when it has to use a documented proxy.\n\n"
+            "A better corrected question would be: **rank Maryland counties by employment-related federal presence**. "
+            "Because direct county-level employee counts are not loaded, I should answer with the county-level proxy **Federal residents** and state that assumption up front."
+        ),
+        confidence="high",
+    )

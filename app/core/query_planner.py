@@ -6,13 +6,14 @@ from typing import Any
 from app.core.ambiguity_resolver import resolve_unavailable_metric_proxy
 from app.schemas.query_plan import Filter, QueryPlan, QuerySpec
 from app.schemas.semantic_context import SemanticContext
-from app.semantic.matcher import best_metric_match, normalized_question_tokens
+from app.semantic.matcher import best_metric_match, normalize_text, normalized_question_tokens
 from app.semantic.metric_variants import (
     asks_for_per_capita,
     looks_like_metric_variant_follow_up,
     select_metric_variant,
 )
 from app.semantic.registry import get_dataset, load_registry
+from app.semantic.value_resolver import resolve_dimension_value
 
 
 _STATE_ABBREVIATIONS = {
@@ -39,14 +40,29 @@ _UNSUPPORTED_CONCEPTS = {
     "schools": ["education attainment", "poverty rate", "median household income"],
     "health": ["poverty rate", "financial constraint", "median household income"],
 }
-_FUNDING_TERMS = ("funding", "federal money", "federal spending", "spending", "money", "grant", "grants", "contract", "contracts", "payment", "payments", "wage", "employee", "employees", "jobs", "employment")
+_FUNDING_TERMS = (
+    "funding", "federal money", "federal spending", "spending", "money", "grant", "grants",
+    "contract", "contracts", "procurement", "deal", "deals", "award", "awards", "payment",
+    "payments", "wage", "employee", "employees", "jobs", "employment",
+)
 _FLOW_TERMS = ("subaward", "subawards", "subcontract", "subcontracts", "flow", "flows", "inflow", "outflow")
 _GOVERNMENT_FINANCE_TERMS = (
     "liabilities", "liability", "revenue", "debt", "cash flow", "expenses", "expense",
     "assets", "asset", "pension", "net position",
 )
 def _lower(question: str) -> str:
-    return question.lower().strip()
+    value = question.lower().strip()
+    replacements = {
+        "defence": "defense",
+        "epartment": "department",
+        "dept": "department",
+        "countis": "counties",
+        "countys": "counties",
+        "counites": "counties",
+    }
+    for source, target in replacements.items():
+        value = re.sub(rf"\b{source}\b", target, value)
+    return value
 
 
 def _geo_level(question: str) -> str:
@@ -56,6 +72,23 @@ def _geo_level(question: str) -> str:
     if "congress" in q or "district" in q:
         return "congress"
     return "state"
+
+
+def _has_geo_signal(question: str) -> bool:
+    q = _lower(question)
+    return any(token in q for token in ("county", "counties", "state", "states", "district", "districts", "congress", "congressional"))
+
+
+def _is_scope_correction(question: str) -> bool:
+    q = _lower(question)
+    normalized = normalize_text(question)
+    correction_phrases = (
+        "i meant", "meant", "not state", "not states", "not county", "not counties",
+        "counties not states", "county not state", "states not counties", "state not county",
+    )
+    return any(phrase in q or phrase in normalized for phrase in correction_phrases) or (
+        _has_geo_signal(question) and any(token in q for token in ("instead", "rather"))
+    )
 
 
 def _extract_states(question: str) -> list[str]:
@@ -132,7 +165,8 @@ def _has_domain_signal(question: str) -> bool:
         *_FLOW_TERMS,
         "poverty", "income", "population", "education", "bachelor", "bachelors", "college", "hispanic", "latino", "black", "asian", "white", "homeownership", "renters",
         *_GOVERNMENT_FINANCE_TERMS,
-        "financial literacy", "literacy", "satisfaction", "constraint", "stress", "risk", "finra", "agency", "agencies", "department",
+        "financial literacy", "literacy", "satisfaction", "constraint", "stress", "risk", "finra",
+        "agency", "agencies", "department", "defense", "dod", "deal", "deals", "award", "awards",
     )
     return (
         any(signal in q for signal in signals)
@@ -169,7 +203,13 @@ def _choose_dataset(question: str, context: SemanticContext, intent: str) -> str
         dataset_id = f"{geo}_flow"
         return dataset_id if dataset_id in registry.datasets else None
 
-    if ("agency" in q or "agencies" in q or "department" in q) and any(token in q for token in _FUNDING_TERMS):
+    if (
+        "agency" in q
+        or "agencies" in q
+        or "department" in q
+        or "dod" in q
+        or resolve_dimension_value("spending_state_agency", "agency", question)
+    ) and any(token in q for token in _FUNDING_TERMS):
         return "spending_state_agency"
 
     preferred_prefix = None
@@ -268,7 +308,7 @@ def _unsupported_metric_geo_plan(question: str, dataset_id: str) -> QueryPlan | 
 def _inherit_from_history(question: str, history: list[dict[str, Any]] | None) -> tuple[str | None, str | None, str | None, list[str]]:
     inherited: list[str] = []
     current = question.strip()
-    should_inherit = not _has_domain_signal(question) or looks_like_metric_variant_follow_up(question)
+    should_inherit = not _has_domain_signal(question) or looks_like_metric_variant_follow_up(question) or _is_scope_correction(question)
     history_items = [
         item
         for item in (history or [])
@@ -340,6 +380,16 @@ def _filters_for(dataset_id: str, question: str, *, include_default_year: bool =
         if abbreviation:
             filters.append(Filter(field="congressional_district", operator="LIKE", value=f"{abbreviation}-%"))
             assumptions.append(f"Filtered congressional districts to {states[0]} using the {abbreviation}- district prefix.")
+    if "agency" in dataset.dimensions:
+        agency_match = resolve_dimension_value(dataset_id, "agency", question)
+        if agency_match:
+            agency, score = agency_match
+            filters.append(Filter(field="agency", operator="=", value=agency))
+            assumptions.append(f"Matched the agency wording to `{agency}` from the loaded agency dimension.")
+            if any(term in _lower(question) for term in ("deal", "deals")):
+                assumptions.append(
+                    "Interpreted `deals` as aggregate contract dollars because the loaded data has agency/state contract totals, not individual award-level deal records."
+                )
     if include_default_year and dataset.year_column:
         year = _extract_year(question, dataset_id)
         if year is not None and year != "Fiscal Year 2023":
@@ -372,6 +422,10 @@ def _dimension_for_query(dataset_id: str, question: str, intent: str) -> str:
     return dataset.label_column
 
 
+def _has_filter(filters: list[Filter], field: str) -> bool:
+    return any(filter_.field == field for filter_ in filters)
+
+
 def _should_default_to_ranking(dataset_id: str, question: str, filters: list[Filter], dimension: str) -> bool:
     dataset = get_dataset(dataset_id)
     if not dataset:
@@ -391,11 +445,31 @@ def _should_default_to_ranking(dataset_id: str, question: str, filters: list[Fil
     return asks_for_scoped_geo and dimension_is_place and not lookup_wording
 
 
+def _should_treat_as_scoped_lookup(dataset_id: str, question: str, filters: list[Filter], dimension: str) -> bool:
+    dataset = get_dataset(dataset_id)
+    if not dataset or not filters:
+        return False
+    q = _lower(question)
+    if any(phrase in q for phrase in ("where does", "rank nationally", "among states", "among counties", "among districts")):
+        return False
+    plural_peer_request = (
+        ("counties" in q and dataset.geography == "county")
+        or ("states" in q and dataset.geography == "state")
+        or ("districts" in q and dataset.geography == "congress")
+        or ("agencies" in q and dimension == "agency")
+    )
+    if plural_peer_request:
+        return False
+    return _has_focus_filter(dataset_id, filters, dimension)
+
+
 def _has_focus_filter(dataset_id: str, filters: list[Filter], dimension: str) -> bool:
     dataset = get_dataset(dataset_id)
     if not dataset:
         return False
-    dimension_fields = {dimension, dataset.label_column}
+    dimension_fields = {dimension}
+    if dimension == dataset.label_column:
+        dimension_fields.add(dataset.label_column)
     for dimension_id, definition in dataset.dimensions.items():
         if definition.column == dimension:
             dimension_fields.add(dimension_id)
@@ -451,6 +525,7 @@ def _make_query(
     intent: str,
 ) -> QuerySpec:
     q = _lower(question)
+    limit = _extract_top_k(question) if operation in {"ranking", "breakdown", "flow_ranking"} else None
     return QuerySpec(
         name="primary",
         purpose="Answer the resolved analytical request from the curated dataset.",
@@ -460,7 +535,7 @@ def _make_query(
         dimensions=[dimension],
         filters=filters,
         order="ASC" if any(token in q for token in ("lowest", "minimum", "bottom", "least")) else "DESC",
-        limit=_extract_top_k(question) if operation in {"ranking", "breakdown", "flow_ranking"} or intent in {"AGGREGATION", "BREAKDOWN"} else None,
+        limit=limit,
     )
 
 
@@ -555,7 +630,10 @@ def create_query_plan(
         intent = "DIRECT_LOOKUP"
 
     inherited_dataset, inherited_metric, inherited_question, inherited_assumptions = _inherit_from_history(question, history)
-    should_use_inherited_shape = inherited_question and (not _has_domain_signal(question) or looks_like_metric_variant_follow_up(question))
+    scope_correction = _is_scope_correction(question)
+    should_use_inherited_shape = inherited_question and (
+        not _has_domain_signal(question) or looks_like_metric_variant_follow_up(question) or scope_correction
+    )
     shape_question = f"{inherited_question} {question}" if should_use_inherited_shape else question
     if intent_payload.get("mode") == "FOLLOW_UP_ANALYTICS" and not inherited_metric and (not _has_domain_signal(question) or looks_like_metric_variant_follow_up(question)):
         return QueryPlan(
@@ -570,12 +648,13 @@ def create_query_plan(
             ],
         )
     should_prefer_inherited = not _has_domain_signal(question) or looks_like_metric_variant_follow_up(question)
-    if inherited_dataset and should_prefer_inherited:
+    analysis_question = shape_question if should_use_inherited_shape else question
+    if inherited_dataset and should_prefer_inherited and not scope_correction:
         dataset_id = inherited_dataset
     else:
-        dataset_id = _choose_dataset(question, context, intent) or inherited_dataset
-    current_metric = _choose_metric(dataset_id, question, context)
-    if inherited_metric and should_prefer_inherited:
+        dataset_id = _choose_dataset(analysis_question, context, intent) or inherited_dataset
+    current_metric = _choose_metric(dataset_id, analysis_question, context)
+    if inherited_metric and (should_prefer_inherited or scope_correction):
         metric_id = inherited_metric
     else:
         metric_id = current_metric or inherited_metric
@@ -585,10 +664,22 @@ def create_query_plan(
         dataset_id = dataset_id or f"{_geo_level(question)}_flow"
         metric_id = "subaward_amount"
 
-    if dataset_id and not metric_id:
-        matches_elsewhere = _metric_matches_elsewhere(question)
+    if dataset_id and metric_id and get_dataset(dataset_id) and metric_id not in get_dataset(dataset_id).metrics:
         proxy = resolve_unavailable_metric_proxy(
-            question=question,
+            question=analysis_question,
+            dataset_id=dataset_id,
+            matches_elsewhere=[(inherited_dataset or dataset_id, metric_id, 100.0)],
+        )
+        if proxy:
+            metric_id = proxy.metric_id
+            resolver_assumptions.extend(proxy.assumptions)
+        else:
+            metric_id = None
+
+    if dataset_id and not metric_id:
+        matches_elsewhere = _metric_matches_elsewhere(analysis_question)
+        proxy = resolve_unavailable_metric_proxy(
+            question=analysis_question,
             dataset_id=dataset_id,
             matches_elsewhere=matches_elsewhere,
         )
@@ -599,7 +690,7 @@ def create_query_plan(
         if unsupported_metric_geo:
             return unsupported_metric_geo
 
-    variant_selection = select_metric_variant(get_dataset(dataset_id) if dataset_id else None, metric_id, question)
+    variant_selection = select_metric_variant(get_dataset(dataset_id) if dataset_id else None, metric_id, analysis_question)
     metric_override_assumption: str | None = None
     if variant_selection:
         prior_metric = metric_id
@@ -628,6 +719,10 @@ def create_query_plan(
         include_year = intent not in {"TREND", "ROOT_CAUSE"}
         filters, assumptions = _filters_for(dataset_id, shape_question, include_default_year=include_year)
         dimension = _dimension_for_query(dataset_id, shape_question, intent)
+        if _has_filter(filters, "agency") and "state" in dataset.dimensions and not (
+            "agencies" in _lower(shape_question) or "by agency" in _lower(shape_question)
+        ):
+            dimension = "state"
         operation = "ranking"
         if intent == "ROOT_CAUSE" and dataset.family in {"federal_funding", "federal_spending"}:
             return QueryPlan(
@@ -645,7 +740,9 @@ def create_query_plan(
                     "fund-flow inflow/outflow analysis",
                 ],
             )
-        if intent == "ROOT_CAUSE" and dataset.year_column and len(dataset.available_years) > 2:
+        if _should_treat_as_scoped_lookup(dataset_id, shape_question, filters, dimension):
+            operation = "lookup"
+        elif intent == "ROOT_CAUSE" and dataset.year_column and len(dataset.available_years) > 2:
             operation = "trend"
             dimension = "year"
             assumptions.append("Used a period-over-period diagnostic because root-cause analysis must be grounded in available dimensions.")

@@ -112,6 +112,7 @@ class PlanningTests(unittest.TestCase):
             ("Where is the maximum asian population?", "acs_state", "asian_population_count", "ranking", None),
             ("Where is the maximum asian population based on amount?", "acs_state", "asian_population_count", "ranking", None),
             ("top states by asian population share", "acs_state", "asian_share", "ranking", None),
+            ("epartment of defence biggest deals", "spending_state_agency", "contracts", "ranking", None),
         ]
         for question, family, metric, operation, focus_state in cases:
             with self.subTest(question=question):
@@ -121,6 +122,26 @@ class PlanningTests(unittest.TestCase):
                 self.assertEqual(result["contract"]["metric"], metric)
                 self.assertEqual(result["contract"]["operation"], operation)
                 self.assertEqual(result["contract"]["focus_state"], focus_state)
+
+    def test_department_defense_deals_resolve_to_agency_contract_ranking(self) -> None:
+        result = answer_question("epartment of defence biggest deals")
+        self.assertEqual(result["resolution"], "answered")
+        self.assertEqual(result["contract"]["family"], "spending_state_agency")
+        self.assertEqual(result["contract"]["metric"], "contracts")
+        self.assertEqual(result["contract"]["operation"], "ranking")
+        self.assertEqual(result["row_count"], 10)
+        self.assertIn("Department of Defense", result["answer"])
+        self.assertIn("individual deal", result["answer"].lower())
+
+    def test_single_state_maximum_employment_is_lookup_not_top_one_ranking(self) -> None:
+        result = answer_question("Maximum employment in Maryland")
+        self.assertEqual(result["resolution"], "answered")
+        self.assertEqual(result["contract"]["family"], "contract_state")
+        self.assertEqual(result["contract"]["metric"], "employees")
+        self.assertEqual(result["contract"]["operation"], "lookup")
+        self.assertEqual(result["contract"]["focus_state"], "Maryland")
+        self.assertEqual(result["row_count"], 1)
+        self.assertNotIn("top 1 states", result["answer"].lower())
 
     def test_follow_up_amount_correction_overrides_prior_share_metric(self) -> None:
         result = answer_question(
@@ -243,6 +264,43 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("Federal residents", result["answer"])
         self.assertIn("proxy", result["answer"].lower())
         self.assertIsNotNone(result["sql"])
+
+    def test_follow_up_county_correction_rebuilds_geography_and_keeps_metric_concept(self) -> None:
+        history = [
+            {"role": "user", "content": "Maximum employment in Maryland"},
+            {
+                "role": "assistant",
+                "content": "Maryland has 143,910 federal employees.",
+                "contract": {"family": "contract_state", "metric": "employees", "operation": "lookup"},
+            },
+        ]
+        for question in ("I meant counties in maryland.", "countis not states"):
+            with self.subTest(question=question):
+                result = answer_question(question, history)
+                self.assertEqual(result["resolution"], "answered")
+                self.assertEqual(result["contract"]["family"], "contract_county")
+                self.assertEqual(result["contract"]["metric"], "federal_residents")
+                self.assertEqual(result["contract"]["operation"], "ranking")
+                self.assertEqual(result["contract"]["focus_state"], "Maryland")
+                self.assertEqual(result["row_count"], 10)
+                self.assertIn("proxy", result["answer"].lower())
+
+    def test_frustration_repair_does_not_execute_random_sql(self) -> None:
+        result = answer_question(
+            "are you crasy",
+            [
+                {"role": "user", "content": "countis not states"},
+                {
+                    "role": "assistant",
+                    "content": "Maryland has 143,910 federal employees.",
+                    "contract": {"family": "contract_state", "metric": "employees", "operation": "lookup"},
+                },
+            ],
+        )
+        self.assertEqual(result["resolution"], "answered_with_assumptions")
+        self.assertIsNone(result["sql"])
+        self.assertEqual(result["contract"]["contract_type"], "CONVERSATION_REPAIR")
+        self.assertIn("over-carried", result["answer"])
 
     def test_employment_supported_at_state_and_agency_levels(self) -> None:
         states = answer_question("rank top 10 states based on employment")

@@ -119,6 +119,15 @@ def _proxy_notes(plan: QueryPlan) -> list[str]:
     ]
 
 
+def _filter_value(plan: QueryPlan, field: str) -> Any | None:
+    if not plan.queries:
+        return None
+    for filter_ in plan.queries[0].filters:
+        if filter_.field == field and filter_.operator == "=":
+            return filter_.value
+    return None
+
+
 def _methodology_line(query_operation: str, metric_label: str) -> str:
     if query_operation == "trend":
         return f"I grouped the validated rows by period and calculated {metric_label} for each returned period."
@@ -188,9 +197,18 @@ def _answer_for_rows(plan: QueryPlan, rows: list[dict[str, Any]], dataset_id: st
                 noun = dimension.replace("_", " ") or noun
         rank_word = "bottom" if query.order == "ASC" else "top"
         direction_word = "lowest" if query.order == "ASC" else "highest"
-        lines = [
-            f"I interpreted your question as a request to rank the {rank_word} {len(rows)} {noun} by **{metric_label}**.",
-        ]
+        agency = _filter_value(plan, "agency")
+        if agency and metric_id == "contracts":
+            lines = [
+                (
+                    f"I can answer the aggregate version of this: the {rank_word} {len(rows)} {noun} by "
+                    f"**{agency} contract dollars**. The loaded table is agency-by-geography totals, so it does not expose individual deal or award records."
+                )
+            ]
+        else:
+            lines = [
+                f"I read this as a {rank_word} {len(rows)} {noun} ranking by **{metric_label}**.",
+            ]
         if proxy_notes:
             lines.extend(
                 [
@@ -292,8 +310,16 @@ def _answer_for_rows(plan: QueryPlan, rows: list[dict[str, Any]], dataset_id: st
         row = rows[0]
         receives_money = dataset and dataset.family in {"federal_funding", "federal_spending", "fund_flow"} and metric and metric.unit == "dollars"
         verb = "received" if receives_money else "has"
+        label = _format_label(row["label"])
+        value = _format_number(row["metric_value"], unit)
+        if metric_id == "employees":
+            direct_sentence = f"{label} has **{value} federal employees** in the loaded 2024 state-level employment data."
+        elif metric_id == "federal_residents":
+            direct_sentence = f"{label} has **{value} federal residents** in the loaded county-level federal presence data."
+        else:
+            direct_sentence = f"{label} {verb} **{metric_label}** of **{value}**."
         lines = [
-            f"{_format_label(row['label'])} {verb} **{metric_label}** of **{_format_number(row['metric_value'], unit)}**.",
+            direct_sentence,
             "",
             "I treated this as a scoped lookup rather than a ranking. The value comes from the approved metric definition and the filtered runtime view.",
         ]

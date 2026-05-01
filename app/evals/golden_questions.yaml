@@ -325,3 +325,22 @@
   checks:
     - sql_executes
     - share_metric
+
+- id: q037
+  question: epartment of defence biggest deals
+  expected_intent: AGGREGATION
+  expected_dataset: spending_state_agency
+  expected_metric: contracts
+  checks:
+    - sql_executes
+    - typo_tolerant_agency_match
+    - deals_to_contracts
+
+- id: q038
+  question: Maximum employment in Maryland
+  expected_intent: AGGREGATION
+  expected_dataset: contract_state
+  expected_metric: employees
+  checks:
+    - sql_executes
+    - scoped_lookup_not_top_one

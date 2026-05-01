@@ -73,9 +73,11 @@ def retrieve_semantic_context(question: str, *, max_datasets: int = 5, max_metri
         dataset_score = len(question_tokens & tokens(_dataset_text(dataset), keep_question_words=True))
         if geo and dataset.geography == geo:
             dataset_score += 4
-        if "fund" in question.lower() or "spending" in question.lower() or "money" in question.lower() or "grant" in question.lower() or "contract" in question.lower():
+        if any(token in question.lower() for token in ("fund", "spending", "money", "grant", "contract", "deal", "deals", "award", "procurement")):
             if dataset.id.startswith("contract_"):
                 dataset_score += 8
+            if dataset.id == "spending_state_agency" and any(token in question.lower() for token in ("agency", "agencies", "department", "defense", "defence", "dod", "deal", "deals")):
+                dataset_score += 12
             if dataset.id.endswith("_flow") and any(token in question.lower() for token in ("flow", "subaward", "subcontract", "inflow", "outflow")):
                 dataset_score += 8
         if any(token in question.lower() for token in ("poverty", "income", "population", "education")) and dataset.id.startswith("acs_"):

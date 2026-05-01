@@ -6,7 +6,13 @@ from typing import Any
 from app.core.answer_generator import generate_answer
 from app.core.conversation import build_conversation_state
 from app.core.intent_classifier import classify_intent
-from app.core.metadata_answerer import assistant_help_answer, dataset_discovery_answer, metric_definition_answer, out_of_scope_answer
+from app.core.metadata_answerer import (
+    assistant_help_answer,
+    conversation_repair_answer,
+    dataset_discovery_answer,
+    metric_definition_answer,
+    out_of_scope_answer,
+)
 from app.core.query_planner import create_query_plan
 from app.core.result_verifier import verify_results
 from app.core.router import route_message
@@ -135,6 +141,9 @@ def answer_question(
     if route.mode in {"ASSISTANT_HELP", "GENERAL_ASSISTANT"}:
         final = assistant_help_answer()
         return _response_from_non_sql(question, final, route.model_dump(), stages, user_id, request_id)
+    if route.mode == "CONVERSATION_REPAIR":
+        final = conversation_repair_answer()
+        return _response_from_non_sql(question, final, route.model_dump(), stages, user_id, request_id, resolution="answered_with_assumptions")
     if route.mode == "DATASET_DISCOVERY":
         final = dataset_discovery_answer()
         return _response_from_non_sql(question, final, route.model_dump(), stages, user_id, request_id)

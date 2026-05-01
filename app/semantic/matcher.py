@@ -22,6 +22,11 @@ _QUESTION_WORDS = {
     "congress", "congressional", "agency", "agencies",
 }
 _EXPANSIONS = (
+    (re.compile(r"\bdefence\b"), " defense "),
+    (re.compile(r"\bdod\b"), " department of defense "),
+    (re.compile(r"\bdept\b"), " department "),
+    (re.compile(r"\bepartment\b"), " department "),
+    (re.compile(r"\bcountis\b|\bcounites\b|\bcountys\b"), " counties "),
     (re.compile(r"\bp\s*/\s*c\b"), " per capita "),
     (re.compile(r"\bper\s*cap\b"), " per capita "),
     (re.compile(r"\bpercapita\b"), " per capita "),
