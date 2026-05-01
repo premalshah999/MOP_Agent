@@ -157,7 +157,7 @@ export function ChatArea({
       {/* Chat column */}
       <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg)]">
         {/* Header */}
-        <header className="shrink-0 border-b border-black/5 bg-[var(--bg)]/95 backdrop-blur">
+        <header className="shrink-0 border-b border-[var(--line-soft)] bg-[var(--bg)]/95 backdrop-blur">
           <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-5 py-2.5">
             <div className="flex min-w-0 items-center gap-2.5">
               {onOpenSidebar && (
@@ -194,7 +194,7 @@ export function ChatArea({
                     key={ds.id}
                     type="button"
                     onClick={() => onSelectDataset(ds.id)}
-                    className={`px-2.5 py-1 text-[11px] font-medium transition ${
+                    className={`rounded-[6px] px-2.5 py-1 text-[11px] font-medium transition ${
                       ds.id === selectedDatasetId
                         ? 'bg-[var(--ink)] text-white'
                         : 'bg-[var(--surface)] text-[var(--muted)] border border-[var(--line)] hover:text-[var(--ink)]'
@@ -247,7 +247,7 @@ export function ChatArea({
             </div>
 
             {/* Bottom composer */}
-            <div className="shrink-0 border-t border-black/5 bg-[var(--surface)]/96 backdrop-blur">
+            <div className="shrink-0 border-t border-[var(--line-soft)] bg-[var(--surface)]/96 backdrop-blur">
               <div className="mx-auto max-w-4xl px-4 py-2.5">
                 <Composer
                   input={input}
@@ -266,16 +266,14 @@ export function ChatArea({
 
       {/* Right detail panel */}
       {detail && detailMsg && (
-        <div className="relative shrink-0">
-          <DetailPanel
-            tab={detail.tab}
-            sql={detailMsg.sqlQuery}
-            data={detailMsg.data}
-            rowCount={detailMsg.rowCount}
-            onChangeTab={(tab) => setDetail({ ...detail, tab })}
-            onClose={() => setDetail(null)}
-          />
-        </div>
+        <DetailPanel
+          tab={detail.tab}
+          sql={detailMsg.sqlQuery}
+          data={detailMsg.data}
+          rowCount={detailMsg.rowCount}
+          onChangeTab={(tab) => setDetail({ ...detail, tab })}
+          onClose={() => setDetail(null)}
+        />
       )}
     </div>
   );
@@ -296,7 +294,7 @@ function Composer({ input, isLoading, placeholder, textareaRef, onChangeInput, o
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); onSend(); }}
-      className={`flex items-end gap-2 border border-black/6 bg-[var(--surface)] px-3 ${compact ? 'py-1.5' : 'py-2.5'}`}
+      className={`flex items-end gap-2 rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-3 shadow-[0_1px_0_rgba(15,23,42,0.03)] transition-within ${compact ? 'py-1.5' : 'py-2.5'}`}
     >
       <textarea
         ref={textareaRef}
@@ -306,13 +304,13 @@ function Composer({ input, isLoading, placeholder, textareaRef, onChangeInput, o
         placeholder={placeholder}
         disabled={isLoading}
         rows={1}
-        className={`flex-1 resize-none border-0 bg-transparent text-[14px] leading-6 text-[var(--ink)] outline-none placeholder:text-[var(--muted-2)] ${compact ? 'min-h-[32px] py-1' : 'min-h-[44px] py-2'}`}
+        className={`max-h-40 flex-1 resize-none border-0 bg-transparent text-[14px] leading-6 text-[var(--ink)] outline-none placeholder:text-[var(--muted-2)] ${compact ? 'min-h-[32px] py-1' : 'min-h-[44px] py-2'}`}
       />
       <button
         type="submit"
         disabled={!input.trim() || isLoading}
         aria-label={isLoading ? 'Sending...' : 'Send message'}
-        className="shrink-0 p-2 text-[var(--muted)] transition hover:text-[var(--ink)] disabled:opacity-30"
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-[7px] bg-[var(--ink)] text-white transition hover:bg-[var(--ink-soft)] disabled:bg-transparent disabled:text-[var(--muted-2)] disabled:opacity-60"
       >
         {isLoading ? <Loader2 size={16} className="animate-spin" /> : <SendHorizontal size={16} />}
       </button>

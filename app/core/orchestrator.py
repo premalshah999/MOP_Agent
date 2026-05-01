@@ -111,7 +111,7 @@ def _response_from_non_sql(
 
 def answer_question(
     question: str,
-    history: list[dict[str, str]] | None = None,
+    history: list[dict[str, Any]] | None = None,
     *,
     user_id: int | str | None = None,
     request_id: str | None = None,

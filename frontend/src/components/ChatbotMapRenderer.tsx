@@ -174,7 +174,7 @@ function buildBarChartSpec(metric: string, rows: Record<string, unknown>[]): Rec
   if (!ranked.length) return null;
 
   return {
-    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
     width: 'container',
     height: 280,
     padding: { left: 4, top: 4, right: 12, bottom: 4 },
@@ -205,7 +205,7 @@ function buildHistogramSpec(metric: string, rows: Record<string, unknown>[]): Re
   if (values.length < 5) return null;
 
   return {
-    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
     width: 'container',
     height: 140,
     padding: { left: 4, top: 4, right: 8, bottom: 4 },
@@ -250,7 +250,7 @@ function buildStackedAgencySpec(rows: Record<string, unknown>[]): Record<string,
   if (!ranked.length) return null;
 
   return {
-    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
     width: 'container',
     height: 320,
     data: { values: ranked },
@@ -285,7 +285,7 @@ function buildSingleSeriesBarSpec(
     .map((row) => ({ label: rowLabel(row), value: getNumber(row[metric]) ?? 0 }));
   if (!ranked.length) return null;
   return {
-    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
+    $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
     width: 'container',
     height: 300,
     data: { values: ranked },

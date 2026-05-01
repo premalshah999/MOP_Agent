@@ -36,10 +36,10 @@ def extract_states(text: str) -> list[str]:
     return list(dict.fromkeys(states))
 
 
-def build_conversation_state(history: list[dict[str, str]] | None, current_question: str) -> ConversationState:
+def build_conversation_state(history: list[dict[str, object]] | None, current_question: str) -> ConversationState:
     state = ConversationState()
     for item in history or []:
-        content = item.get("content", "")
+        content = str(item.get("content", "") or "")
         if not content or content == current_question:
             continue
         if item.get("role") == "user":
@@ -73,7 +73,7 @@ def build_conversation_state(history: list[dict[str, str]] | None, current_quest
     context_lines = []
     for item in (history or [])[-8:]:
         role = item.get("role")
-        content = item.get("content", "").strip()
+        content = str(item.get("content", "") or "").strip()
         if role in {"user", "assistant"} and content and content != current_question:
             context_lines.append(f"{role}: {content}")
     state.recent_context = "\n".join(context_lines)

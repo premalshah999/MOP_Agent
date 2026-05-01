@@ -100,13 +100,13 @@ export function ChatbotMapModal({ isOpen, onClose, mapIntent, fallbackRows }: Ch
   return (
     <div className="fixed inset-0 z-[120] bg-slate-950/28 backdrop-blur-[2px]">
       <div className="absolute inset-0" onClick={onClose} />
-      <div className="absolute inset-3 overflow-hidden border border-[var(--line)] bg-[var(--surface)] shadow-[0_18px_48px_rgba(15,23,42,0.08)] sm:inset-5">
+      <div className="absolute inset-3 flex flex-col overflow-hidden rounded-[8px] border border-[var(--line)] bg-[var(--surface)] shadow-[0_18px_48px_rgba(15,23,42,0.08)] sm:inset-5">
         <header className="flex items-start justify-between gap-4 border-b border-[var(--line)] bg-[var(--surface)] px-5 py-5 sm:px-6">
           <div className="min-w-0">
             <div className="text-[11px] uppercase tracking-[0.28em] text-[var(--muted)]">
               Maryland Opportunity Analytics Platform
             </div>
-            <h2 className="mt-2 truncate font-display text-[29px] leading-none text-[var(--ink)] sm:text-[34px]">
+            <h2 className="mt-2 font-display text-[26px] leading-tight text-[var(--ink)] sm:text-[32px]">
               {mapIntent.title || 'Map View'}
             </h2>
             {mapIntent.subtitle && (
@@ -120,13 +120,13 @@ export function ChatbotMapModal({ isOpen, onClose, mapIntent, fallbackRows }: Ch
             type="button"
             onClick={onClose}
             aria-label="Close map view"
-            className="border border-[var(--line)] bg-[var(--surface)] p-2 text-[var(--muted)] transition hover:text-[var(--ink)]"
+            className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] p-2 text-[var(--muted)] transition hover:text-[var(--ink)]"
           >
             <X size={16} />
           </button>
         </header>
 
-        <main className="h-[calc(100%-132px)] overflow-auto bg-[var(--bg)] px-5 py-5 sm:px-6">
+        <main className="min-h-0 flex-1 overflow-auto bg-[var(--bg)] px-5 py-5 sm:px-6">
           <ChatbotMapRenderer
             mapIntent={mapIntent}
             mapRows={mapRows}

@@ -30,7 +30,7 @@ export function DatasetLibraryWorkspace({
   return (
     <div className="h-full overflow-y-auto bg-[var(--bg)]">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-5 py-5 lg:px-8 lg:py-6">
-        <section className="overflow-hidden rounded-[18px] border border-[var(--line)] bg-[var(--surface)] shadow-[0_10px_30px_rgba(17,19,24,0.05)]">
+        <section className="overflow-hidden rounded-[8px] border border-[var(--line)] bg-[var(--surface)]">
           <div className="grid gap-5 px-5 py-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.85fr)] lg:px-7">
             <div>
               <p className="text-[11px] font-medium uppercase tracking-[0.28em] text-[var(--muted)]">
@@ -46,15 +46,15 @@ export function DatasetLibraryWorkspace({
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
-              <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface-2)]/65 px-4 py-3.5">
+              <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)]/65 px-4 py-3.5">
                 <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">Dataset family</p>
                 <p className="mt-2.5 text-[18px] font-semibold text-[var(--ink)]">{selectedGuide.name}</p>
               </div>
-              <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface-2)]/65 px-4 py-3.5">
+              <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)]/65 px-4 py-3.5">
                 <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">Tables available</p>
                 <p className="mt-2.5 text-[18px] font-semibold text-[var(--ink)]">{formatNumber(totalTables)}</p>
               </div>
-              <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface-2)]/65 px-4 py-3.5">
+              <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)]/65 px-4 py-3.5">
                 <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">Rows in scope</p>
                 <p className="mt-2.5 text-[18px] font-semibold text-[var(--ink)]">{formatNumber(totalRows)}</p>
               </div>
@@ -63,7 +63,7 @@ export function DatasetLibraryWorkspace({
         </section>
 
         <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
-          <aside className="h-fit rounded-[16px] border border-[var(--line)] bg-[var(--surface)] p-3 shadow-[0_6px_20px_rgba(17,19,24,0.04)] lg:sticky lg:top-6">
+          <aside className="h-fit rounded-[8px] border border-[var(--line)] bg-[var(--surface)] p-3 lg:sticky lg:top-6">
             <div className="px-2 pb-3 pt-1">
               <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">Browse families</p>
               <p className="mt-2 text-[12px] leading-6 text-[var(--muted)]">
@@ -79,7 +79,7 @@ export function DatasetLibraryWorkspace({
                     key={dataset.id}
                     type="button"
                     onClick={() => onSelectDataset(dataset.id)}
-                    className={`w-full rounded-[10px] border px-3.5 py-3 text-left transition ${
+                    className={`w-full rounded-[8px] border px-3.5 py-3 text-left transition ${
                       active
                         ? 'border-[var(--ink)] bg-[var(--ink)] text-white'
                         : 'border-[var(--line)] bg-[var(--surface)] hover:border-[var(--ink)]/15 hover:bg-[var(--surface-2)]'
@@ -103,7 +103,7 @@ export function DatasetLibraryWorkspace({
           </aside>
 
           <section className="space-y-4">
-            <article className="rounded-[16px] border border-[var(--line)] bg-[var(--surface)] p-5 shadow-[0_6px_20px_rgba(17,19,24,0.04)]">
+            <article className="rounded-[8px] border border-[var(--line)] bg-[var(--surface)] p-5">
               <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                 <div className="max-w-3xl">
                   <div className="inline-flex items-center gap-2 rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)] px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-[var(--muted)]">
@@ -120,7 +120,7 @@ export function DatasetLibraryWorkspace({
                 <button
                   type="button"
                   onClick={() => onUseInChat(selectedGuide.id)}
-                  className="inline-flex items-center gap-2 self-start rounded-[10px] border border-[var(--ink)] bg-[var(--ink)] px-4 py-2 text-[12px] font-medium text-white transition hover:opacity-92"
+                  className="inline-flex items-center gap-2 self-start rounded-[8px] border border-[var(--ink)] bg-[var(--ink)] px-4 py-2 text-[12px] font-medium text-white transition hover:opacity-92"
                 >
                   Ask about this dataset
                   <ArrowRight size={13} />
@@ -128,7 +128,7 @@ export function DatasetLibraryWorkspace({
               </div>
 
               <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.85fr)]">
-                <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface-2)]/50 p-4">
+                <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)]/50 p-4">
                   <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
                     Good for questions like
                   </p>
@@ -136,7 +136,7 @@ export function DatasetLibraryWorkspace({
                     {selectedGuide.starterQuestions.slice(0, 4).map((question) => (
                       <div
                         key={question}
-                        className="rounded-[10px] border border-[var(--line-soft)] bg-white px-3 py-2.5 text-[12px] leading-6 text-[var(--ink)]"
+                        className="rounded-[8px] border border-[var(--line-soft)] bg-white px-3 py-2.5 text-[12px] leading-6 text-[var(--ink)]"
                       >
                         {question}
                       </div>
@@ -144,7 +144,7 @@ export function DatasetLibraryWorkspace({
                   </div>
                 </div>
 
-                <div className="rounded-[12px] border border-[var(--line)] bg-white p-4">
+                <div className="rounded-[8px] border border-[var(--line)] bg-white p-4">
                   <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
                     What you’re downloading
                   </p>
@@ -158,7 +158,7 @@ export function DatasetLibraryWorkspace({
             </article>
 
             {selectedCatalog?.notes?.length ? (
-              <section className="rounded-[14px] border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[0_6px_18px_rgba(17,19,24,0.035)]">
+              <section className="rounded-[8px] border border-[var(--line)] bg-[var(--surface)] p-4">
                 <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">Notes</p>
                 <div className="mt-3 space-y-2">
                   {selectedCatalog.notes.map((note) => (
@@ -173,7 +173,7 @@ export function DatasetLibraryWorkspace({
             {selectedCatalog?.tables?.length ? (
               <div className="grid gap-4 xl:grid-cols-2">
                 {selectedCatalog.tables.map((table) => (
-                  <article key={table.tableName} className="rounded-[14px] border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[0_6px_18px_rgba(17,19,24,0.035)]">
+                  <article key={table.tableName} className="rounded-[8px] border border-[var(--line)] bg-[var(--surface)] p-4">
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
@@ -206,11 +206,11 @@ export function DatasetLibraryWorkspace({
                     </div>
 
                     <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-[10px] bg-[var(--surface-2)] px-3 py-2.5">
+                      <div className="rounded-[8px] bg-[var(--surface-2)] px-3 py-2.5">
                         <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-[var(--muted)]">Grain</p>
                         <p className="mt-2 text-[12px] font-medium text-[var(--ink)]">{table.grain}</p>
                       </div>
-                      <div className="rounded-[10px] bg-[var(--surface-2)] px-3 py-2.5">
+                      <div className="rounded-[8px] bg-[var(--surface-2)] px-3 py-2.5">
                         <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-[var(--muted)]">Rows</p>
                         <p className="mt-2 text-[12px] font-medium text-[var(--ink)]">{formatNumber(table.rows)}</p>
                       </div>
@@ -238,7 +238,7 @@ export function DatasetLibraryWorkspace({
                 ))}
               </div>
             ) : (
-              <section className="rounded-[14px] border border-[var(--line)] bg-[var(--surface)] p-5 text-[13px] leading-7 text-[var(--muted)] shadow-[0_6px_18px_rgba(17,19,24,0.035)]">
+              <section className="rounded-[8px] border border-[var(--line)] bg-[var(--surface)] p-5 text-[13px] leading-7 text-[var(--muted)]">
                 This analysis mode combines multiple downloadable families rather than exposing one standalone export file.
                 Use the adjacent dataset families for the underlying data downloads.
               </section>

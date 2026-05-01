@@ -45,6 +45,31 @@ textarea { field-sizing: content; }
 
 ::selection { background: rgba(239, 68, 68, 0.12); }
 
+.transition-within:focus-within {
+  border-color: color-mix(in srgb, var(--ink) 26%, var(--line));
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.04);
+}
+
+.markdown-flow > * + * {
+  margin-top: 0.85rem;
+}
+
+.markdown-flow table {
+  min-width: 560px;
+}
+
+.markdown-flow-user code {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+button:focus-visible,
+a:focus-visible,
+textarea:focus-visible,
+input:focus-visible {
+  outline: 2px solid rgba(15, 23, 42, 0.18);
+  outline-offset: 2px;
+}
+
 /* Minimal scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

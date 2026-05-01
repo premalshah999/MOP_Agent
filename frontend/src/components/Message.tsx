@@ -55,34 +55,36 @@ function Md({ content, tone }: { content: string; tone: 'user' | 'assistant' }) 
   const cls = tone === 'user' ? 'text-white' : 'text-[var(--ink)]';
   const m = tone === 'user' ? 'text-white/60' : 'text-[var(--muted)]';
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        p: ({ children }) => <p className={`m-0 text-[14px] leading-7 ${cls}`}>{children}</p>,
-        h1: ({ children }) => <h1 className={`m-0 text-[18px] font-semibold leading-7 ${cls}`}>{children}</h1>,
-        h2: ({ children }) => <h2 className={`m-0 text-[16px] font-semibold leading-7 ${cls}`}>{children}</h2>,
-        h3: ({ children }) => <h3 className={`m-0 text-[14px] font-semibold leading-7 ${cls}`}>{children}</h3>,
-        strong: ({ children }) => <strong className={`font-semibold ${cls}`}>{children}</strong>,
-        em: ({ children }) => <em className={`italic ${m}`}>{children}</em>,
-        ul: ({ children }) => <ul className={`m-0 list-disc space-y-1.5 pl-5 text-[14px] leading-7 ${cls}`}>{children}</ul>,
-        ol: ({ children }) => <ol className={`m-0 list-decimal space-y-1.5 pl-5 text-[14px] leading-7 ${cls}`}>{children}</ol>,
-        li: ({ children }) => <li className={cls}>{children}</li>,
-        code: ({ children }) => <code className={`bg-[var(--surface-2)] px-1 py-0.5 font-mono text-[0.9em] ${cls}`}>{children}</code>,
-        table: ({ children }) => (
-          <div className="overflow-x-auto border border-[var(--line)]">
-            <table className={`w-full border-collapse text-left text-[13px] leading-6 ${cls}`}>{children}</table>
-          </div>
-        ),
-        th: ({ children }) => (
-          <th className="border-b border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
-            {children}
-          </th>
-        ),
-        td: ({ children }) => <td className="border-b border-[var(--line)] px-3 py-2 align-top">{children}</td>,
-      }}
-    >
-      {toMd(content)}
-    </ReactMarkdown>
+    <div className={`markdown-flow ${tone === 'user' ? 'markdown-flow-user' : ''}`}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className={`m-0 text-[14px] leading-7 ${cls}`}>{children}</p>,
+          h1: ({ children }) => <h1 className={`m-0 text-[18px] font-semibold leading-7 ${cls}`}>{children}</h1>,
+          h2: ({ children }) => <h2 className={`m-0 text-[16px] font-semibold leading-7 ${cls}`}>{children}</h2>,
+          h3: ({ children }) => <h3 className={`m-0 text-[14px] font-semibold leading-7 ${cls}`}>{children}</h3>,
+          strong: ({ children }) => <strong className={`font-semibold ${cls}`}>{children}</strong>,
+          em: ({ children }) => <em className={`italic ${m}`}>{children}</em>,
+          ul: ({ children }) => <ul className={`m-0 list-disc space-y-1.5 pl-5 text-[14px] leading-7 ${cls}`}>{children}</ul>,
+          ol: ({ children }) => <ol className={`m-0 list-decimal space-y-1.5 pl-5 text-[14px] leading-7 ${cls}`}>{children}</ol>,
+          li: ({ children }) => <li className={cls}>{children}</li>,
+          code: ({ children }) => <code className={`rounded-[4px] bg-[var(--surface-2)] px-1 py-0.5 font-mono text-[0.9em] ${cls}`}>{children}</code>,
+          table: ({ children }) => (
+            <div className="overflow-x-auto rounded-[8px] border border-[var(--line)]">
+              <table className={`w-full border-collapse text-left text-[13px] leading-6 ${cls}`}>{children}</table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border-b border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => <td className="border-b border-[var(--line)] px-3 py-2 align-top">{children}</td>,
+        }}
+      >
+        {toMd(content)}
+      </ReactMarkdown>
+    </div>
   );
 }
 
@@ -114,7 +116,7 @@ export function Message({ role, content, sqlQuery, data, rowCount, chart, charts
         transition={{ duration: 0.15 }}
         className="flex justify-end"
       >
-        <div className="max-w-xl rounded-2xl rounded-br-sm bg-[var(--ink)] px-4 py-3 text-white">
+        <div className="max-w-xl rounded-[8px] bg-[var(--ink)] px-4 py-3 text-white">
           <p className="text-[14px] leading-6">{content}</p>
           <div className="mt-1 text-right text-[10px] text-white/40">{fmtTime(ts)}</div>
         </div>
@@ -154,12 +156,12 @@ export function Message({ role, content, sqlQuery, data, rowCount, chart, charts
       </div>
 
       {/* Answer */}
-      <div className="space-y-3">
+      <div className="border-l border-[var(--line)] pl-4">
         <Md content={content} tone="assistant" />
       </div>
 
       {resolution && resolution !== 'answered' && (
-        <div className="mt-3 border border-[var(--line)] bg-[var(--surface)] px-4 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--muted)]">
+        <div className="mt-3 rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-4 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--muted)]">
           {resolution === 'partially_answered' ? 'Partial coverage' : resolution === 'needs_clarification' ? 'Needs clarification' : resolution}
         </div>
       )}
@@ -168,7 +170,7 @@ export function Message({ role, content, sqlQuery, data, rowCount, chart, charts
 
       {/* Inline chart */}
       {hasChartBlocks && (
-        <div className="space-y-3">
+        <div className="mt-4 space-y-3">
           {chartBlocks.map((block, index) => (
             <div key={`${block.title}-${index}`} className="space-y-2">
               <div className="space-y-0.5">
@@ -177,7 +179,7 @@ export function Message({ role, content, sqlQuery, data, rowCount, chart, charts
                 </h4>
                 {block.subtitle && <p className="text-[11px] text-[var(--muted-2)]">{block.subtitle}</p>}
               </div>
-              <Suspense fallback={<div className="h-32 animate-pulse rounded-lg bg-[var(--surface-2)]" />}>
+              <Suspense fallback={<div className="h-32 animate-pulse rounded-[8px] bg-[var(--surface-2)]" />}>
                 <VegaChart spec={block.spec} />
               </Suspense>
             </div>
@@ -186,14 +188,14 @@ export function Message({ role, content, sqlQuery, data, rowCount, chart, charts
       )}
 
       {!hasChartBlocks && hasChart && (
-        <Suspense fallback={<div className="mt-3 h-32 animate-pulse rounded-lg bg-[var(--surface-2)]" />}>
+        <Suspense fallback={<div className="mt-3 h-32 animate-pulse rounded-[8px] bg-[var(--surface-2)]" />}>
           <VegaChart spec={chart!} />
         </Suspense>
       )}
 
       {/* Error */}
       {error && (
-        <div className="mt-3 border-l-2 border-red-300 bg-red-50 px-3 py-2 text-[13px] text-[var(--danger)]">{error}</div>
+        <div className="mt-3 rounded-[8px] border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-[var(--danger)]">{error}</div>
       )}
 
       {hasMap && effectiveMapIntent && (
@@ -232,7 +234,7 @@ function EvidencePanel({ evidence }: { evidence: EvidenceBlock }) {
         </div>
       )}
       {evidence.note && (
-        <div className="border border-[var(--line)] bg-[var(--surface)] px-4 py-3 text-[12px] leading-6 text-[var(--muted)]">
+        <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-4 py-3 text-[12px] leading-6 text-[var(--muted)]">
           {evidence.note}
         </div>
       )}
@@ -242,7 +244,7 @@ function EvidencePanel({ evidence }: { evidence: EvidenceBlock }) {
 
 function EvidenceCardView({ card }: { card: EvidenceCard }) {
   return (
-    <div className="border border-[var(--line)] bg-[var(--surface)] px-4 py-3">
+    <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-4 py-3">
       <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{card.label}</div>
       <div className="mt-1 text-[20px] font-semibold tracking-tight text-[var(--ink)]">{card.value}</div>
       {card.meta && <div className="mt-1 text-[11px] text-[var(--muted-2)]">{card.meta}</div>}
@@ -255,7 +257,7 @@ function EvidenceSectionView({ section }: { section: EvidenceSection }) {
   const items = section.items ?? [];
   const rows = section.rows ?? [];
   return (
-    <section className="border border-[var(--line)] bg-[var(--surface)] px-4 py-4">
+    <section className="rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-4 py-4">
       <div className="space-y-0.5">
         <h4 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{section.title}</h4>
         {section.subtitle && <p className="text-[11px] text-[var(--muted-2)]">{section.subtitle}</p>}
@@ -299,7 +301,7 @@ function Btn({ onClick, active, label, children }: { onClick: () => void; active
       type="button"
       onClick={onClick}
       aria-label={label}
-      className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition ${
+      className={`inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[10px] font-medium transition ${
         active ? 'bg-[var(--surface-2)] text-[var(--ink)]' : 'text-[var(--muted)] hover:text-[var(--ink)]'
       }`}
     >

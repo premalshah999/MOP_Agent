@@ -52,8 +52,8 @@ export function DetailPanel({ tab, sql, data, rowCount, onChangeTab, onClose }: 
 
   return (
     <aside
-      className="relative flex h-screen shrink-0 flex-col border-l border-[var(--line)] bg-[var(--surface)]"
-      style={{ width }}
+      className="fixed right-0 top-0 z-50 flex h-dvh shrink-0 flex-col border-l border-[var(--line)] bg-[var(--surface)] shadow-[0_24px_70px_rgba(15,23,42,0.16)] lg:relative lg:right-auto lg:top-auto lg:z-auto lg:h-full lg:shadow-none"
+      style={{ width: `min(100vw, ${width}px)` }}
     >
       {/* Drag handle (left edge) */}
       <div
@@ -69,7 +69,7 @@ export function DetailPanel({ tab, sql, data, rowCount, onChangeTab, onClose }: 
               type="button"
               onClick={() => onChangeTab('sql')}
               aria-label="View SQL query"
-              className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-[11px] font-medium transition ${
+              className={`inline-flex items-center gap-1.5 rounded-[6px] px-2.5 py-1.5 text-[11px] font-medium transition ${
                 effectiveTab === 'sql' ? 'bg-[var(--surface-2)] text-[var(--ink)]' : 'text-[var(--muted)] hover:text-[var(--ink)]'
               }`}
             >
@@ -82,7 +82,7 @@ export function DetailPanel({ tab, sql, data, rowCount, onChangeTab, onClose }: 
               type="button"
               onClick={() => onChangeTab('data')}
               aria-label="View data table"
-              className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-[11px] font-medium transition ${
+              className={`inline-flex items-center gap-1.5 rounded-[6px] px-2.5 py-1.5 text-[11px] font-medium transition ${
                 effectiveTab === 'data' ? 'bg-[var(--surface-2)] text-[var(--ink)]' : 'text-[var(--muted)] hover:text-[var(--ink)]'
               }`}
             >
@@ -99,7 +99,7 @@ export function DetailPanel({ tab, sql, data, rowCount, onChangeTab, onClose }: 
               type="button"
               onClick={() => void copy()}
               aria-label={copied ? 'Copied to clipboard' : 'Copy SQL to clipboard'}
-              className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-[var(--muted)] hover:text-[var(--ink)]"
+              className="inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[10px] text-[var(--muted)] hover:text-[var(--ink)]"
             >
               {copied ? <Check size={10} /> : <Copy size={10} />}
               {copied ? 'Copied' : 'Copy'}
@@ -109,7 +109,7 @@ export function DetailPanel({ tab, sql, data, rowCount, onChangeTab, onClose }: 
             type="button"
             onClick={onClose}
             aria-label="Close panel"
-            className="rounded p-1 text-[var(--muted)] hover:text-[var(--ink)]"
+            className="rounded-[6px] p-1 text-[var(--muted)] hover:text-[var(--ink)]"
           >
             <X size={14} />
           </button>
@@ -120,7 +120,7 @@ export function DetailPanel({ tab, sql, data, rowCount, onChangeTab, onClose }: 
       <div className="flex-1 overflow-auto">
         {effectiveTab === 'sql' && sql && (
           <div className="p-4">
-            <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-[var(--ink)] p-4 font-mono text-[12px] leading-6 text-white/85">
+            <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-[8px] bg-[var(--ink)] p-4 font-mono text-[12px] leading-6 text-white/85">
               <code>{sql}</code>
             </pre>
           </div>

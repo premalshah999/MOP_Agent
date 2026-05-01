@@ -58,6 +58,7 @@ export function AuthScreen() {
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Your name"
                 className="w-full border border-[var(--line)] bg-[var(--surface)] px-3 py-2.5 text-[14px] text-[var(--ink)] outline-none placeholder:text-[var(--muted-2)] focus:border-[var(--ink)]"
+                autoComplete="name"
                 autoFocus={mode === 'register'}
               />
             </div>
@@ -73,6 +74,7 @@ export function AuthScreen() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@university.edu"
               className="w-full border border-[var(--line)] bg-[var(--surface)] px-3 py-2.5 text-[14px] text-[var(--ink)] outline-none placeholder:text-[var(--muted-2)] focus:border-[var(--ink)]"
+              autoComplete="email"
               autoFocus={mode === 'login'}
             />
           </div>
@@ -87,6 +89,7 @@ export function AuthScreen() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder={mode === 'register' ? 'At least 6 characters' : 'Your password'}
               className="w-full border border-[var(--line)] bg-[var(--surface)] px-3 py-2.5 text-[14px] text-[var(--ink)] outline-none placeholder:text-[var(--muted-2)] focus:border-[var(--ink)]"
+              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
             />
           </div>
 

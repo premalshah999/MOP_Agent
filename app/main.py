@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,7 +43,7 @@ load_dotenv()
 class AskRequest(BaseModel):
     question: str
     thread_id: str | None = None
-    history: list[dict[str, str]] = Field(default_factory=list)
+    history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CreateThreadRequest(BaseModel):
@@ -63,7 +64,7 @@ def _json(status_code: int, payload: dict[str, Any], request_id: str | None = No
     headers = {"Cache-Control": "no-store"}
     if request_id:
         headers["X-Request-ID"] = request_id
-    return JSONResponse(status_code=status_code, content=payload, headers=headers)
+    return JSONResponse(status_code=status_code, content=jsonable_encoder(payload), headers=headers)
 
 
 def _health_payload() -> dict[str, Any]:
@@ -122,7 +123,9 @@ async def request_context(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception as exc:
-        response = _json(500, {"error": "Internal server error", "detail": str(exc), "request_id": request_id}, request_id)
+        debug_errors = os.getenv("DEBUG_ERRORS", "").lower() in {"1", "true", "yes"}
+        detail = str(exc) if debug_errors else "Unexpected server error."
+        response = _json(500, {"error": "Internal server error", "detail": detail, "request_id": request_id}, request_id)
     response.headers["X-Request-ID"] = request_id
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")

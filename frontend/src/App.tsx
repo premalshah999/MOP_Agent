@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Library, MessageSquare } from 'lucide-react';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { useThreadStore } from '@/hooks/useThreadStore';
 import { AuthScreen } from '@/components/AuthScreen';
@@ -121,37 +122,38 @@ function Workspace() {
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="shrink-0 border-b border-[var(--line)] bg-[var(--bg)]/95 backdrop-blur">
-          <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-5 py-3 lg:px-8">
-            <div>
-              <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-[var(--muted)]">Workspace</p>
-              <p className="mt-1 text-[13px] text-[var(--ink-soft)]">
-                Keep chat focused. Browse downloads in the separate data library.
-              </p>
+        <div className="shrink-0 border-b border-[var(--line)] bg-[var(--bg)]/94 backdrop-blur">
+          <div className="mx-auto flex h-12 w-full max-w-7xl items-center justify-between gap-3 px-4 lg:px-7">
+            <div className="min-w-0">
+              <span className="block truncate text-[12px] font-semibold tracking-tight text-[var(--ink)]">
+                Maryland Opportunity
+              </span>
             </div>
 
-            <div className="inline-flex rounded-[10px] border border-[var(--line)] bg-[var(--surface)] p-1 shadow-sm">
+            <div className="inline-flex rounded-[8px] border border-[var(--line)] bg-[var(--surface)] p-0.5">
               <button
                 type="button"
                 onClick={() => setMainView('chat')}
-                className={`rounded-[8px] px-4 py-2 text-[12px] font-medium transition ${
+                className={`inline-flex h-8 items-center gap-1.5 rounded-[6px] px-3 text-[12px] font-medium transition ${
                   mainView === 'chat'
                     ? 'bg-[var(--ink)] text-white'
                     : 'text-[var(--muted)] hover:text-[var(--ink)]'
                 }`}
               >
+                <MessageSquare size={13} />
                 Assistant
               </button>
               <button
                 type="button"
                 onClick={() => setMainView('library')}
-                className={`rounded-[8px] px-4 py-2 text-[12px] font-medium transition ${
+                className={`inline-flex h-8 items-center gap-1.5 rounded-[6px] px-3 text-[12px] font-medium transition ${
                   mainView === 'library'
                     ? 'bg-[var(--ink)] text-white'
                     : 'text-[var(--muted)] hover:text-[var(--ink)]'
                 }`}
               >
-                Data Library
+                <Library size={13} />
+                Data
               </button>
             </div>
           </div>

@@ -68,7 +68,7 @@ def build_chart(plan: QueryPlan, executions: list[dict[str, Any]]) -> dict[str, 
             }
         )
     return {
-        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+        "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
         "width": "container",
         "height": max(180, min(420, len(rows) * 28)),
         "data": {"values": display_rows},

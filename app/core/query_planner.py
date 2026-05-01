@@ -154,10 +154,10 @@ def _definition_answer(question: str) -> QueryPlan:
     return QueryPlan(interpreted_question=question, intent="DEFINITION", queries=[])
 
 
-def _history_text(history: list[dict[str, str]] | None) -> str:
+def _history_text(history: list[dict[str, Any]] | None) -> str:
     if not history:
         return ""
-    return "\n".join(item.get("content", "") for item in history[-6:] if item.get("role") == "user")
+    return "\n".join(str(item.get("content", "") or "") for item in history[-6:] if item.get("role") == "user")
 
 
 def _choose_dataset(question: str, context: SemanticContext, intent: str) -> str | None:
@@ -265,7 +265,7 @@ def _unsupported_metric_geo_plan(question: str, dataset_id: str) -> QueryPlan | 
     )
 
 
-def _inherit_from_history(question: str, history: list[dict[str, str]] | None) -> tuple[str | None, str | None, str | None, list[str]]:
+def _inherit_from_history(question: str, history: list[dict[str, Any]] | None) -> tuple[str | None, str | None, str | None, list[str]]:
     inherited: list[str] = []
     current = question.strip()
     should_inherit = not _has_domain_signal(question) or looks_like_metric_variant_follow_up(question)
@@ -468,7 +468,7 @@ def create_query_plan(
     question: str,
     intent_payload: dict[str, Any],
     context: SemanticContext,
-    history: list[dict[str, str]] | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> QueryPlan:
     intent = intent_payload["intent"]
     q = _lower(question)

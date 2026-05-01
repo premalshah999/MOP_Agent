@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -58,7 +59,7 @@ def register_user(body: RegisterRequest) -> dict[str, Any]:
                 (body.email.lower(), body.name.strip(), _hash_password(body.password)),
             )
             conn.commit()
-        except Exception as exc:
+        except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="Email already registered") from exc
         user = row_dict(conn.execute("SELECT id, email, name FROM users WHERE email = ?", (body.email.lower(),)).fetchone())
     assert user is not None

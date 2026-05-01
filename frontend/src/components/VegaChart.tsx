@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import embed from 'vega-embed';
+import type { Result } from 'vega-embed';
 
 interface VegaChartProps {
   spec: Record<string, unknown>;
@@ -12,11 +13,16 @@ export function VegaChart({ spec }: VegaChartProps) {
     if (!containerRef.current || !spec) return;
 
     let disposed = false;
+    let result: Result | null = null;
+    const normalizedSpec =
+      typeof spec.$schema === 'string' && spec.$schema.includes('/vega-lite/v5')
+        ? { ...spec, $schema: 'https://vega.github.io/schema/vega-lite/v6.json' }
+        : spec;
 
     const renderChart = async () => {
       if (disposed || !containerRef.current) return;
       try {
-        const result = await embed(containerRef.current, spec as never, {
+        result = await embed(containerRef.current, normalizedSpec as never, {
           actions: false,
           renderer: 'svg',
           theme: 'quartz',
@@ -42,10 +48,6 @@ export function VegaChart({ spec }: VegaChartProps) {
           },
         });
 
-        // Cleanup on unmount
-        return () => {
-          result.finalize();
-        };
       } catch (err) {
         console.warn('[VegaChart] Render failed:', err);
       }
@@ -55,13 +57,14 @@ export function VegaChart({ spec }: VegaChartProps) {
 
     return () => {
       disposed = true;
+      result?.finalize();
     };
   }, [spec]);
 
   return (
     <div
       ref={containerRef}
-      className="w-full overflow-hidden border border-[var(--line)] bg-[var(--surface)] p-4"
+      className="mt-4 w-full overflow-hidden rounded-[8px] border border-[var(--line)] bg-[var(--surface)] p-4"
     />
   );
 }

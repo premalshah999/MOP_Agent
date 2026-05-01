@@ -393,7 +393,7 @@ function detectDescriptor(rows: DataRow[]): MapDescriptor | null {
       return;
     }
 
-    const county = pickFirstValue(row, ['county', 'county_name', 'rcpt_county_name', 'subawardee_county_name', 'label']);
+    const county = pickFirstValue(row, ['county', 'county_name', 'rcpt_county_name', 'subawardee_county_name']);
     const countyState = toStateAbbr(row.state) ?? toStateAbbr(row.state_abbr) ?? toStateAbbr(row.rcpt_state_name) ?? toStateAbbr(row.subawardee_state_name);
     if (county && countyState) {
       const k = `${countyState}:${normalizeText(county)}`;
@@ -853,7 +853,7 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
   // Error state with retry
   if (errored) {
     return (
-      <div className="mt-3 flex items-center gap-2 rounded border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2.5 text-[12px] text-[var(--muted)]">
+      <div className="mt-3 flex items-center gap-2 rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2.5 text-[12px] text-[var(--muted)]">
         <span>Map failed to load.</span>
         <button
           type="button"
@@ -875,7 +875,7 @@ export default function MapPreview({ rows, variant = 'card', mapHeightClassName,
   const selectedView = viewOptions.find((option) => option.id === activeView) ?? viewOptions[0] ?? null;
 
   return (
-    <section className={`${isModal ? 'overflow-hidden border border-[var(--line)] bg-[var(--surface)]' : 'mt-3 overflow-hidden border border-[var(--line)] bg-[var(--surface)]'}`}>
+    <section className={`${isModal ? 'overflow-hidden rounded-[8px] border border-[var(--line)] bg-[var(--surface)]' : 'mt-3 overflow-hidden rounded-[8px] border border-[var(--line)] bg-[var(--surface)]'}`}>
       <div className="border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3">
         {viewOptions.length > 1 && (
           <div className="flex flex-wrap gap-2">

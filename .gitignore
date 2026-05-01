@@ -20,5 +20,6 @@ frontend/dist/
 
 # Dev / test
 .pytest_cache/
+.playwright-cli/
 output/
 reports/
