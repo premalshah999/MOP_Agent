@@ -1,0 +1,2310 @@
+{
+  "_meta": {
+    "project": "Maryland Open Platform (MOP) \u2014 UMD Smith School",
+    "generated": "2026-03-03",
+    "total_tables": 20,
+    "note": "This file is the primary knowledge source for the NL-to-SQL agent. Keep it current as datasets are updated.",
+    "last_updated": "2026-03-03",
+    "seventh_dataset": "Agency-level federal spending: contract_state_agency, contract_county_agency, contract_cd_agency"
+  },
+  "_critical_warnings": {
+    "state_name_casing": {
+      "problem": "State names are stored in different cases across tables. JOINs will silently fail without normalization.",
+      "lowercase_tables": [
+        "acs_state",
+        "acs_county",
+        "acs_congress",
+        "gov_state",
+        "gov_county",
+        "gov_congress",
+        "spending_state",
+        "finra_county"
+      ],
+      "uppercase_tables": [
+        "contract_state",
+        "contract_county",
+        "contract_congress",
+        "spending_state_agency"
+      ],
+      "titlecase_tables": [
+        "finra_state"
+      ],
+      "sql_fix": "Always wrap state in LOWER() before joining: LOWER(a.state) = LOWER(b.state)",
+      "example": "SELECT a.state, a.financial_literacy, b.Contracts FROM finra_state a JOIN contract_state b ON LOWER(a.state) = LOWER(b.state) WHERE a.Year = 2021 AND b.year = '2024'"
+    },
+    "special_character_columns": {
+      "problem": "These column names contain commas and ampersands and MUST be double-quoted in all SQL",
+      "columns": [
+        "\"Bonds,_Loans_&_Notes\"",
+        "\"Bonds,_Loans_&_Notes_per_capita\"",
+        "\"Non-Current_Liabilities\"",
+        "\"Non-Current_Liabilities_per_capita\""
+      ],
+      "tables_affected": [
+        "gov_state",
+        "gov_county",
+        "gov_congress"
+      ]
+    },
+    "columns_with_spaces": {
+      "problem": "Several columns in contract and spending tables contain spaces and must be quoted",
+      "examples": [
+        "\"Contracts Per 1000\"",
+        "\"Grants Per 1000\"",
+        "\"Resident Wage\"",
+        "\"Direct Payments\"",
+        "\"Federal Residents\"",
+        "\"Employees Wage\""
+      ],
+      "tables_affected": [
+        "contract_state",
+        "contract_county",
+        "contract_congress",
+        "spending_state",
+        "spending_state_agency"
+      ]
+    },
+    "year_as_string_in_contract_tables": {
+      "problem": "The year column in contract_state, contract_county, contract_congress, and spending_state_agency is a STRING, not an integer. Values are '2024' or '2020-2024' (5-year aggregate).",
+      "sql_fix": "Filter with: WHERE year = '2024'  (not WHERE year = 2024)",
+      "tables_affected": [
+        "contract_state",
+        "contract_county",
+        "contract_congress",
+        "spending_state",
+        "spending_state_agency"
+      ]
+    },
+    "gov_year_label": {
+      "note": "The Year column in gov_state, gov_county, gov_congress contains string value 'Fiscal Year 2023', not an integer. The data is single-year (FY2023 only).",
+      "sql_fix": "Do not filter by year for gov tables \u2014 there is only one year of data."
+    },
+    "finra_years_available": {
+      "note": "finra_state has data for survey years 2009, 2012, 2015, 2018, 2021. finra_county and finra_congress only have 2021."
+    },
+    "state_flow_duplicate_columns": {
+      "problem": "In state_flow, rcpt_st_cd and rcpt_state_name contain identical data (both are full state names). Likewise subawardee_st_cd = subawardee_state_name. Always use the *_state_name versions for clarity.",
+      "fix": "Use rcpt_state_name and subawardee_state_name in all queries on state_flow"
+    },
+    "congress_flow_integer_district_id": {
+      "problem": "congress_flow.prime_awardee_stcd118 and subawardee_stcd118 are INTEGER codes, not the 'MD-08' string format used in all other congress-level tables. Joining these to cd_118 in other tables will produce wrong results.",
+      "fix": "Filter congress_flow by rcpt_cd_name (e.g. WHERE rcpt_cd_name = 'Maryland CD-08') or by rcpt_state. Never join prime_awardee_stcd118 to cd_118 columns."
+    },
+    "county_flow_fips_as_integer": {
+      "note": "county_flow.rcpt_cty and subawardee_cty are integer FIPS codes \u2014 safe to join directly with gov_county.fips and acs_county.fips"
+    },
+    "contract_county_agency_state_aggregate_rows": {
+      "problem": "contract_county_agency has rows where county_fips = 1 (or single-digit values) \u2014 these are state-level aggregate rows, not real counties.",
+      "fix": "Always add WHERE county_fips > 1000 when querying contract_county_agency for county-level results"
+    }
+  },
+  "geographic_keys": {
+    "state_identifier": {
+      "column": "state",
+      "description": "Full U.S. state name. Case varies by table \u2014 always use LOWER() when joining. See _critical_warnings.state_name_casing.",
+      "sample_values_lowercase": [
+        "alabama",
+        "alaska",
+        "arizona",
+        "maryland",
+        "california"
+      ],
+      "sample_values_uppercase": [
+        "ALABAMA",
+        "ALASKA",
+        "ARIZONA",
+        "MARYLAND",
+        "CALIFORNIA"
+      ]
+    },
+    "county_identifier": {
+      "column": "county",
+      "description": "County name without 'County' suffix. Lowercase in most tables, UPPERCASE in contract tables.",
+      "join_key": "fips is the reliable join key between county-level tables \u2014 prefer fips over county name string matching"
+    },
+    "fips_identifier": {
+      "column": "fips",
+      "type": "INTEGER",
+      "description": "Federal Information Processing Standards code \u2014 unique 4-5 digit integer identifying each US county. Reliable cross-table join key.",
+      "example_values": [
+        1001,
+        1003,
+        24031
+      ]
+    },
+    "congressional_district_identifier": {
+      "column": "cd_118",
+      "type": "VARCHAR",
+      "description": "118th Congressional District code in format STATE_ABBR-DISTRICT_NUMBER. e.g. 'MD-08', 'CA-12', 'AK-00' (at-large). Fixed column name across all congress-level tables.",
+      "sample_values": [
+        "MD-08",
+        "CA-12",
+        "AK-00",
+        "AL-01",
+        "NY-10"
+      ]
+    }
+  },
+  "tables": {
+    "acs_state": {
+      "description": "American Community Survey (ACS) demographic data aggregated at the U.S. state level. Covers population, race, education, income, poverty, and housing.",
+      "source": "U.S. Census Bureau \u2014 American Community Survey",
+      "grain": "One row per state per year",
+      "geography": "state",
+      "year_range": "2010\u20132023",
+      "year_column": "Year",
+      "year_type": "INTEGER",
+      "row_count": 728,
+      "state_name_casing": "lowercase",
+      "columns": {
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, lowercase. e.g. 'maryland'",
+          "sample_values": [
+            "alabama",
+            "maryland",
+            "california"
+          ]
+        },
+        "Year": {
+          "type": "INTEGER",
+          "description": "Survey year",
+          "sample_values": [
+            2010,
+            2015,
+            2020,
+            2023
+          ]
+        },
+        "Total population": {
+          "type": "INTEGER",
+          "description": "Total resident population",
+          "unit": "persons"
+        },
+        "Age 18-65": {
+          "type": "FLOAT",
+          "description": "Percentage of population aged 18\u201365 (working-age)",
+          "unit": "percent"
+        },
+        "White": {
+          "type": "FLOAT",
+          "description": "Percentage of population identifying as White alone",
+          "unit": "percent"
+        },
+        "Black": {
+          "type": "FLOAT",
+          "description": "Percentage of population identifying as Black or African American alone",
+          "unit": "percent"
+        },
+        "Asian": {
+          "type": "FLOAT",
+          "description": "Percentage of population identifying as Asian alone",
+          "unit": "percent"
+        },
+        "Hispanic": {
+          "type": "FLOAT",
+          "description": "Percentage of population identifying as Hispanic or Latino (any race)",
+          "unit": "percent"
+        },
+        "Education >= High School": {
+          "type": "FLOAT",
+          "description": "Percentage of adults 25+ with at least a high school diploma or GED",
+          "unit": "percent"
+        },
+        "Education >= Bachelor's": {
+          "type": "FLOAT",
+          "description": "Percentage of adults 25+ with at least a bachelor's degree",
+          "unit": "percent"
+        },
+        "Education >= Graduate": {
+          "type": "FLOAT",
+          "description": "Percentage of adults 25+ with a graduate or professional degree",
+          "unit": "percent"
+        },
+        "# of household": {
+          "type": "INTEGER",
+          "description": "Total number of households",
+          "unit": "households",
+          "sql_name": "\"# of household\""
+        },
+        "Income >$50K": {
+          "type": "FLOAT",
+          "description": "Percentage of households with annual income above $50,000",
+          "unit": "percent",
+          "sql_name": "\"Income >$50K\""
+        },
+        "Income >$100K": {
+          "type": "FLOAT",
+          "description": "Percentage of households with annual income above $100,000",
+          "unit": "percent",
+          "sql_name": "\"Income >$100K\""
+        },
+        "Income >$200K": {
+          "type": "FLOAT",
+          "description": "Percentage of households with annual income above $200,000",
+          "unit": "percent",
+          "sql_name": "\"Income >$200K\""
+        },
+        "Median household income": {
+          "type": "FLOAT",
+          "description": "Median annual household income in USD",
+          "unit": "USD",
+          "sql_name": "\"Median household income\""
+        },
+        "Below poverty": {
+          "type": "FLOAT",
+          "description": "Percentage of population living below the federal poverty line",
+          "unit": "percent",
+          "sql_name": "\"Below poverty\""
+        },
+        "Owner occupied": {
+          "type": "FLOAT",
+          "description": "Percentage of housing units that are owner-occupied",
+          "unit": "percent",
+          "sql_name": "\"Owner occupied\""
+        },
+        "Renter occupied": {
+          "type": "FLOAT",
+          "description": "Percentage of housing units that are renter-occupied",
+          "unit": "percent",
+          "sql_name": "\"Renter occupied\""
+        }
+      }
+    },
+    "acs_county": {
+      "description": "ACS demographic data at the U.S. county level. Same variables as acs_state.",
+      "source": "U.S. Census Bureau \u2014 American Community Survey",
+      "grain": "One row per county per year",
+      "geography": "county",
+      "year_range": "2010\u20132023",
+      "year_column": "Year",
+      "year_type": "INTEGER",
+      "row_count": 45090,
+      "state_name_casing": "lowercase",
+      "columns": {
+        "county": {
+          "type": "VARCHAR",
+          "description": "County name, lowercase, without 'County' suffix. e.g. 'montgomery', 'prince george's'",
+          "sample_values": [
+            "autauga",
+            "montgomery",
+            "prince george's"
+          ]
+        },
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, lowercase",
+          "sample_values": [
+            "alabama",
+            "maryland"
+          ]
+        },
+        "fips": {
+          "type": "INTEGER",
+          "description": "FIPS county code \u2014 reliable join key across tables",
+          "sample_values": [
+            1001,
+            24031,
+            6037
+          ]
+        },
+        "Year": {
+          "type": "INTEGER",
+          "description": "Survey year",
+          "sample_values": [
+            2010,
+            2015,
+            2020,
+            2023
+          ]
+        },
+        "Total population": {
+          "type": "INTEGER",
+          "description": "Total resident population",
+          "unit": "persons"
+        },
+        "Age 18-65": {
+          "type": "FLOAT",
+          "description": "% population aged 18\u201365",
+          "unit": "percent"
+        },
+        "White": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Black": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Asian": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Hispanic": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Education >= High School": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Education >= Bachelor's": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Education >= Graduate": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "# of household": {
+          "type": "INTEGER",
+          "unit": "households",
+          "sql_name": "\"# of household\""
+        },
+        "Income >$50K": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Income >$50K\""
+        },
+        "Income >$100K": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Income >$100K\""
+        },
+        "Income >$200K": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Income >$200K\""
+        },
+        "Median household income": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Median household income\""
+        },
+        "Below poverty": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Below poverty\""
+        },
+        "Owner occupied": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Owner occupied\""
+        },
+        "Renter occupied": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Renter occupied\""
+        }
+      }
+    },
+    "acs_congress": {
+      "description": "ACS demographic data at the 118th Congressional District level. Same variables as acs_state/acs_county.",
+      "source": "U.S. Census Bureau \u2014 American Community Survey",
+      "grain": "One row per congressional district per year",
+      "geography": "congressional_district",
+      "year_range": "2010\u20132023",
+      "year_column": "Year",
+      "year_type": "INTEGER",
+      "row_count": 6122,
+      "columns": {
+        "cd_118": {
+          "type": "VARCHAR",
+          "description": "Congressional district code. Format: STATE_ABBR-DD. e.g. 'MD-08'",
+          "sample_values": [
+            "MD-08",
+            "CA-12",
+            "AK-00"
+          ]
+        },
+        "Year": {
+          "type": "INTEGER",
+          "description": "Survey year",
+          "sample_values": [
+            2010,
+            2020,
+            2023
+          ]
+        },
+        "Total population": {
+          "type": "FLOAT",
+          "description": "Total resident population",
+          "unit": "persons"
+        },
+        "Age 18-65": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "White": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Black": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Asian": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Hispanic": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Education >= High School": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Education >= Bachelor's": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "Education >= Graduate": {
+          "type": "FLOAT",
+          "unit": "percent"
+        },
+        "# of household": {
+          "type": "INTEGER",
+          "sql_name": "\"# of household\""
+        },
+        "Income >$50K": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Income >$50K\""
+        },
+        "Income >$100K": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Income >$100K\""
+        },
+        "Income >$200K": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Income >$200K\""
+        },
+        "Median household income": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Median household income\""
+        },
+        "Below poverty": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Below poverty\""
+        },
+        "Owner occupied": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Owner occupied\""
+        },
+        "Renter occupied": {
+          "type": "FLOAT",
+          "unit": "percent",
+          "sql_name": "\"Renter occupied\""
+        }
+      }
+    },
+    "gov_state": {
+      "description": "Municipal government finance data aggregated at the U.S. state level. Covers balance sheet items, revenue, expenses, debt, pension liability, and derived ratios. Data is for Fiscal Year 2023 only \u2014 do not filter by year.",
+      "source": "U.S. Census Bureau \u2014 Annual Survey of State and Local Government Finances",
+      "grain": "One row per state (single year: FY2023)",
+      "geography": "state",
+      "year_note": "Single year only \u2014 Fiscal Year 2023. Year column contains string 'Fiscal Year 2023'.",
+      "row_count": 50,
+      "state_name_casing": "lowercase",
+      "columns": {
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, lowercase",
+          "sample_values": [
+            "alabama",
+            "maryland",
+            "california"
+          ]
+        },
+        "Total_Assets": {
+          "type": "BIGINT",
+          "description": "Total government assets in USD",
+          "unit": "USD"
+        },
+        "Total_Liabilities": {
+          "type": "BIGINT",
+          "description": "Total government liabilities (all obligations) in USD",
+          "unit": "USD"
+        },
+        "Current_Assets": {
+          "type": "BIGINT",
+          "description": "Short-term assets convertible to cash within one year",
+          "unit": "USD"
+        },
+        "Current_Liabilities": {
+          "type": "BIGINT",
+          "description": "Obligations due within one year",
+          "unit": "USD"
+        },
+        "Non-Current_Liabilities": {
+          "type": "BIGINT",
+          "description": "Long-term obligations due beyond one year. Must be quoted in SQL.",
+          "unit": "USD",
+          "sql_name": "\"Non-Current_Liabilities\""
+        },
+        "Net_Position": {
+          "type": "BIGINT",
+          "description": "Total assets minus total liabilities. Negative = fiscal stress.",
+          "unit": "USD"
+        },
+        "Revenue": {
+          "type": "BIGINT",
+          "description": "Total government revenue (taxes, fees, transfers)",
+          "unit": "USD"
+        },
+        "Expenses": {
+          "type": "BIGINT",
+          "description": "Total government expenditures",
+          "unit": "USD"
+        },
+        "Free_Cash_Flow": {
+          "type": "BIGINT",
+          "description": "Operating cash flow minus capital expenditures",
+          "unit": "USD"
+        },
+        "Bonds,_Loans_&_Notes": {
+          "type": "BIGINT",
+          "description": "Outstanding debt from bonds, loans, and notes. MUST be quoted in SQL.",
+          "unit": "USD",
+          "sql_name": "\"Bonds,_Loans_&_Notes\""
+        },
+        "Net_Pension_Liability": {
+          "type": "BIGINT",
+          "description": "Unfunded pension obligations owed to government employees. Large values signal long-term fiscal risk.",
+          "unit": "USD"
+        },
+        "Net_OPEB_Liability": {
+          "type": "BIGINT",
+          "description": "Net Other Post-Employment Benefits liability \u2014 unfunded healthcare and other benefits promised to retirees",
+          "unit": "USD"
+        },
+        "Compensated_Absences": {
+          "type": "BIGINT",
+          "description": "Liability for earned but unused employee leave (vacation, sick days) owed as future cash outflows",
+          "unit": "USD"
+        },
+        "POPULATION": {
+          "type": "BIGINT",
+          "description": "State population used for per-capita calculations",
+          "unit": "persons"
+        },
+        "Current_Ratio": {
+          "type": "FLOAT",
+          "description": "Current Assets / Current Liabilities. Value > 1 means government can cover short-term obligations. Value < 1 signals liquidity risk."
+        },
+        "Debt_Ratio": {
+          "type": "FLOAT",
+          "description": "Total Liabilities / Total Assets. Higher = more leveraged. Value > 1 means liabilities exceed assets."
+        },
+        "Total_Liabilities_per_capita": {
+          "type": "FLOAT",
+          "description": "Total liabilities divided by population",
+          "unit": "USD per person"
+        },
+        "Current_Assets_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Compensated_Absences_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Net_Position_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Total_Assets_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Non-Current_Liabilities_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person",
+          "sql_name": "\"Non-Current_Liabilities_per_capita\""
+        },
+        "Bonds,_Loans_&_Notes_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person",
+          "sql_name": "\"Bonds,_Loans_&_Notes_per_capita\""
+        },
+        "Current_Liabilities_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Net_Pension_Liability_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Free_Cash_Flow_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Expenses_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Net_OPEB_Liability_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Revenue_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Year": {
+          "type": "VARCHAR",
+          "description": "Always 'Fiscal Year 2023'. Do NOT filter by this column \u2014 it has only one value.",
+          "sample_values": [
+            "Fiscal Year 2023"
+          ]
+        }
+      }
+    },
+    "gov_county": {
+      "description": "Municipal government finance data at the U.S. county level. Same variables as gov_state. Single year: FY2023.",
+      "source": "U.S. Census Bureau \u2014 Annual Survey of State and Local Government Finances",
+      "grain": "One row per county (single year: FY2023)",
+      "geography": "county",
+      "year_note": "Single year only \u2014 Fiscal Year 2023.",
+      "row_count": 3057,
+      "state_name_casing": "lowercase",
+      "columns": {
+        "county": {
+          "type": "VARCHAR",
+          "description": "County name, lowercase"
+        },
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, lowercase"
+        },
+        "fips": {
+          "type": "INTEGER",
+          "description": "FIPS county code"
+        },
+        "POPULATION": {
+          "type": "BIGINT",
+          "unit": "persons"
+        },
+        "Total_Assets": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Total_Liabilities": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Current_Assets": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Current_Liabilities": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Non-Current_Liabilities": {
+          "type": "BIGINT",
+          "unit": "USD",
+          "sql_name": "\"Non-Current_Liabilities\""
+        },
+        "Net_Position": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Revenue": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Expenses": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Free_Cash_Flow": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Bonds,_Loans_&_Notes": {
+          "type": "BIGINT",
+          "unit": "USD",
+          "sql_name": "\"Bonds,_Loans_&_Notes\""
+        },
+        "Net_Pension_Liability": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Net_OPEB_Liability": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Compensated_Absences": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Current_Ratio": {
+          "type": "FLOAT",
+          "description": "Current Assets / Current Liabilities"
+        },
+        "Debt_Ratio": {
+          "type": "FLOAT",
+          "description": "Total Liabilities / Total Assets"
+        },
+        "Total_Liabilities_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Net_Pension_Liability_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Revenue_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Expenses_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Bonds,_Loans_&_Notes_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person",
+          "sql_name": "\"Bonds,_Loans_&_Notes_per_capita\""
+        },
+        "Non-Current_Liabilities_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person",
+          "sql_name": "\"Non-Current_Liabilities_per_capita\""
+        },
+        "Compensated_Absences_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Current_Assets_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Current_Liabilities_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Free_Cash_Flow_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Net_OPEB_Liability_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Net_Position_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Total_Assets_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Year": {
+          "type": "VARCHAR",
+          "description": "Always 'Fiscal Year 2023'. Do NOT filter.",
+          "sample_values": [
+            "Fiscal Year 2023"
+          ]
+        }
+      }
+    },
+    "gov_congress": {
+      "description": "Municipal government finance data at the 118th Congressional District level. Same variables as gov_state. Single year: FY2023.",
+      "source": "U.S. Census Bureau \u2014 Annual Survey of State and Local Government Finances",
+      "grain": "One row per congressional district (single year: FY2023)",
+      "geography": "congressional_district",
+      "year_note": "Single year only \u2014 Fiscal Year 2023.",
+      "row_count": 428,
+      "columns": {
+        "cd_118": {
+          "type": "VARCHAR",
+          "description": "Congressional district code e.g. 'MD-08'"
+        },
+        "Total_Assets": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Total_Liabilities": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Net_Position": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Revenue": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Expenses": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Net_Pension_Liability": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Net_OPEB_Liability": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Bonds,_Loans_&_Notes": {
+          "type": "BIGINT",
+          "unit": "USD",
+          "sql_name": "\"Bonds,_Loans_&_Notes\""
+        },
+        "Current_Ratio": {
+          "type": "FLOAT"
+        },
+        "Debt_Ratio": {
+          "type": "FLOAT"
+        },
+        "POPULATION": {
+          "type": "BIGINT",
+          "unit": "persons"
+        },
+        "Total_Liabilities_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Net_Pension_Liability_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Revenue_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Bonds,_Loans_&_Notes_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person",
+          "sql_name": "\"Bonds,_Loans_&_Notes_per_capita\""
+        },
+        "Compensated_Absences": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Compensated_Absences_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Current_Assets": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Current_Assets_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Current_Liabilities": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Current_Liabilities_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Expenses_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Free_Cash_Flow": {
+          "type": "BIGINT",
+          "unit": "USD"
+        },
+        "Free_Cash_Flow_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Net_OPEB_Liability_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Net_Position_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Non-Current_Liabilities": {
+          "type": "BIGINT",
+          "unit": "USD",
+          "sql_name": "\"Non-Current_Liabilities\""
+        },
+        "Non-Current_Liabilities_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person",
+          "sql_name": "\"Non-Current_Liabilities_per_capita\""
+        },
+        "Total_Assets_per_capita": {
+          "type": "FLOAT",
+          "unit": "USD per person"
+        },
+        "Year": {
+          "type": "VARCHAR",
+          "description": "Always 'Fiscal Year 2023'. Do NOT filter.",
+          "sample_values": [
+            "Fiscal Year 2023"
+          ]
+        }
+      }
+    },
+    "contract_state": {
+      "description": "Federal contract and grant awards aggregated at the U.S. state level. Two rows per state: one for 2024 only, one for the 2020-2024 five-year aggregate. Source: USAspending.gov.",
+      "source": "USAspending.gov",
+      "grain": "One row per state per year-period",
+      "geography": "state",
+      "year_values": [
+        "'2024'",
+        "'2020-2024'"
+      ],
+      "year_column": "year",
+      "year_type": "VARCHAR (not integer \u2014 always filter with quoted string e.g. year = '2024')",
+      "row_count": 102,
+      "state_name_casing": "UPPERCASE",
+      "columns": {
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, UPPERCASE. e.g. 'MARYLAND'",
+          "sample_values": [
+            "ALABAMA",
+            "MARYLAND",
+            "CALIFORNIA"
+          ]
+        },
+        "year": {
+          "type": "VARCHAR",
+          "description": "Year or period. Values are '2024' or '2020-2024'. Always quote in SQL: WHERE year = '2024'",
+          "sample_values": [
+            "2024",
+            "2020-2024"
+          ]
+        },
+        "state_fips": {
+          "type": "INTEGER",
+          "description": "State FIPS code (1\u201356)"
+        },
+        "Contracts": {
+          "type": "FLOAT",
+          "description": "Total federal contract obligations awarded to entities in this state",
+          "unit": "USD",
+          "sql_name": "\"Contracts\""
+        },
+        "Contracts Per 1000": {
+          "type": "FLOAT",
+          "description": "Contract dollars per 1,000 residents",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Contracts Per 1000\""
+        },
+        "Grants": {
+          "type": "FLOAT",
+          "description": "Total federal grant awards to entities in this state",
+          "unit": "USD"
+        },
+        "Grants Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Grants Per 1000\""
+        },
+        "Resident Wage": {
+          "type": "FLOAT",
+          "description": "Total federal wages paid to residents of this state",
+          "unit": "USD",
+          "sql_name": "\"Resident Wage\""
+        },
+        "Resident Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Resident Wage Per 1000\""
+        },
+        "Direct Payments": {
+          "type": "FLOAT",
+          "description": "Federal direct payment transfers (e.g. Social Security, Medicare, benefits)",
+          "unit": "USD",
+          "sql_name": "\"Direct Payments\""
+        },
+        "Direct Payments Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Direct Payments Per 1000\""
+        },
+        "Federal Residents": {
+          "type": "FLOAT",
+          "description": "Count of federal employees residing in this state",
+          "unit": "persons",
+          "sql_name": "\"Federal Residents\""
+        },
+        "Federal Residents Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000 people",
+          "sql_name": "\"Federal Residents Per 1000\""
+        },
+        "Employees": {
+          "type": "FLOAT",
+          "description": "Federal civilian employees working in this state",
+          "unit": "persons"
+        },
+        "Employees Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000 people",
+          "sql_name": "\"Employees Per 1000\""
+        },
+        "Employees Wage": {
+          "type": "FLOAT",
+          "description": "Total wages paid to federal employees working in this state",
+          "unit": "USD",
+          "sql_name": "\"Employees Wage\""
+        },
+        "Employees Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Employees Wage Per 1000\""
+        }
+      }
+    },
+    "contract_county": {
+      "description": "Federal contract and grant awards at the U.S. county level. Same variables as contract_state minus Employees columns.",
+      "source": "USAspending.gov",
+      "grain": "One row per county per year-period",
+      "geography": "county",
+      "year_values": [
+        "'2024'",
+        "'2020-2024'"
+      ],
+      "year_type": "VARCHAR",
+      "row_count": 6268,
+      "state_name_casing": "UPPERCASE",
+      "columns": {
+        "state": {
+          "type": "VARCHAR",
+          "description": "UPPERCASE state name"
+        },
+        "county": {
+          "type": "VARCHAR",
+          "description": "UPPERCASE county name"
+        },
+        "year": {
+          "type": "VARCHAR",
+          "description": "Always quote: WHERE year = '2024'"
+        },
+        "state_fips": {
+          "type": "INTEGER"
+        },
+        "county_fips": {
+          "type": "INTEGER",
+          "description": "FIPS county code \u2014 use for joins"
+        },
+        "Contracts": {
+          "type": "FLOAT",
+          "unit": "USD"
+        },
+        "Contracts Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Contracts Per 1000\""
+        },
+        "Grants": {
+          "type": "FLOAT",
+          "unit": "USD"
+        },
+        "Grants Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Grants Per 1000\""
+        },
+        "Resident Wage": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Resident Wage\""
+        },
+        "Resident Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Resident Wage Per 1000\""
+        },
+        "Direct Payments": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Direct Payments\""
+        },
+        "Direct Payments Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Direct Payments Per 1000\""
+        },
+        "Federal Residents": {
+          "type": "FLOAT",
+          "unit": "persons",
+          "sql_name": "\"Federal Residents\""
+        },
+        "Federal Residents Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000",
+          "sql_name": "\"Federal Residents Per 1000\""
+        }
+      }
+    },
+    "contract_congress": {
+      "description": "Federal contract and grant awards at the 118th Congressional District level.",
+      "source": "USAspending.gov",
+      "grain": "One row per congressional district per year-period",
+      "geography": "congressional_district",
+      "year_values": [
+        "'2024'",
+        "'2020-2024'"
+      ],
+      "year_type": "VARCHAR",
+      "row_count": 868,
+      "state_name_casing": "UPPERCASE",
+      "columns": {
+        "cd_118": {
+          "type": "VARCHAR",
+          "description": "Congressional district code e.g. 'MD-08'"
+        },
+        "year": {
+          "type": "VARCHAR",
+          "description": "Always quote: WHERE year = '2024'"
+        },
+        "state": {
+          "type": "VARCHAR",
+          "description": "UPPERCASE state abbreviation or name"
+        },
+        "state_fips": {
+          "type": "INTEGER"
+        },
+        "Contracts": {
+          "type": "FLOAT",
+          "unit": "USD"
+        },
+        "Contracts Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Contracts Per 1000\""
+        },
+        "Grants": {
+          "type": "FLOAT",
+          "unit": "USD"
+        },
+        "Grants Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Grants Per 1000\""
+        },
+        "Resident Wage": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Resident Wage\""
+        },
+        "Resident Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Resident Wage Per 1000\""
+        },
+        "Direct Payments": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Direct Payments\""
+        },
+        "Direct Payments Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Direct Payments Per 1000\""
+        },
+        "Federal Residents": {
+          "type": "FLOAT",
+          "unit": "persons",
+          "sql_name": "\"Federal Residents\""
+        },
+        "Federal Residents Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000",
+          "sql_name": "\"Federal Residents Per 1000\""
+        }
+      }
+    },
+    "finra_state": {
+      "description": "FINRA National Financial Capability Study (NFCS) \u2014 financial health indices aggregated at the state level. All metric columns are normalized 0\u20131 indices (higher = more of that characteristic). Survey data: 2009, 2012, 2015, 2018, 2021 only.",
+      "source": "FINRA Investor Education Foundation",
+      "grain": "One row per state per survey year",
+      "geography": "state",
+      "year_range": "2009, 2012, 2015, 2018, 2021 (survey waves only \u2014 not annual)",
+      "year_column": "Year",
+      "year_type": "INTEGER",
+      "row_count": 255,
+      "state_name_casing": "Title Case (e.g. 'Maryland')",
+      "columns": {
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, Title Case. e.g. 'Maryland'. Use LOWER() when joining with other tables.",
+          "sample_values": [
+            "Alabama",
+            "Maryland",
+            "California"
+          ]
+        },
+        "Year": {
+          "type": "INTEGER",
+          "description": "Survey wave year. Only 2009, 2012, 2015, 2018, 2021 exist \u2014 do not filter for other years.",
+          "sample_values": [
+            2009,
+            2012,
+            2015,
+            2018,
+            2021
+          ]
+        },
+        "financial_constraint": {
+          "type": "FLOAT",
+          "description": "Index (0\u20131) measuring household financial stress: liquidity pressure, difficulty covering expenses, lack of emergency savings. Higher = more constrained/stressed.",
+          "range": "0\u20131"
+        },
+        "alternative_financing": {
+          "type": "FLOAT",
+          "description": "Index (0\u20131) measuring reliance on high-cost non-traditional credit: payday loans, pawn shops, rent-to-own. Higher = more reliance on predatory/alternative finance.",
+          "range": "0\u20131"
+        },
+        "financial_literacy": {
+          "type": "FLOAT",
+          "description": "Index (0\u20131) measuring objective financial knowledge: interest compounding, inflation, bond prices, mortgage math. Higher = more financially literate.",
+          "range": "0\u20131"
+        },
+        "satisfied": {
+          "type": "FLOAT",
+          "description": "Share (0\u20131) of respondents satisfied with their overall financial condition. Higher = more satisfaction.",
+          "range": "0\u20131"
+        },
+        "risk_averse": {
+          "type": "FLOAT",
+          "description": "Share (0\u20131) of respondents with low willingness to take financial risk. Higher = more risk-averse population.",
+          "range": "0\u20131"
+        }
+      }
+    },
+    "finra_county": {
+      "description": "FINRA NFCS financial health indices at the U.S. county level. 2021 only. Same metrics as finra_state.",
+      "source": "FINRA Investor Education Foundation",
+      "grain": "One row per county (2021 only)",
+      "geography": "county",
+      "year_note": "2021 only",
+      "row_count": 2071,
+      "state_name_casing": "lowercase",
+      "columns": {
+        "county": {
+          "type": "VARCHAR",
+          "description": "County name, lowercase"
+        },
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, lowercase. Use LOWER() when joining."
+        },
+        "fips": {
+          "type": "INTEGER",
+          "description": "FIPS county code"
+        },
+        "Year": {
+          "type": "INTEGER",
+          "description": "Always 2021",
+          "sample_values": [
+            2021
+          ]
+        },
+        "financial_constraint": {
+          "type": "FLOAT",
+          "description": "Household financial stress index (0\u20131). Higher = more stressed.",
+          "range": "0\u20131"
+        },
+        "alternative_financing": {
+          "type": "FLOAT",
+          "description": "Reliance on high-cost credit index (0\u20131)",
+          "range": "0\u20131"
+        },
+        "financial_literacy": {
+          "type": "FLOAT",
+          "description": "Objective financial knowledge index (0\u20131). Higher = more literate.",
+          "range": "0\u20131"
+        },
+        "satisfied": {
+          "type": "FLOAT",
+          "description": "Share satisfied with financial condition (0\u20131)",
+          "range": "0\u20131"
+        },
+        "risk_averse": {
+          "type": "FLOAT",
+          "description": "Share unwilling to take financial risk (0\u20131)",
+          "range": "0\u20131"
+        }
+      }
+    },
+    "finra_congress": {
+      "description": "FINRA NFCS financial health indices at the 118th Congressional District level. 2021 only.",
+      "source": "FINRA Investor Education Foundation",
+      "grain": "One row per congressional district (2021 only)",
+      "geography": "congressional_district",
+      "year_note": "2021 only",
+      "row_count": 436,
+      "columns": {
+        "cd_118": {
+          "type": "VARCHAR",
+          "description": "Congressional district code e.g. 'MD-08'"
+        },
+        "Year": {
+          "type": "INTEGER",
+          "description": "Always 2021"
+        },
+        "financial_constraint": {
+          "type": "FLOAT",
+          "range": "0\u20131"
+        },
+        "alternative_financing": {
+          "type": "FLOAT",
+          "range": "0\u20131"
+        },
+        "financial_literacy": {
+          "type": "FLOAT",
+          "range": "0\u20131"
+        },
+        "satisfied": {
+          "type": "FLOAT",
+          "range": "0\u20131"
+        },
+        "risk_averse": {
+          "type": "FLOAT",
+          "range": "0\u20131"
+        }
+      }
+    },
+    "spending_state": {
+      "description": "Federal spending breakdown by state and spending category. Same structure as contract_state but focused on spending type breakdown. Two rows per state: 2024 and 2020-2024 aggregate.",
+      "source": "USAspending.gov + agency payroll aggregates",
+      "grain": "One row per state per year-period",
+      "geography": "state",
+      "year_values": [
+        "'2024'",
+        "'2020-2024'"
+      ],
+      "year_type": "VARCHAR",
+      "row_count": 102,
+      "state_name_casing": "lowercase",
+      "columns": {
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, lowercase"
+        },
+        "Year": {
+          "type": "VARCHAR",
+          "description": "Year or period string. Values: '2024' or '2020-2024'. Always quote."
+        },
+        "Contracts": {
+          "type": "FLOAT",
+          "unit": "USD"
+        },
+        "Contracts Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Contracts Per 1000\""
+        },
+        "Grants": {
+          "type": "FLOAT",
+          "unit": "USD"
+        },
+        "Grants Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Grants Per 1000\""
+        },
+        "Resident Wage": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Resident Wage\""
+        },
+        "Resident Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Resident Wage Per 1000\""
+        },
+        "Direct Payments": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Direct Payments\""
+        },
+        "Direct Payments Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Direct Payments Per 1000\""
+        },
+        "Federal Residents": {
+          "type": "FLOAT",
+          "unit": "persons",
+          "sql_name": "\"Federal Residents\""
+        },
+        "Federal Residents Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000",
+          "sql_name": "\"Federal Residents Per 1000\""
+        },
+        "Employees": {
+          "type": "FLOAT",
+          "unit": "persons"
+        },
+        "Employees Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000",
+          "sql_name": "\"Employees Per 1000\""
+        },
+        "Employees Wage": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Employees Wage\""
+        },
+        "Employees Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000",
+          "sql_name": "\"Employees Wage Per 1000\""
+        }
+      }
+    },
+    "spending_state_agency": {
+      "description": "Federal spending broken down by both state AND federal agency. Allows questions like 'how much did the Department of Defense spend in Maryland'. 15 agencies \u00d7 50 states \u00d7 2 year-periods.",
+      "source": "USAspending.gov + agency payroll aggregates",
+      "grain": "One row per agency per state per year-period",
+      "geography": "state",
+      "year_values": [
+        "'2024'",
+        "'2020-2024'"
+      ],
+      "year_type": "VARCHAR",
+      "row_count": 2142,
+      "state_name_casing": "UPPERCASE",
+      "agency_values": [
+        "Department of Agriculture",
+        "Department of Commerce",
+        "Department of Defense",
+        "Department of Education",
+        "Department of Energy",
+        "Department of Health and Human Services",
+        "Department of Homeland Security",
+        "Department of Housing and Urban Development",
+        "Department of Justice",
+        "Department of Labor",
+        "Department of State",
+        "Department of Transportation",
+        "Department of Veterans Affairs",
+        "Department of the Interior",
+        "Department of the Treasury"
+      ],
+      "columns": {
+        "agency": {
+          "type": "VARCHAR",
+          "description": "Federal agency name. See agency_values for exact strings to use in WHERE clauses.",
+          "sample_values": [
+            "Department of Defense",
+            "Department of Health and Human Services"
+          ]
+        },
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, UPPERCASE. e.g. 'MARYLAND'"
+        },
+        "state_fips": {
+          "type": "INTEGER"
+        },
+        "year": {
+          "type": "VARCHAR",
+          "description": "Always quote: WHERE year = '2024'"
+        },
+        "Contracts": {
+          "type": "FLOAT",
+          "unit": "USD"
+        },
+        "Grants": {
+          "type": "FLOAT",
+          "unit": "USD"
+        },
+        "Resident Wage": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Resident Wage\""
+        },
+        "Direct Payments": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Direct Payments\""
+        },
+        "Federal Residents": {
+          "type": "FLOAT",
+          "unit": "persons",
+          "sql_name": "\"Federal Residents\""
+        },
+        "Employees": {
+          "type": "FLOAT",
+          "unit": "persons"
+        },
+        "Employees Wage": {
+          "type": "FLOAT",
+          "unit": "USD",
+          "sql_name": "\"Employees Wage\""
+        },
+        "Contracts Per 1000": {
+          "type": "FLOAT",
+          "sql_name": "\"Contracts Per 1000\""
+        },
+        "Grants Per 1000": {
+          "type": "FLOAT",
+          "sql_name": "\"Grants Per 1000\""
+        },
+        "Direct Payments Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Direct Payments Per 1000\""
+        },
+        "Employees Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000 people",
+          "sql_name": "\"Employees Per 1000\""
+        },
+        "Employees Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Employees Wage Per 1000\""
+        },
+        "Federal Residents Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000 people",
+          "sql_name": "\"Federal Residents Per 1000\""
+        },
+        "Resident Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Resident Wage Per 1000\""
+        }
+      }
+    },
+    "state_flow": {
+      "description": "Federal subaward fund flow data between U.S. states. Each row represents a dollar flow from a prime awardee state to a sub-awardee state, broken down by federal agency and NAICS industry. Use for questions about which states send or receive the most federal subaward money and through which agencies.",
+      "source": "USAspending.gov \u2014 subaward records",
+      "grain": "One row per prime-state \u2192 sub-state flow per agency per NAICS industry",
+      "geography": "state-to-state flow (no year column \u2014 annual amounts embedded in subaward_amount_year)",
+      "row_count": 27436,
+      "critical_notes": [
+        "rcpt_st_cd and rcpt_state_name are DUPLICATES \u2014 both contain the same full state name in Title Case. Use rcpt_state_name for clarity.",
+        "Unnamed: 0 is a row index \u2014 never use in queries.",
+        "subaward_amount_year can be NEGATIVE (represents adjustments/clawbacks). Use SUM() carefully.",
+        "No fiscal year column \u2014 this is a total aggregate, not annual slices."
+      ],
+      "columns": {
+        "rcpt_st_cd": {
+          "type": "VARCHAR",
+          "description": "Prime awardee state name, Title Case. DUPLICATE of rcpt_state_name \u2014 prefer rcpt_state_name.",
+          "sample_values": [
+            "Maryland",
+            "California",
+            "Virginia"
+          ]
+        },
+        "subawardee_st_cd": {
+          "type": "VARCHAR",
+          "description": "Sub-awardee state name, Title Case. DUPLICATE of subawardee_state_name \u2014 prefer subawardee_state_name.",
+          "sample_values": [
+            "Maryland",
+            "Texas",
+            "District of columbia"
+          ]
+        },
+        "rcpt_state_name": {
+          "type": "VARCHAR",
+          "description": "Full name of the prime awardee state (receives federal award and issues subawards). Title Case.",
+          "sample_values": [
+            "Maryland",
+            "California",
+            "Virginia"
+          ]
+        },
+        "subawardee_state_name": {
+          "type": "VARCHAR",
+          "description": "Full name of the sub-awardee state (receives money downstream from prime). Title Case.",
+          "sample_values": [
+            "Maryland",
+            "Texas",
+            "District of Columbia"
+          ]
+        },
+        "subaward_amount_year": {
+          "type": "FLOAT",
+          "description": "Dollar amount of the subaward flow. Can be negative (adjustments). SUM() across rows for totals.",
+          "unit": "USD"
+        },
+        "agency_code": {
+          "type": "INTEGER",
+          "description": "Numeric federal agency code"
+        },
+        "agency_name": {
+          "type": "VARCHAR",
+          "description": "Federal agency name",
+          "sample_values": [
+            "Department of Agriculture",
+            "Small Business Administration",
+            "National Science Foundation"
+          ]
+        },
+        "naics_2digit_code": {
+          "type": "INTEGER",
+          "description": "2-digit NAICS industry code",
+          "sample_values": [
+            54,
+            51,
+            23
+          ]
+        },
+        "naics_2digit_title": {
+          "type": "VARCHAR",
+          "description": "Industry name for NAICS code",
+          "sample_values": [
+            "Professional, Scientific, and Technical Services",
+            "Information",
+            "Construction"
+          ]
+        }
+      }
+    },
+    "county_flow": {
+      "description": "Federal subaward fund flow data between U.S. counties. Each row is a prime-awardee county to sub-awardee county money flow with coordinates for mapping. Covers fiscal years 2010\u20132024.",
+      "source": "USAspending.gov \u2014 subaward records",
+      "grain": "One row per prime-county \u2192 sub-county flow per agency per fiscal year",
+      "geography": "county-to-county flow",
+      "year_range": "2010\u20132024",
+      "year_column": "act_dt_fis_yr",
+      "year_type": "INTEGER",
+      "row_count": 157113,
+      "columns": {
+        "rcpt_cty": {
+          "type": "INTEGER",
+          "description": "FIPS code of the prime awardee county (receives federal award)",
+          "sample_values": [
+            24031,
+            11001,
+            6037
+          ]
+        },
+        "subawardee_cty": {
+          "type": "INTEGER",
+          "description": "FIPS code of the sub-awardee county (receives money downstream)",
+          "sample_values": [
+            24031,
+            10001,
+            6037
+          ]
+        },
+        "rcpt_cty_name": {
+          "type": "VARCHAR",
+          "description": "Full name of prime awardee county including state. e.g. 'Montgomery County'",
+          "sample_values": [
+            "Montgomery County",
+            "District of Columbia"
+          ]
+        },
+        "subawardee_cty_name": {
+          "type": "VARCHAR",
+          "description": "Full name of sub-awardee county",
+          "sample_values": [
+            "Montgomery County",
+            "Kent County"
+          ]
+        },
+        "rcpt_state": {
+          "type": "VARCHAR",
+          "description": "State of prime awardee, Title Case",
+          "sample_values": [
+            "Maryland",
+            "Virginia",
+            "California"
+          ]
+        },
+        "subawardee_state": {
+          "type": "VARCHAR",
+          "description": "State of sub-awardee, Title Case"
+        },
+        "rcpt_full_name": {
+          "type": "VARCHAR",
+          "description": "Full identifier of prime awardee: 'County Name, State Name'"
+        },
+        "subawardee_full_name": {
+          "type": "VARCHAR",
+          "description": "Full identifier of sub-awardee: 'County Name, State Name'"
+        },
+        "act_dt_fis_yr": {
+          "type": "INTEGER",
+          "description": "Federal fiscal year of the award",
+          "sample_values": [
+            2018,
+            2020,
+            2022,
+            2024
+          ]
+        },
+        "subaward_amount": {
+          "type": "FLOAT",
+          "description": "Dollar amount of subaward",
+          "unit": "USD"
+        },
+        "agency_name": {
+          "type": "VARCHAR",
+          "description": "Federal agency that issued the prime award",
+          "sample_values": [
+            "Department of Defense",
+            "Department of Health and Human Services",
+            "National Aeronautics and Space Administration"
+          ]
+        },
+        "origin_lat": {
+          "type": "FLOAT",
+          "description": "Latitude of prime awardee county centroid"
+        },
+        "origin_lon": {
+          "type": "FLOAT",
+          "description": "Longitude of prime awardee county centroid"
+        },
+        "dest_lat": {
+          "type": "FLOAT",
+          "description": "Latitude of sub-awardee county centroid"
+        },
+        "dest_lon": {
+          "type": "FLOAT",
+          "description": "Longitude of sub-awardee county centroid"
+        }
+      }
+    },
+    "congress_flow": {
+      "description": "Federal subaward fund flow data between 118th Congressional Districts. Each row is a prime-awardee district to sub-awardee district money flow. Covers fiscal years 2020\u20132024. IMPORTANT: the district identifier columns are integers, not the standard cd_118 format \u2014 use rcpt_cd_name for readable district names.",
+      "source": "USAspending.gov \u2014 subaward records",
+      "grain": "One row per prime-district \u2192 sub-district flow per agency per fiscal year",
+      "geography": "congressional-district-to-congressional-district flow",
+      "year_range": "2020\u20132024",
+      "year_column": "act_dt_fis_yr",
+      "year_type": "INTEGER",
+      "row_count": 115827,
+      "critical_notes": [
+        "prime_awardee_stcd118 and subawardee_stcd118 are INTEGER codes (e.g. 200, 101), NOT the standard 'AK-00' / 'MD-08' format used in other tables. Do NOT join these to cd_118 columns in other tables.",
+        "Use rcpt_cd_name for human-readable district names like 'Alaska CD-00', 'Maryland CD-08'.",
+        "Unnamed: 0 is a row index \u2014 never use in queries.",
+        "naics_2digit_code is FLOAT here (not integer) due to nulls."
+      ],
+      "columns": {
+        "prime_awardee_stcd118": {
+          "type": "INTEGER",
+          "description": "Numeric district code of prime awardee \u2014 NOT compatible with cd_118 string format in other tables. Use rcpt_cd_name for readable names.",
+          "sample_values": [
+            200,
+            101,
+            102
+          ]
+        },
+        "subawardee_stcd118": {
+          "type": "INTEGER",
+          "description": "Numeric district code of sub-awardee \u2014 NOT compatible with cd_118 string format.",
+          "sample_values": [
+            200,
+            101,
+            102
+          ]
+        },
+        "rcpt_cd_name": {
+          "type": "VARCHAR",
+          "description": "Human-readable name of prime awardee district. Format: 'STATE CD-NN'. e.g. 'Maryland CD-08', 'Alaska CD-00'",
+          "sample_values": [
+            "Alaska CD-00",
+            "Alabama CD-01",
+            "Maryland CD-08"
+          ]
+        },
+        "subawardee_cd_name": {
+          "type": "VARCHAR",
+          "description": "Human-readable name of sub-awardee district"
+        },
+        "rcpt_state": {
+          "type": "VARCHAR",
+          "description": "State of prime awardee, Title Case"
+        },
+        "subawardee_state": {
+          "type": "VARCHAR",
+          "description": "State of sub-awardee, Title Case"
+        },
+        "rcpt_full_name": {
+          "type": "VARCHAR",
+          "description": "Full identifier of prime awardee district"
+        },
+        "subawardee_full_name": {
+          "type": "VARCHAR",
+          "description": "Full identifier of sub-awardee district"
+        },
+        "act_dt_fis_yr": {
+          "type": "INTEGER",
+          "description": "Federal fiscal year",
+          "sample_values": [
+            2020,
+            2021,
+            2022,
+            2023,
+            2024
+          ]
+        },
+        "subaward_amount": {
+          "type": "FLOAT",
+          "description": "Dollar amount of subaward",
+          "unit": "USD"
+        },
+        "agency_name": {
+          "type": "VARCHAR",
+          "description": "Federal agency name",
+          "sample_values": [
+            "Department of Agriculture",
+            "Department of Defense",
+            "Department of Transportation"
+          ]
+        },
+        "origin_lat": {
+          "type": "FLOAT",
+          "description": "Latitude of prime awardee district centroid"
+        },
+        "origin_lon": {
+          "type": "FLOAT",
+          "description": "Longitude of prime awardee district centroid"
+        },
+        "dest_lat": {
+          "type": "FLOAT",
+          "description": "Latitude of sub-awardee district centroid"
+        },
+        "dest_lon": {
+          "type": "FLOAT",
+          "description": "Longitude of sub-awardee district centroid"
+        },
+        "naics_2digit_code": {
+          "type": "FLOAT",
+          "description": "2-digit NAICS industry code (stored as float due to nulls)",
+          "sample_values": [
+            54.0,
+            23.0,
+            21.0
+          ]
+        },
+        "naics_2digit_title": {
+          "type": "VARCHAR",
+          "description": "Industry name",
+          "sample_values": [
+            "Professional, Scientific, and Technical Services",
+            "Construction"
+          ]
+        }
+      }
+    },
+    "contract_state_agency": {
+      "description": "Federal spending broken down by BOTH agency AND state. Allows questions like 'how much did the Department of Defense spend in Maryland' or 'which agency gives the most grants to Texas'. 21 agencies \u00d7 50 states \u00d7 2 year-periods = 2,142 rows. Also includes employee and wage breakdown.",
+      "source": "USAspending.gov + agency payroll aggregates",
+      "grain": "One row per agency per state per year-period",
+      "geography": "state",
+      "file": "contract_state_Mar2.xlsx",
+      "year_values": [
+        "'2024'",
+        "'2020-2024'"
+      ],
+      "year_type": "VARCHAR \u2014 always quote: WHERE year = '2024'",
+      "row_count": 2142,
+      "state_name_casing": "UPPERCASE",
+      "agency_values": [
+        "Department of Agriculture",
+        "Department of Commerce",
+        "Department of Defense",
+        "Department of Education",
+        "Department of Energy",
+        "Department of Health and Human Services",
+        "Department of Homeland Security",
+        "Department of Housing and Urban Development",
+        "Department of Justice",
+        "Department of Labor",
+        "Department of State",
+        "Department of Transportation",
+        "Department of Veterans Affairs",
+        "Department of the Interior",
+        "Department of the Treasury",
+        "Environmental Protection Agency",
+        "National Aeronautics and Space Administration",
+        "National Science Foundation",
+        "Small Business Administration",
+        "Social Security Administration",
+        "Others"
+      ],
+      "columns": {
+        "agency": {
+          "type": "VARCHAR",
+          "description": "Federal agency name. See agency_values for exact strings.",
+          "sample_values": [
+            "Department of Defense",
+            "Department of Health and Human Services",
+            "Environmental Protection Agency"
+          ]
+        },
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, UPPERCASE. e.g. 'MARYLAND'"
+        },
+        "year": {
+          "type": "VARCHAR",
+          "description": "Year period. Always quote: WHERE year = '2024'",
+          "sample_values": [
+            "2024",
+            "2020-2024"
+          ]
+        },
+        "state_fips": {
+          "type": "INTEGER"
+        },
+        "Contracts": {
+          "type": "FLOAT",
+          "description": "Total federal contract obligations from this agency in this geography",
+          "unit": "USD"
+        },
+        "Contracts Per 1000": {
+          "type": "FLOAT",
+          "description": "Contract dollars per 1,000 residents",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Contracts Per 1000\""
+        },
+        "Grants": {
+          "type": "FLOAT",
+          "description": "Total federal grant awards from this agency",
+          "unit": "USD"
+        },
+        "Grants Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Grants Per 1000\""
+        },
+        "Resident Wage": {
+          "type": "FLOAT",
+          "description": "Total wages paid to residents tied to this agency's federal activity",
+          "unit": "USD",
+          "sql_name": "\"Resident Wage\""
+        },
+        "Resident Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Resident Wage Per 1000\""
+        },
+        "Direct Payments": {
+          "type": "FLOAT",
+          "description": "Federal direct payment transfers (Social Security, Medicare, benefits) from this agency",
+          "unit": "USD",
+          "sql_name": "\"Direct Payments\""
+        },
+        "Direct Payments Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Direct Payments Per 1000\""
+        },
+        "Federal Residents": {
+          "type": "INTEGER",
+          "description": "Count of federal employees/residents associated with this agency in this geography",
+          "unit": "persons",
+          "sql_name": "\"Federal Residents\""
+        },
+        "Federal Residents Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000 people",
+          "sql_name": "\"Federal Residents Per 1000\""
+        },
+        "Employees": {
+          "type": "INTEGER",
+          "description": "Federal civilian employees from this agency in this state",
+          "unit": "persons"
+        },
+        "Employees Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000 people",
+          "sql_name": "\"Employees Per 1000\""
+        },
+        "Employees Wage": {
+          "type": "FLOAT",
+          "description": "Total wages paid to federal employees from this agency in this state",
+          "unit": "USD",
+          "sql_name": "\"Employees Wage\""
+        },
+        "Employees Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Employees Wage Per 1000\""
+        }
+      }
+    },
+    "contract_county_agency": {
+      "description": "Federal spending broken down by BOTH agency AND county. Most granular agency-level dataset. 21 agencies \u00d7 ~3,135 counties \u00d7 2 year-periods = ~93,700 rows. Use for questions like 'which agency gives the most grants to Montgomery County, Maryland'.",
+      "source": "USAspending.gov + agency payroll aggregates",
+      "grain": "One row per agency per county per year-period",
+      "geography": "county",
+      "file": "contract_county_Mar2.xlsx",
+      "year_values": [
+        "'2024'",
+        "'2020-2024'"
+      ],
+      "year_type": "VARCHAR \u2014 always quote: WHERE year = '2024'",
+      "row_count": 93736,
+      "state_name_casing": "UPPERCASE",
+      "county_name_casing": "UPPERCASE",
+      "agency_values": [
+        "Department of Agriculture",
+        "Department of Commerce",
+        "Department of Defense",
+        "Department of Education",
+        "Department of Energy",
+        "Department of Health and Human Services",
+        "Department of Homeland Security",
+        "Department of Housing and Urban Development",
+        "Department of Justice",
+        "Department of Labor",
+        "Department of State",
+        "Department of Transportation",
+        "Department of Veterans Affairs",
+        "Department of the Interior",
+        "Department of the Treasury",
+        "Environmental Protection Agency",
+        "National Aeronautics and Space Administration",
+        "National Science Foundation",
+        "Small Business Administration",
+        "Social Security Administration",
+        "Others"
+      ],
+      "critical_note": "county_fips can be 1 (state-level aggregate row) or 5-digit county FIPS. Filter county_fips > 1000 for genuine county-level rows only.",
+      "columns": {
+        "agency": {
+          "type": "VARCHAR",
+          "description": "Federal agency name. See agency_values for exact strings."
+        },
+        "state": {
+          "type": "VARCHAR",
+          "description": "Full state name, UPPERCASE"
+        },
+        "county": {
+          "type": "VARCHAR",
+          "description": "County name, UPPERCASE"
+        },
+        "year": {
+          "type": "VARCHAR",
+          "description": "Always quote: WHERE year = '2024'"
+        },
+        "state_fips": {
+          "type": "INTEGER"
+        },
+        "county_fips": {
+          "type": "INTEGER",
+          "description": "FIPS county code. Values of 1 are state-level aggregates \u2014 filter with county_fips > 1000 for true county rows.",
+          "sample_values": [
+            1001,
+            24031,
+            6037
+          ]
+        },
+        "Contracts": {
+          "type": "FLOAT",
+          "description": "Total federal contract obligations from this agency in this geography",
+          "unit": "USD"
+        },
+        "Contracts Per 1000": {
+          "type": "FLOAT",
+          "description": "Contract dollars per 1,000 residents",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Contracts Per 1000\""
+        },
+        "Grants": {
+          "type": "FLOAT",
+          "description": "Total federal grant awards from this agency",
+          "unit": "USD"
+        },
+        "Grants Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Grants Per 1000\""
+        },
+        "Resident Wage": {
+          "type": "FLOAT",
+          "description": "Total wages paid to residents tied to this agency's federal activity",
+          "unit": "USD",
+          "sql_name": "\"Resident Wage\""
+        },
+        "Resident Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Resident Wage Per 1000\""
+        },
+        "Direct Payments": {
+          "type": "FLOAT",
+          "description": "Federal direct payment transfers (Social Security, Medicare, benefits) from this agency",
+          "unit": "USD",
+          "sql_name": "\"Direct Payments\""
+        },
+        "Direct Payments Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Direct Payments Per 1000\""
+        },
+        "Federal Residents": {
+          "type": "INTEGER",
+          "description": "Count of federal employees/residents associated with this agency in this geography",
+          "unit": "persons",
+          "sql_name": "\"Federal Residents\""
+        },
+        "Federal Residents Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000 people",
+          "sql_name": "\"Federal Residents Per 1000\""
+        }
+      }
+    },
+    "contract_cd_agency": {
+      "description": "Federal spending broken down by BOTH agency AND 118th Congressional District. 21 agencies \u00d7 ~435 districts \u00d7 2 year-periods = ~18,355 rows. Use for questions like 'which congressional district gets the most Defense Department contracts'.",
+      "source": "USAspending.gov + agency payroll aggregates",
+      "grain": "One row per agency per congressional district per year-period",
+      "geography": "congressional_district",
+      "file": "contract_cd_Mar2.xlsx",
+      "year_values": [
+        "'2024'",
+        "'2020-2024'"
+      ],
+      "year_type": "VARCHAR \u2014 always quote: WHERE year = '2024'",
+      "row_count": 18355,
+      "state_name_casing": "UPPERCASE",
+      "agency_values": [
+        "Department of Agriculture",
+        "Department of Commerce",
+        "Department of Defense",
+        "Department of Education",
+        "Department of Energy",
+        "Department of Health and Human Services",
+        "Department of Homeland Security",
+        "Department of Housing and Urban Development",
+        "Department of Justice",
+        "Department of Labor",
+        "Department of State",
+        "Department of Transportation",
+        "Department of Veterans Affairs",
+        "Department of the Interior",
+        "Department of the Treasury",
+        "Environmental Protection Agency",
+        "National Aeronautics and Space Administration",
+        "National Science Foundation",
+        "Small Business Administration",
+        "Social Security Administration",
+        "Others"
+      ],
+      "columns": {
+        "agency": {
+          "type": "VARCHAR",
+          "description": "Federal agency name. See agency_values for exact strings."
+        },
+        "cd_118": {
+          "type": "VARCHAR",
+          "description": "Congressional district in standard format: STATE_ABBR-DD. e.g. 'MD-08', 'AK-00'",
+          "sample_values": [
+            "MD-08",
+            "AK-00",
+            "CA-12"
+          ]
+        },
+        "year": {
+          "type": "VARCHAR",
+          "description": "Always quote: WHERE year = '2024'"
+        },
+        "state": {
+          "type": "VARCHAR",
+          "description": "State name, UPPERCASE"
+        },
+        "state_fips": {
+          "type": "INTEGER"
+        },
+        "Contracts": {
+          "type": "FLOAT",
+          "description": "Total federal contract obligations from this agency in this geography",
+          "unit": "USD"
+        },
+        "Contracts Per 1000": {
+          "type": "FLOAT",
+          "description": "Contract dollars per 1,000 residents",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Contracts Per 1000\""
+        },
+        "Grants": {
+          "type": "FLOAT",
+          "description": "Total federal grant awards from this agency",
+          "unit": "USD"
+        },
+        "Grants Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Grants Per 1000\""
+        },
+        "Resident Wage": {
+          "type": "FLOAT",
+          "description": "Total wages paid to residents tied to this agency's federal activity",
+          "unit": "USD",
+          "sql_name": "\"Resident Wage\""
+        },
+        "Resident Wage Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Resident Wage Per 1000\""
+        },
+        "Direct Payments": {
+          "type": "FLOAT",
+          "description": "Federal direct payment transfers (Social Security, Medicare, benefits) from this agency",
+          "unit": "USD",
+          "sql_name": "\"Direct Payments\""
+        },
+        "Direct Payments Per 1000": {
+          "type": "FLOAT",
+          "unit": "USD per 1000 people",
+          "sql_name": "\"Direct Payments Per 1000\""
+        },
+        "Federal Residents": {
+          "type": "INTEGER",
+          "description": "Count of federal employees/residents associated with this agency in this geography",
+          "unit": "persons",
+          "sql_name": "\"Federal Residents\""
+        },
+        "Federal Residents Per 1000": {
+          "type": "FLOAT",
+          "unit": "per 1000 people",
+          "sql_name": "\"Federal Residents Per 1000\""
+        }
+      }
+    }
+  },
+  "cross_table_joins": {
+    "warning": "State names have THREE different casings. Always normalize with LOWER() when joining. FIPS codes are the safest join key for county-level joins.",
+    "patterns": {
+      "acs_to_gov_state": "JOIN on LOWER(acs_state.state) = LOWER(gov_state.state)",
+      "acs_to_finra_state": "JOIN on LOWER(acs_state.state) = LOWER(finra_state.state) AND acs_state.Year = finra_state.Year",
+      "acs_to_contract_state": "JOIN on LOWER(acs_state.state) = LOWER(contract_state.state) \u2014 note contract year is VARCHAR",
+      "gov_to_contract_state": "JOIN on LOWER(gov_state.state) = LOWER(contract_state.state)",
+      "county_join_preferred": "Use fips as join key for county tables: acs_county.fips = gov_county.fips = finra_county.fips",
+      "congress_join": "JOIN on cd_118 directly across congress-level tables",
+      "agency_filter": "Use LIKE for agency: WHERE agency LIKE '%Defense%' or exact string 'Department of Defense'"
+    },
+    "example_multi_table_query": "SELECT a.state, a.financial_literacy, g.Net_Pension_Liability_per_capita FROM finra_state a JOIN gov_state g ON LOWER(a.state) = LOWER(g.state) WHERE a.Year = 2021 ORDER BY a.financial_literacy DESC",
+    "agency_tables": "contract_state_agency, contract_county_agency, contract_cd_agency all have an 'agency' column \u2014 always filter with exact string e.g. WHERE agency = 'Department of Defense'",
+    "flow_to_other_tables": "state_flow uses rcpt_state_name (Title Case) \u2014 join with LOWER(rcpt_state_name) = LOWER(other.state). county_flow uses integer FIPS (rcpt_cty) \u2014 join with rcpt_cty = gov_county.fips. congress_flow CANNOT be joined to other congress tables on district ID \u2014 use only rcpt_cd_name for filtering.",
+    "congress_flow_warning": "congress_flow.prime_awardee_stcd118 is an INTEGER (e.g. 200), NOT the 'MD-08' string format used in all other congress tables. Never join these columns directly."
+  },
+  "common_question_patterns": {
+    "highest_lowest": "Use ORDER BY col DESC/ASC LIMIT N",
+    "state_filter": "WHERE LOWER(state) = 'maryland' (normalize case)",
+    "year_filter_integer_tables": "WHERE Year = 2021 (acs, finra_state)",
+    "year_filter_string_tables": "WHERE year = '2024' (contract, spending tables)",
+    "gov_tables_no_year_filter": "gov_state/county/congress have only one year \u2014 never add a year filter",
+    "per_capita_comparison": "Use _per_capita columns for fair cross-state/county comparison",
+    "finra_interpretation": "Higher financial_literacy = more literate population. Higher financial_constraint = more stressed.",
+    "flow_total": "SUM(subaward_amount) GROUP BY rcpt_state_name for total flow originating from each state"
+  }
+}

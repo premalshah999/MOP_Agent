@@ -1,0 +1,199 @@
+# HELD-OUT generalization probe. These questions were authored AFTER the
+# pipeline/prompts were finalized and are NEVER tuned against. They stress the
+# grains and edges the golden set under-covers: county/congress grains, the
+# now-inherited sibling-table docs, flow directionality, the 5-year aggregate
+# period, ambiguous geography, paraphrase + distractor wording. Same schema as
+# golden_questions.yaml.
+
+# ---- demographics at non-state grain (% vs count signal must survive) ----
+- id: h01
+  question: which Maryland county has the largest asian population (people, not percent)
+  intent: ANALYTICAL
+  tables: [acs_county]
+  must_columns: ["Total population", Asian]
+  reference_sql: >
+    SELECT county AS label, ("Total population" * "Asian" / 100.0) AS v
+    FROM mart_acs_county WHERE LOWER(state) = 'maryland' AND Year = 2023
+    ORDER BY v DESC LIMIT 1
+  expect: { top_label: true }
+  faithfulness: true
+
+- id: h02
+  question: top 5 congressional districts by share of residents with a graduate degree
+  intent: ANALYTICAL
+  tables: [acs_congress]
+  must_columns: ["Education >= Graduate"]
+  reference_sql: >
+    SELECT cd_118 AS label, "Education >= Graduate" AS v FROM mart_acs_congress
+    WHERE Year = 2023 ORDER BY "Education >= Graduate" DESC LIMIT 5
+  expect: { row_count: 5, top_label: true }
+
+# ---- government finance: county/congress, special-char col, no year ----
+- id: h03
+  question: which California county carries the most bonds, loans and notes
+  intent: ANALYTICAL
+  tables: [gov_county]
+  must_columns: [state, "Bonds,_Loans_&_Notes"]
+  note: special-character column must be double-quoted; gov has no year filter
+  reference_sql: >
+    SELECT county AS label, "Bonds,_Loans_&_Notes" AS v FROM mart_gov_county
+    WHERE LOWER(state) = 'california' ORDER BY "Bonds,_Loans_&_Notes" DESC LIMIT 1
+  expect: { top_label: true }
+
+- id: h04
+  question: top 10 congressional districts by net pension liability per capita
+  intent: ANALYTICAL
+  tables: [gov_congress]
+  must_columns: [Net_Pension_Liability_per_capita]
+  reference_sql: >
+    SELECT cd_118 AS label, Net_Pension_Liability_per_capita AS v
+    FROM mart_gov_congress ORDER BY Net_Pension_Liability_per_capita DESC LIMIT 10
+  expect: { row_count: 10, top_label: true }
+
+# ---- spending_state (now-inherited docs) ----
+- id: h05
+  question: how much did California get in direct payments
+  intent: ANALYTICAL
+  tables: [contract_state]
+  must_columns: [state, "Direct Payments"]
+  note: contract_state is the primary state awards table (same value as spending_state)
+  reference_sql: >
+    SELECT "Direct Payments" AS v FROM mart_contract_state
+    WHERE LOWER(state) = 'california' AND year = '2024'
+  expect: { scalar: true, rel_tol: 0.01 }
+
+# ---- contract 5-year aggregate period (explicit '2020-2024') ----
+- id: h06
+  question: total grants to Texas over the 2020-2024 period
+  intent: ANALYTICAL
+  tables: [contract_state]
+  must_columns: [state, Grants]
+  note: must use the '2020-2024' aggregate row, not '2024'
+  reference_sql: >
+    SELECT "Grants" AS v FROM mart_contract_state
+    WHERE LOWER(state) = 'texas' AND year = '2020-2024'
+  expect: { scalar: true, rel_tol: 0.01 }
+
+# ---- county_flow: FIPS-integer keys, directional ----
+- id: h07
+  question: total subaward dollars flowing out of Montgomery County, Maryland in 2023
+  intent: ANALYTICAL
+  tables: [county_flow]
+  must_columns: [rcpt_cty_name, subaward_amount]
+  reference_sql: >
+    SELECT SUM(subaward_amount) AS v FROM mart_county_flow
+    WHERE rcpt_cty_name LIKE 'Montgomery%' AND LOWER(rcpt_state) = 'maryland'
+      AND act_dt_fis_yr = 2023
+  expect: { scalar: true, rel_tol: 0.05 }
+
+# ---- congress_flow: integer district id trap, use names ----
+- id: h08
+  question: which congressional district receives the most subaward inflow
+  intent: ANALYTICAL
+  tables: [congress_flow]
+  must_columns: [subawardee_cd_name, subaward_amount]
+  note: never join the integer stcd118 to cd_118; aggregate by name; latest year default
+  reference_sql: >
+    SELECT subawardee_cd_name AS label, SUM(subaward_amount) AS v
+    FROM mart_congress_flow WHERE act_dt_fis_yr = 2024
+    GROUP BY subawardee_cd_name ORDER BY v DESC LIMIT 1
+  expect: { top_label: true }
+
+# ---- finra at congress grain (2021 only) ----
+- id: h09
+  question: most financially literate congressional districts
+  intent: ANALYTICAL
+  tables: [finra_congress]
+  must_columns: [financial_literacy]
+  reference_sql: >
+    SELECT cd_118 AS label, financial_literacy AS v FROM mart_finra_congress
+    ORDER BY financial_literacy DESC LIMIT 10
+  expect: { top_label: true }
+
+# ---- paraphrase + distractor wording ----
+- id: h10
+  question: rank states from poorest to least poor
+  intent: ANALYTICAL
+  tables: [acs_state]
+  must_columns: ["Below poverty"]
+  reference_sql: >
+    SELECT state AS label, "Below poverty" AS v FROM mart_acs_state
+    WHERE Year = 2023 ORDER BY "Below poverty" DESC
+  expect: { min_rows: 10, top_label: true }
+
+- id: h11
+  question: how wealthy are Maryland households on average
+  intent: ANALYTICAL
+  tables: [acs_state]
+  must_columns: ["Median household income"]
+  reference_sql: >
+    SELECT "Median household income" AS v FROM mart_acs_state
+    WHERE LOWER(state) = 'maryland' AND Year = 2023
+  expect: { scalar: true, rel_tol: 0.01 }
+
+# ---- agency alias + typo + measure synonym ----
+- id: h12
+  question: which states see the most NASA-adjacent... I mean Energy department grant money
+  intent: ANALYTICAL
+  tables: [spending_state_agency]
+  must_columns: [agency, Grants]
+  reference_sql: >
+    SELECT state AS label, "Grants" AS v FROM mart_spending_state_agency
+    WHERE agency = 'Department of Energy' AND year = '2024'
+    ORDER BY "Grants" DESC LIMIT 1
+  expect: { top_label: true }
+  faithfulness: true
+
+# ---- cross-dataset county join via FIPS ----
+- id: h13
+  question: among Maryland counties, which has both high poverty and high government debt ratio
+  intent: ANALYTICAL
+  tables: [acs_county, gov_county]
+  must_columns: [fips, "Below poverty", Debt_Ratio]
+  note: county join key is fips; "both high" -> rank by poverty then debt ratio
+  reference_sql: >
+    SELECT a.county AS label, a."Below poverty" AS v, g.Debt_Ratio
+    FROM mart_acs_county a JOIN mart_gov_county g ON a.fips = g.fips
+    WHERE LOWER(a.state) = 'maryland' AND a.Year = 2023
+    ORDER BY a."Below poverty" DESC, g.Debt_Ratio DESC LIMIT 5
+  expect: { min_rows: 1, top_label: true }
+  faithfulness: true
+
+# ---- ambiguous geography -> default state ----
+- id: h14
+  question: where is financial stress the worst
+  intent: ANALYTICAL
+  tables: [finra_state]
+  must_columns: [financial_constraint]
+  reference_sql: >
+    SELECT state AS label, financial_constraint AS v FROM mart_finra_state
+    WHERE Year = 2021 ORDER BY financial_constraint DESC LIMIT 1
+  expect: { top_label: true }
+
+# ---- scoped lookup, not a ranking ----
+- id: h15
+  question: what percent of Virginia adults have at least a bachelor's degree
+  intent: ANALYTICAL
+  tables: [acs_state]
+  must_columns: ["Education >= Bachelor's"]
+  reference_sql: >
+    SELECT "Education >= Bachelor's" AS v FROM mart_acs_state
+    WHERE LOWER(state) = 'virginia' AND Year = 2023
+  expect: { scalar: true, rel_tol: 0.01 }
+
+# ---- non-analytical held-out ----
+- id: h16
+  question: can you predict next year's federal grants for Maryland?
+  intent: UNANSWERABLE
+  no_sql: true
+  note: forecasting is not in scope; data is historical only
+
+- id: h17
+  question: rank the states
+  intent: CLARIFY
+  no_sql: true
+
+- id: h18
+  question: explain the difference between contracts and grants in your data
+  intent: META
+  no_sql: true
