@@ -60,7 +60,7 @@ app/
 ```bash
 pip install -r requirements.txt
 cp .env.example .env          # set DEEPSEEK_API_KEY
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 cd frontend && npm install && npm run dev
 ```
