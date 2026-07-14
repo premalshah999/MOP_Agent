@@ -21,6 +21,7 @@ from typing import Any, Callable
 from app.core.answer_writer import write_answer
 from app.core.tools import TOOL_SCHEMAS, execute_tool
 from app.llm import client
+from app.schemas.final_answer import FinalAnswer
 from app.semantic.registry import catalog_for_prompt, domain_summary
 
 
@@ -86,7 +87,7 @@ def _build_user(question: str, history: list[dict[str, Any]] | None) -> str:
                 if lines:
                     parts.insert(0, "PRIOR FOCUS (carry over unless overridden):\n" + "\n".join(lines))
                 break
-        recent = [h for h in history if h.get("role") in {"user", "assistant"}][-4:]
+        recent = [h for h in history if h.get("role") == "user"][-4:]
         if recent:
             convo = "\n".join(f"{h['role']}: {str(h.get('content', ''))[:300]}" for h in recent)
             parts.append("RECENT CONVERSATION:\n" + convo)
@@ -157,6 +158,8 @@ def run_reasoning_agent(
     max_wall_s: float = DEFAULT_MAX_WALL_S,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
+    semantic_guard: Callable[[str], None] | None = None,
+    allowed_tables: set[str] | None = None,
 ) -> dict[str, Any]:
     emit = on_event or (lambda _n, _d: None)
     """Run the agent. Returns a dict the orchestrator can wrap into the
@@ -233,7 +236,7 @@ def run_reasoning_agent(
                     )
                 except Exception:
                     synth = None
-                if synth and synth.get("answer"):
+                if synth and synth.get("valid", True) and synth.get("answer"):
                     return _finish(
                         "no_tool_call_synthesised",
                         synth["answer"],
@@ -253,16 +256,41 @@ def run_reasoning_agent(
             name = tc["name"]
             args = tc["arguments"]
             if name == "answer":
+                try:
+                    parsed_answer = FinalAnswer.model_validate({
+                        "answer": str(args.get("text", "")).strip(),
+                        "key_numbers": list(args.get("key_numbers", []) or []),
+                        "caveats": list(args.get("caveats", []) or []),
+                    })
+                    if not parsed_answer.answer:
+                        raise ValueError("answer text is empty")
+                except Exception as exc:
+                    result = {"error": f"answer schema validation: {exc}"}
+                    trace.append({
+                        "step": step,
+                        "name": "answer",
+                        "summary": {"error": str(result["error"])[:200]},
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": _serialize_for_model(result),
+                    })
+                    continue
                 trace.append({"step": step, "name": "answer", "summary": _summarize_tool_result("answer", {"ok": True})})
                 return _finish(
                     "ok",
-                    str(args.get("text", "")).strip() or "I have no answer.",
-                    list(args.get("key_numbers", []) or []),
-                    list(args.get("caveats", []) or []),
+                    parsed_answer.answer,
+                    [item.model_dump() for item in parsed_answer.key_numbers],
+                    list(parsed_answer.caveats),
                     step,
                 )
             emit("tool_start", {"step": step, "name": name, "args": args})
-            result = execute_tool(name, args)
+            result = execute_tool(
+                name, args,
+                semantic_guard=semantic_guard,
+                allowed_tables=allowed_tables,
+            )
             summary = _summarize_tool_result(name, result)
             trace.append({"step": step, "name": name, "args": args, "summary": summary})
             tool_results.append({"name": name, "args": args, "result": result})
@@ -288,7 +316,7 @@ def run_reasoning_agent(
             )
         except Exception:
             synth = None
-        if synth and synth.get("answer"):
+        if synth and synth.get("valid", True) and synth.get("answer"):
             trace.append({"step": max_calls, "name": "synthesize_from_rows", "summary": "budget exhausted; synthesised via normal-mode answer pipeline"})
             return _finish(
                 "budget_synthesised",

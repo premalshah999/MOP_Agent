@@ -35,8 +35,29 @@ Return ONLY JSON: {"standalone_question": "<rewritten question>"}"""
 
 
 def _recent(history: list[dict[str, Any]]) -> str:
-    turns = [h for h in history if h.get("role") in {"user", "assistant"}][-6:]
+    # Generated analytical prose is not memory: if it was wrong, feeding it
+    # back makes the next turn inherit the error.  Structured assistant
+    # contracts are carried separately by _structured_memory().
+    turns = [h for h in history if h.get("role") == "user"][-6:]
     return "\n".join(f"{h['role']}: {str(h.get('content', ''))[:400]}" for h in turns)
+
+
+def prior_history(
+    history: list[dict[str, Any]] | None, current_question: str
+) -> list[dict[str, Any]]:
+    """Return history strictly before the current turn.
+
+    Some clients append the current user message before calling the pipeline.
+    Including it twice changes the effective prompt and was a major source of
+    same-question drift.
+    """
+    cleaned = list(history or [])
+    if cleaned and cleaned[-1].get("role") == "user":
+        latest = " ".join(str(cleaned[-1].get("content") or "").split()).casefold()
+        current = " ".join(str(current_question or "").split()).casefold()
+        if latest == current:
+            cleaned.pop()
+    return cleaned
 
 
 def _last_contract(history: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -69,6 +90,7 @@ def _structured_memory(history: list[dict[str, Any]]) -> str:
 
 def contextualize(question: str, history: list[dict[str, Any]] | None) -> str:
     """Return a self-contained question. Falls back to `question` on any issue."""
+    history = prior_history(history, question)
     if not history:
         return question
     convo = _recent(history)

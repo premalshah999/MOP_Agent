@@ -101,17 +101,25 @@ def judge_faithfulness(
             max_tokens=300,
             purpose="faithfulness_judge",
         )
-    except client.LLMError as exc:
-        return {"faithful": True, "reason": f"judge unavailable ({exc}); not blocking"}
-    faithful = bool(raw.get("faithful", False))
+    except Exception as exc:
+        # This is a safety gate, not telemetry.  An unavailable verifier can
+        # never turn an unverified answer into an accepted one.
+        return {
+            "faithful": False,
+            "available": False,
+            "reason": f"verification unavailable ({exc})",
+        }
+    if not isinstance(raw, dict):
+        return {
+            "faithful": False,
+            "available": False,
+            "reason": "verification returned a non-object response",
+        }
+    # Do not coerce strings: bool("false") is True in Python.
+    faithful = raw.get("faithful") is True
     reason = str(raw.get("reason") or "").strip()
-    # If the reason is a leaked deliberation that ends by declaring the answer
-    # faithful, trust that written conclusion over a contradicting bool.
-    tail = reason[-160:].lower()
-    if not faithful and ("faithful=true" in tail or "so it's faithful" in tail
-                         or "the answer is faithful" in tail):
-        faithful = True
-        reason = "verdict reconciled from judge text (bool contradicted conclusion)"
+    if not reason:
+        reason = "verifier returned no reason"
     if len(reason) > 220:
         reason = reason[:217].rstrip() + "…"
-    return {"faithful": faithful, "reason": reason}
+    return {"faithful": faithful, "available": True, "reason": reason}

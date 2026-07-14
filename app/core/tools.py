@@ -13,7 +13,7 @@ to a `run_sql` row (validator-gated, read-only) or a `peer_stats` aggregate.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Callable
 
 from app.duckdb.connection import execute_select
 from app.semantic.registry import (
@@ -178,17 +178,21 @@ def tool_distinct_values(table: str, column: str, pattern: str = "", limit: int 
     }
 
 
-def tool_run_sql(sql: str) -> dict[str, Any]:
+def tool_run_sql(sql: str, semantic_guard: Callable[[str], None] | None = None) -> dict[str, Any]:
     max_rows = int(os.getenv("MAX_RETURN_ROWS", "250"))
     try:
         validate_sql(sql)
+        if semantic_guard is not None:
+            semantic_guard(sql)
     except SqlValidationError as exc:
         return {"sql": sql, "error": f"validation: {exc}", "rows": [], "row_count": 0}
     try:
-        rows = execute_select(sql, max_rows=max_rows)
+        fetched = execute_select(sql, max_rows=max_rows + 1)
+        truncated = len(fetched) > max_rows
+        rows = fetched[:max_rows]
     except Exception as exc:  # duckdb error
         return {"sql": sql, "error": f"duckdb: {exc}", "rows": [], "row_count": 0}
-    return {"sql": sql, "rows": rows, "row_count": len(rows)}
+    return {"sql": sql, "rows": rows, "row_count": len(rows), "truncated": truncated}
 
 
 def tool_peer_stats(
@@ -196,6 +200,7 @@ def tool_peer_stats(
     measure: str,
     geo_column: str = "state",
     where: str = "",
+    semantic_guard: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     if table not in _VALID_TABLES:
         return {"error": f"unknown table {table!r}"}
@@ -226,6 +231,8 @@ def tool_peer_stats(
     try:
         for q in (stats_sql, top_sql, bot_sql):
             validate_sql(q)
+            if semantic_guard is not None:
+                semantic_guard(q)
         stats = execute_select(stats_sql, max_rows=1)
         top5 = execute_select(top_sql, max_rows=5)
         bot5 = execute_select(bot_sql, max_rows=5)
@@ -243,12 +250,22 @@ def tool_peer_stats(
     }
 
 
-def execute_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
+def execute_tool(
+    name: str,
+    args: dict[str, Any],
+    *,
+    semantic_guard: Callable[[str], None] | None = None,
+    allowed_tables: set[str] | None = None,
+) -> dict[str, Any]:
     """Dispatch a tool call by name; returns a JSON-serialisable dict.
 
     The `answer` tool is the agent's terminator — not executed here; the loop
     detects it and exits.
     """
+    table_arg = str(args.get("table", ""))
+    if allowed_tables is not None and name in {"get_schema", "distinct_values", "peer_stats"}:
+        if table_arg not in allowed_tables:
+            return {"error": f"table {table_arg!r} is outside the routed analysis contract"}
     if name == "get_schema":
         return tool_get_schema(str(args.get("table", "")))
     if name == "distinct_values":
@@ -259,12 +276,13 @@ def execute_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             int(args.get("limit", 50) or 50),
         )
     if name == "run_sql":
-        return tool_run_sql(str(args.get("sql", "")))
+        return tool_run_sql(str(args.get("sql", "")), semantic_guard)
     if name == "peer_stats":
         return tool_peer_stats(
             str(args.get("table", "")),
             str(args.get("measure", "")),
             str(args.get("geo_column", "state") or "state"),
             str(args.get("where", "") or ""),
+            semantic_guard,
         )
     return {"error": f"unknown tool {name!r}"}

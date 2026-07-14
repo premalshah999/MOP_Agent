@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 from app.llm import client
+from app.schemas.final_answer import FinalAnswer
 
 _MAX_ROWS_IN_PROMPT = 60
 
@@ -119,15 +120,23 @@ def write_answer(
     grounding_text: str,
     peer_context_text: str = "",
     extra_evidence: str = "",
+    previous_answer: str = "",
+    verification_issue: str = "",
+    truncated: bool = False,
 ) -> dict[str, Any]:
     shown = rows[:_MAX_ROWS_IN_PROMPT]
     parts = [
         f"QUESTION: {question}",
         f"SQL THAT RAN:\n{sql}",
-        f"ROWS RETURNED ({len(rows)} total, showing {len(shown)}):\n"
+        f"ROWS RETURNED ({'at least ' if truncated else ''}{len(rows)} total, showing {len(shown)}):\n"
         f"{json.dumps(shown, default=str, indent=2)}",
         f"GROUNDING (for caveats only):\n{grounding_text[:4000]}",
     ]
+    if truncated:
+        parts.append(
+            "RESULT LIMIT: the executor capped this result. Do not describe the "
+            "shown rows as the complete population; state that the display is truncated."
+        )
     if extra_evidence:
         parts.append(
             "ADDITIONAL VERIFIED EVIDENCE (results of earlier queries in this "
@@ -139,6 +148,15 @@ def write_answer(
         parts.append(
             "PEER CONTEXT (REQUIRED — weave these comparisons into the prose; "
             "do NOT put them in `caveats` or `key_numbers`):\n" + peer_context_text
+        )
+    if previous_answer:
+        parts.append(
+            "PREVIOUS DRAFT (rejected by verification; do not defend or copy an "
+            "unsupported claim):\n" + previous_answer[:5000]
+        )
+    if verification_issue:
+        parts.append(
+            "VERIFICATION FAILURE TO CORRECT:\n" + verification_issue[:800]
         )
     parts.append("Write the grounded answer JSON.")
     user = "\n\n".join(parts)
@@ -158,21 +176,38 @@ def write_answer(
             "key_numbers": [],
             "caveats": [],
             "confidence": "low",
+            "valid": False,
+            "error": str(exc),
         }
 
-    key_numbers = []
-    for item in raw.get("key_numbers") or []:
-        if isinstance(item, dict) and "label" in item and "value" in item:
-            key_numbers.append(
-                {
-                    "label": str(item["label"]),
-                    "value": item["value"],
-                    "unit": str(item.get("unit") or ""),
-                }
-            )
+    try:
+        parsed = FinalAnswer.model_validate(raw)
+    except Exception as exc:
+        return {
+            "answer": f"I ran the query but the written answer failed schema validation ({exc}).",
+            "key_numbers": [],
+            "caveats": [],
+            "confidence": "low",
+            "valid": False,
+            "error": str(exc),
+        }
+    if not parsed.answer.strip():
+        return {
+            "answer": "I ran the query but the model returned an empty written answer.",
+            "key_numbers": [],
+            "caveats": [],
+            "confidence": "low",
+            "valid": False,
+            "error": "empty answer",
+        }
+    key_numbers = [
+        {"label": item.label, "value": item.value, "unit": str(item.unit or "")}
+        for item in parsed.key_numbers
+    ]
     return {
-        "answer": str(raw.get("answer") or "").strip(),
+        "answer": parsed.answer.strip(),
         "key_numbers": key_numbers,  # _envelope() formats these for display
-        "caveats": [str(c) for c in (raw.get("caveats") or [])],
-        "confidence": str(raw.get("confidence") or "medium"),
+        "caveats": [str(c) for c in parsed.caveats],
+        "confidence": parsed.confidence,
+        "valid": True,
     }

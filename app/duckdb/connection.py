@@ -34,7 +34,13 @@ def initialize_duckdb() -> dict[str, Any]:
         try:
             with _connect(read_only=True) as conn:
                 existing = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
-            if all(mart_view_name(t) in existing for t in manifest):
+                schemas_match = all(
+                    mart_view_name(table) in existing
+                    and [row[0] for row in conn.execute(f'DESCRIBE "{mart_view_name(table)}"').fetchall()]
+                    == list(info.get("columns", []))
+                    for table, info in manifest.items()
+                )
+            if schemas_match:
                 _INITIALIZED = True
                 return {"initialized": True, "db_path": str(DB_PATH), "registered_view_count": len(manifest)}
         except Exception:
@@ -44,9 +50,13 @@ def initialize_duckdb() -> dict[str, Any]:
             for table_name, info in manifest.items():
                 parquet_path = (ROOT_DIR / info["path"]).resolve()
                 escaped_path = str(parquet_path).replace("'", "''")
+                projection = ", ".join(
+                    f'"{str(column).replace(chr(34), chr(34) * 2)}"'
+                    for column in info.get("columns", [])
+                )
                 conn.execute(
                     f"CREATE OR REPLACE VIEW {mart_view_name(table_name)} AS "
-                    f"SELECT * FROM read_parquet('{escaped_path}')"
+                    f"SELECT {projection} FROM read_parquet('{escaped_path}')"
                 )
         _INITIALIZED = True
         return {"initialized": True, "db_path": str(DB_PATH), "registered_view_count": len(manifest)}

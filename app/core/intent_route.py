@@ -13,10 +13,11 @@ orchestrator ignores them and answers via meta_answer / clarification).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.llm import client
-from app.semantic.registry import catalog_for_prompt, domain_summary, load_registry
+from app.semantic.registry import catalog_for_prompt, domain_summary, get_dataset, load_registry
 
 INTENTS = {"ANALYTICAL", "CLARIFY", "UNANSWERABLE", "META", "OUT_OF_SCOPE"}
 _VALID_TABLES = set(load_registry().datasets)
@@ -72,6 +73,9 @@ STEP 2 (only when intent=ANALYTICAL) — pick the SMALLEST set of tables:
 - financial literacy / stress / risk aversion -> finra_*.
 - Cross-dataset ("X and their Y" from different families) -> return BOTH tables.
 - Per-capita / share variants stay in the SAME table.
+- ACS share/percent/rate questions use the percentage metric directly; do NOT
+  add `Total population`. Add `Total population` only when the user asks for a
+  count/number of people derived from a demographic percentage.
 - If two different tables are equally plausible AND the choice changes the
   answer, set needs_clarification=true and ask which one.
 
@@ -82,10 +86,16 @@ Return ONLY JSON:
  "clarification_question": "<question to ask or empty>",
  "reason": "<short>",
  "tables": ["<exact ids, [] if not ANALYTICAL>"],
- "columns": ["<key measure/filter columns expected>"],
+ "metric_columns": ["<exact measure columns required; no dimensions>"],
+ "filter_columns": ["<exact dimension/filter columns required>"],
  "geography_level": "state|county|congress|none",
+ "operation": "lookup|ranking|comparison|trend|correlation|distribution|aggregate|breakdown",
+ "flow_direction": "inflow|outflow|none",
+ "sort_direction": "asc|desc|none",
+ "top_k": <integer or null>,
  "year_strategy": "<period to use, or 'no year filter'>",
  "join_plan": "<how to join if >1 table, else empty>",
+ "assumptions": ["<only assumptions required by catalog defaults>"],
  "confidence": "high|medium|low"}}"""
 
 
@@ -110,7 +120,10 @@ _FEWSHOT = """Examples:
 def _history_snippet(history: list[dict[str, Any]] | None) -> str:
     if not history:
         return ""
-    recent = [h for h in history if h.get("role") in {"user", "assistant"}][-4:]
+    # Prior assistant prose can contain an earlier model mistake.  Feed the
+    # router user intent plus structured contract memory, never generated
+    # analytical prose that can recursively contaminate the next answer.
+    recent = [h for h in history if h.get("role") == "user"][-4:]
     return "\n".join(f"{h['role']}: {h.get('content', '')[:200]}" for h in recent)
 
 
@@ -124,8 +137,13 @@ def _safe_default() -> dict[str, Any]:
         "tables": [],
         "columns": [],
         "geography_level": "none",
+        "operation": "lookup",
+        "flow_direction": "none",
+        "sort_direction": "none",
+        "top_k": None,
         "year_strategy": "",
         "join_plan": "",
+        "assumptions": [],
         "confidence": "low",
     }
 
@@ -150,23 +168,71 @@ def classify_and_route(question: str, history: list[dict[str, Any]] | None = Non
         )
     except client.LLMError:
         return _safe_default()
+    if not isinstance(raw, dict):
+        return _safe_default()
 
     intent = str(raw.get("intent", "")).strip().upper()
     if intent not in INTENTS:
         intent = "CLARIFY"
     tables = [t for t in (raw.get("tables") or []) if t in _VALID_TABLES] if intent == "ANALYTICAL" else []
-    needs_clar = bool(raw.get("needs_clarification")) or intent == "CLARIFY" or (intent == "ANALYTICAL" and not tables)
+    raw_metrics = raw.get("metric_columns") or raw.get("columns") or []
+    metric_columns: list[str] = []
+    for proposed in raw_metrics:
+        proposed_norm = str(proposed).strip().casefold().replace("_", " ")
+        for table in tables:
+            dataset = get_dataset(table)
+            if dataset is None:
+                continue
+            for column in dataset.metrics:
+                if column.casefold().replace("_", " ") == proposed_norm and column not in metric_columns:
+                    metric_columns.append(column)
+    if any(table.startswith("acs_") for table in tables):
+        q_lower = question.lower()
+        asks_share = bool(re.search(r"\b(percent|percentage|share|rate)\b", q_lower))
+        asks_count = bool(re.search(r"\b(count|number of people|how many people|people, not percent)\b", q_lower))
+        if asks_share and not asks_count and len(metric_columns) > 1:
+            metric_columns = [
+                column for column in metric_columns
+                if column not in {"Total population", "# of household"}
+            ]
+    dimension_count = bool(re.search(
+        r"\bhow many\s+(?:states|counties|districts|agencies|rows|records)\b",
+        question,
+        re.IGNORECASE,
+    ))
+    missing_measure = intent == "ANALYTICAL" and bool(tables) and not metric_columns and not dimension_count
+    needs_clar = (
+        bool(raw.get("needs_clarification"))
+        or intent == "CLARIFY"
+        or (intent == "ANALYTICAL" and not tables)
+        or missing_measure
+    )
     return {
         "intent": intent,
         "requires_sql": intent == "ANALYTICAL",
         "needs_clarification": needs_clar,
-        "clarification_question": str(raw.get("clarification_question") or "").strip(),
+        "clarification_question": (
+            "Which exact measure should I calculate?"
+            if missing_measure else str(raw.get("clarification_question") or "").strip()
+        ),
         "reason": str(raw.get("reason") or "").strip(),
         "tables": tables,
-        "columns": list(raw.get("columns") or []),
+        # Backward-compatible key; now guaranteed to contain canonical metric
+        # columns only, rather than a mixture of measures and dimensions.
+        "columns": metric_columns,
         "geography_level": str(raw.get("geography_level") or "none"),
+        "operation": str(raw.get("operation") or "lookup"),
+        "flow_direction": str(raw.get("flow_direction") or "none"),
+        "sort_direction": str(raw.get("sort_direction") or "none"),
+        "top_k": raw.get("top_k"),
         "year_strategy": str(raw.get("year_strategy") or ""),
         "join_plan": str(raw.get("join_plan") or ""),
+        # User-visible assumptions are built from registry facts later; model
+        # prose here is intentionally discarded.
+        "assumptions": [],
         "confidence": str(raw.get("confidence") or "medium"),
-        "clarification": str(raw.get("clarification_question") or "").strip(),
+        "clarification": (
+            "Which exact measure should I calculate?"
+            if missing_measure else str(raw.get("clarification_question") or "").strip()
+        ),
     }

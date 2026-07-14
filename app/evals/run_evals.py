@@ -14,13 +14,13 @@ Usage:  python -m app.evals.run_evals [--json]
 from __future__ import annotations
 
 import json
+import argparse
 import re
-import sys
 from typing import Any
 
 from app.core.orchestrator import answer_question
 from app.evals.faithfulness import judge_faithfulness
-from app.evals.reference import GoldenCase, load_golden, reference_scalar, run_reference_sql
+from app.evals.reference import GoldenCase, load_golden, load_holdout, reference_scalar, run_reference_sql
 
 THRESHOLDS = {
     "intent_accuracy": 0.90,
@@ -68,8 +68,7 @@ def _check_expectation(case: GoldenCase, result: dict[str, Any]) -> tuple[bool, 
     return True, "ok"
 
 
-def run_golden_evals() -> dict[str, Any]:
-    cases = load_golden()
+def run_case_evals(cases: list[GoldenCase], suite: str = "golden") -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     intent_ok = routing_ok = routing_total = gen_ok = gen_total = faith_ok = faith_total = 0
 
@@ -98,7 +97,10 @@ def run_golden_evals() -> dict[str, Any]:
             gen_total += 1
             has_sql = bool(res.get("sql"))
             exp_ok, why = _check_expectation(case, res) if has_sql else (False, "no sql")
-            g_ok = has_sql and exp_ok
+            answered = res.get("resolution") == "answered"
+            if has_sql and exp_ok and not answered:
+                why = f"pipeline resolution was {res.get('resolution')!r}, not 'answered'"
+            g_ok = has_sql and answered and exp_ok
             gen_ok += g_ok
             row["generation_ok"] = g_ok
             row["generation_detail"] = why
@@ -126,7 +128,16 @@ def run_golden_evals() -> dict[str, Any]:
     }
     summary["thresholds"] = THRESHOLDS
     summary["passed_gate"] = all(summary[k] >= v for k, v in THRESHOLDS.items())
+    summary["suite"] = suite
     return {"summary": summary, "results": results}
+
+
+def run_golden_evals() -> dict[str, Any]:
+    return run_case_evals(load_golden(), "golden")
+
+
+def run_holdout_evals() -> dict[str, Any]:
+    return run_case_evals(load_holdout(), "holdout")
 
 
 def main() -> int:
@@ -136,12 +147,19 @@ def main() -> int:
         load_dotenv()
     except Exception:
         pass
-    report = run_golden_evals()
+    parser = argparse.ArgumentParser(description="Run live analytical accuracy gates.")
+    parser.add_argument("--suite", choices=("golden", "holdout", "both"), default="golden")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+    cases = load_golden() if args.suite == "golden" else load_holdout()
+    if args.suite == "both":
+        cases = [*load_golden(), *load_holdout()]
+    report = run_case_evals(cases, args.suite)
     s = report["summary"]
-    if "--json" in sys.argv:
+    if args.json:
         print(json.dumps(report, indent=2))
     else:
-        print("Golden evaluation")
+        print(f"{args.suite.title()} evaluation")
         print(f"  cases: {s['total']}")
         print(f"  intent accuracy:       {s['intent_accuracy']:.0%}  (>= {THRESHOLDS['intent_accuracy']:.0%})")
         print(f"  routing accuracy:      {s['routing_accuracy']:.0%}  (>= {THRESHOLDS['routing_accuracy']:.0%})")

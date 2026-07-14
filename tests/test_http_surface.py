@@ -57,7 +57,8 @@ class HttpSurfaceTests(unittest.TestCase):
             ):
                 self.assertIn(key, payload)
             self.assertIn("tables", payload["contract"])
-            if PIPELINE_READY:
+            from app.llm import client as llm_client
+            if PIPELINE_READY and llm_client.is_live():
                 self.assertEqual(payload["resolution"], "answered")
                 self.assertTrue(payload["sql"])
                 self.assertEqual(payload["row_count"], 10)

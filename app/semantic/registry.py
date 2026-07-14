@@ -90,11 +90,23 @@ _AVG_HINTS = (
     "per_capita", "per capita", "per 1000", "per1000", "ratio", "rate",
     "median", "percent", "%", "index", "share",
 )
-_DIMENSION_COLUMNS = (
-    "state", "county", "cd_118", "fips", "state_fips", "county_fips",
-    "agency", "agency_name", "rcpt_state_name", "subawardee_state_name",
-    "rcpt_cd_name", "subawardee_cd_name", "naics_2digit_title",
-)
+_DIMENSION_COLUMNS = tuple(sorted(_KEY_COLUMNS - {"Unnamed: 0"}))
+
+_CURATED_METRIC_ALIASES = {
+    "below poverty": ["poverty rate", "percent below poverty"],
+    "education >= bachelor's": ["bachelor's degree attainment", "college degree attainment"],
+    "education >= graduate": ["graduate degree attainment"],
+    "median household income": ["household income", "median income"],
+    "financial_constraint": ["financial stress", "financial constraint"],
+    "financial_literacy": ["financial literacy", "financial knowledge"],
+    "alternative_financing": ["alternative financial services"],
+    "risk_averse": ["risk aversion"],
+    "free_cash_flow": ["free cash flow", "cash flow"],
+    "debt_ratio": ["debt ratio", "liabilities to assets ratio"],
+    "bonds,_loans_&_notes": ["bonds loans and notes", "bonded debt"],
+    "subaward_amount": ["subaward dollars", "subcontract dollars"],
+    "subaward_amount_year": ["subaward dollars", "subcontract dollars"],
+}
 
 
 def _is_measure(column: str) -> bool:
@@ -334,6 +346,30 @@ def _dimensions(columns: list[str], meta_cols: dict[str, Any]) -> dict[str, Dime
     return dims
 
 
+def _metric_semantics(column: str, meta_col: dict[str, Any]) -> tuple[str, str, list[str]]:
+    lower = column.casefold()
+    concept = lower
+    variant = "value"
+    for suffix, variant_name in (
+        (" per 1000", "per_1000_residents"),
+        ("_per_capita", "per_capita"),
+    ):
+        if concept.endswith(suffix):
+            concept = concept[: -len(suffix)]
+            variant = variant_name
+            break
+    unit = str(meta_col.get("unit") or "").casefold()
+    if variant == "value" and unit in {"percent", "percentage", "%"}:
+        variant = "percentage"
+    elif variant == "value" and unit in {"usd", "dollars", "$"}:
+        variant = "total_usd"
+    concept = re.sub(r"[^a-z0-9]+", "_", concept).strip("_")
+    human = re.sub(r"[_]+", " ", column).replace(",", " ").replace("&", "and")
+    aliases = [human.casefold().strip()]
+    aliases.extend(_CURATED_METRIC_ALIASES.get(lower, []))
+    return concept or lower, variant, list(dict.fromkeys(alias for alias in aliases if alias))
+
+
 def _metrics(columns: list[str], meta_cols: dict[str, Any]) -> dict[str, MetricDefinition]:
     metrics: dict[str, MetricDefinition] = {}
     for col in columns:
@@ -341,6 +377,7 @@ def _metrics(columns: list[str], meta_cols: dict[str, Any]) -> dict[str, MetricD
             continue
         meta_col = meta_cols.get(col, {}) if isinstance(meta_cols.get(col), dict) else {}
         sql_name = meta_col.get("sql_name") or quote_identifier(col)
+        concept, variant, aliases = _metric_semantics(col, meta_col)
         metrics[col] = MetricDefinition(
             id=col,
             label=col.replace("_", " ").strip(),
@@ -348,7 +385,18 @@ def _metrics(columns: list[str], meta_cols: dict[str, Any]) -> dict[str, MetricD
             sql=sql_name,
             unit=str(meta_col.get("unit", "value")),
             aggregation=_aggregation_for(col, meta_col),
+            synonyms=aliases,
+            semantic_concept=concept,
+            semantic_variant=variant,
         )
+    groups: dict[str, dict[str, str]] = {}
+    for metric in metrics.values():
+        groups.setdefault(str(metric.semantic_concept), {})[str(metric.semantic_variant)] = metric.id
+    for metric in metrics.values():
+        variants = groups.get(str(metric.semantic_concept), {})
+        metric.related_variants = {
+            variant: metric_id for variant, metric_id in variants.items() if metric_id != metric.id
+        }
     return metrics
 
 

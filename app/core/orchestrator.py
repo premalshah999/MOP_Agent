@@ -8,10 +8,12 @@ keep working.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from app.core import meta_answer
 from app.core.answer_writer import write_answer
+from app.core.analysis_contract import AnalysisContract, build_analysis_contract
 from app.core.clarifier import generate_clarification_chips
 from app.core.formatting import format_key_numbers, validate_key_numbers_against_rows
 from app.core.glossary import detect_terms
@@ -25,7 +27,8 @@ from app.core.router import route as route_question  # kept for stage2 tests
 from app.core.intent_route import classify_and_route
 from app.core.reasoning_agent import run_reasoning_agent
 from app.core.sql_writer import generate_and_execute
-from app.core.contextualize import contextualize
+from app.core.contextualize import contextualize, prior_history
+from app.sql.semantic_validator import stabilize_verified_ranking_sql, validate_semantic_sql
 from app.core.suggestions import suggest_followups
 from app.core.visuals import build_visuals, enrich_rows_for_map
 
@@ -33,36 +36,6 @@ import os
 import re as _re
 
 
-def _is_trivial_scalar_answer(
-    answer: str, key_numbers: list[dict[str, Any]], rows: list[dict[str, Any]]
-) -> bool:
-    """A single-row result whose numeric values are all already in the answer
-    (or key_numbers) within 1% rounding doesn't need the LLM faithfulness judge."""
-    if len(rows) != 1:
-        return False
-    row = rows[0]
-    row_nums = [v for v in row.values() if isinstance(v, (int, float)) and not isinstance(v, bool)]
-    if not row_nums:
-        return False
-    in_keys: list[float] = []
-    for k in key_numbers:
-        try:
-            in_keys.append(float(k.get("value")))
-        except (TypeError, ValueError):
-            continue
-    in_text = [
-        float(t.replace(",", ""))
-        for t in _re.findall(r"-?\d[\d,]*\.?\d*", answer or "")
-    ]
-    pool = in_keys + in_text
-    if not pool:
-        return False
-
-    def covered(v: float) -> bool:
-        tol = 0.01 * max(1.0, abs(v))
-        return any(abs(c - v) <= tol for c in pool)
-
-    return all(covered(v) for v in row_nums)
 from app.evals.faithfulness import judge_faithfulness
 from app.observability.logging import log_pipeline_event
 from app.semantic.registry import critical_warnings_for, get_dataset
@@ -77,7 +50,7 @@ def _find_value_fixes(sql: str, table: str | None) -> list[tuple[str, str, float
     table's real values, return the suggested corrections with scores.
 
     Skips literals that exactly match a value in any column (the typo is
-    elsewhere). Returns only matches with score >= 0.78."""
+    elsewhere). Returns only high-confidence matches."""
     if not sql or not table:
         return []
     literals = {m.group(1) for m in _SQL_STR_LITERAL.finditer(sql)}
@@ -91,7 +64,7 @@ def _find_value_fixes(sql: str, table: str | None) -> list[tuple[str, str, float
         best: tuple[str, float] | None = None
         for col in RESOLVABLE_COLUMNS:
             try:
-                m = resolve_filter_value(table, col, lit, min_score=0.6)
+                m = resolve_filter_value(table, col, lit, min_score=0.88)
             except Exception:
                 continue
             if not m:
@@ -101,30 +74,21 @@ def _find_value_fixes(sql: str, table: str | None) -> list[tuple[str, str, float
                 break
             if best is None or m[1] > best[1]:
                 best = m
-        if exact_seen or best is None or best[1] < 0.78:
+        if exact_seen or best is None or best[1] < 0.9:
             continue
         fixes.append((lit, best[0], best[1]))
     return fixes
 
 
 def _did_you_mean(sql: str, table: str | None) -> str:
-    """Soft suggestion text for the answer footer when auto-relax decides not
-    to act (e.g. no high-confidence fix). Kept for backward compatibility."""
+    """Soft suggestion text for a high-confidence typo; never changes SQL."""
     fixes = _find_value_fixes(sql, table)
     if not fixes:
         return ""
     return "Did you mean: " + "; ".join(f"`{a}` → `{b}`" for a, b, _ in fixes[:3]) + "?"
 
 
-def _apply_value_fixes(sql: str, fixes: list[tuple[str, str, float]]) -> str:
-    """Rewrite SQL string literals in-place. Each (typo, correction) is
-    substituted as `'typo'` → `'correction'`. Other occurrences are untouched."""
-    out = sql
-    for typo, correction, _ in fixes:
-        out = out.replace(f"'{typo}'", f"'{correction}'")
-    return out
-
-PIPELINE_VERSION = "llm-grounded-v3"
+PIPELINE_VERSION = "llm-grounded-v4"
 PIPELINE_READY = True
 
 
@@ -164,6 +128,8 @@ def _envelope(
     request_id: str | None = None,
     intent: str = "",
     verified_match: dict[str, Any] | None = None,
+    analysis_contract: dict[str, Any] | None = None,
+    data_truncated: bool = False,
 ) -> dict[str, Any]:
     rows = rows or []
     tables = tables or []
@@ -200,6 +166,7 @@ def _envelope(
     quality_warnings = quality_warnings or []
     charts = charts or []
     map_intent = map_intent or _empty_map_intent()
+    analysis_contract = analysis_contract or {}
     supported = resolution == "answered"
     log_pipeline_event(
         {
@@ -222,6 +189,7 @@ def _envelope(
         "sql": sql,
         "data": rows,
         "row_count": len(rows),
+        "data_truncated": data_truncated,
         "resolution": resolution,
         "mapIntent": map_intent,
         "chart": chart,
@@ -233,21 +201,23 @@ def _envelope(
             "assumptions": assumptions,
             "sql": sql,
             "rows": rows,
+            "data_truncated": data_truncated,
             "map_intent": map_intent,
             "chart_intent": {"enabled": bool(chart), "type": "vega-lite" if chart else None},
             "final_answer": {"answer": answer, "confidence": confidence},
+            "analysis_contract": analysis_contract or None,
         },
         "contract": {
             "contract_type": intent,
             "family": tables[0] if tables else None,
             "metric": metric,
-            "operation": None,
+            "operation": analysis_contract.get("operation"),
             "unit": None,
             "geography_level": geography_level,
             "year": year,
             "focus_state": focus_state,
-            "sort_direction": None,
-            "top_k": None,
+            "sort_direction": analysis_contract.get("sort_direction"),
+            "top_k": analysis_contract.get("top_k"),
             "tables": tables,
             "supported": supported,
             "missing_slots": [],
@@ -280,6 +250,9 @@ def _reasoning_mode(
     stages: list[dict[str, Any]],
     user_id: int | str | None,
     request_id: str | None,
+    routing: dict[str, Any],
+    grounding: dict[str, Any],
+    analysis: AnalysisContract,
     emit: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Reasoning-mode path: agent loop, then faithfulness + envelope."""
@@ -290,7 +263,19 @@ def _reasoning_mode(
         stages.append(entry)
         _emit("stage", entry)
 
-    agent = run_reasoning_agent(q, history, on_event=_emit)
+    def _reasoning_sql_guard(sql_text: str) -> None:
+        validate_semantic_sql(
+            sql_text, q, analysis, grounding.get("resolved") or {},
+            enforce_shape=False,
+        )
+
+    agent = run_reasoning_agent(
+        q,
+        history,
+        on_event=_emit,
+        semantic_guard=_reasoning_sql_guard,
+        allowed_tables=set(analysis.tables),
+    )
     _push(
         "reasoning_agent",
         "completed",
@@ -317,15 +302,9 @@ def _reasoning_mode(
                 tables.append(t_low)
     primary_table = tables[0] if tables else None
     dataset = get_dataset(primary_table) if primary_table else None
-    routing_stub = {
-        "tables": tables,
-        "geography_level": dataset.geography if dataset else "none",
-        "year_strategy": "",
-        "join_plan": "",
-        "columns": [],
-    }
-    display_rows = enrich_rows_for_map(q, routing_stub, {}, rows)
-    visuals = build_visuals(q, routing_stub, {}, display_rows)
+    routing_stub = {**routing, "tables": tables or analysis.tables}
+    display_rows = enrich_rows_for_map(q, routing_stub, grounding.get("resolved") or {}, rows)
+    visuals = build_visuals(q, routing_stub, grounding.get("resolved") or {}, display_rows)
     _push(
             "visual_recommender",
             "completed",
@@ -333,7 +312,70 @@ def _reasoning_mode(
             map=visuals["map_intent"].get("mapType") if visuals["map_intent"].get("enabled") else "none",
         )
 
-    resolution_preview = "answered" if rows else ("answered" if agent["stopped_reason"] == "ok" else "error")
+    # Faithfulness is blocking here too.  Reasoning mode previously bypassed
+    # the normal semantic contract and streamed its draft before verification.
+    tool_results = agent.get("tool_results") or []
+    if rows or tool_results:
+        verdict = judge_faithfulness(q, answer, rows, sql or "", tool_results)
+        _push("faithfulness_judge", "completed", attempt=1, **verdict)
+        _emit("faithfulness", verdict)
+        if not verdict["faithful"] and verdict.get("available", True) and rows:
+            repaired = write_answer(
+                q,
+                sql or "",
+                rows,
+                grounding.get("text") or "",
+                extra_evidence=json.dumps(tool_results, default=str)[:6000],
+                previous_answer=answer,
+                verification_issue=verdict["reason"],
+            )
+            _push("answer_repair", "completed", reason=verdict["reason"])
+            repaired_verdict = (
+                judge_faithfulness(q, repaired["answer"], rows, sql or "", tool_results)
+                if repaired.get("valid", True)
+                else {
+                    "faithful": False,
+                    "available": False,
+                    "reason": "repaired answer failed response-schema validation",
+                }
+            )
+            _push("faithfulness_judge", "completed", attempt=2, **repaired_verdict)
+            _emit("faithfulness", repaired_verdict)
+            if repaired_verdict["faithful"]:
+                answer = repaired["answer"]
+                key_numbers = repaired["key_numbers"]
+                caveats = list(repaired["caveats"])
+            verdict = repaired_verdict
+        elif not verdict["faithful"]:
+            retry_verdict = judge_faithfulness(q, answer, rows, sql or "", tool_results)
+            _push("faithfulness_judge", "completed", attempt=2, **retry_verdict)
+            _emit("faithfulness", retry_verdict)
+            verdict = retry_verdict
+        if verdict["faithful"]:
+            confidence = "high"
+        else:
+            confidence = "low"
+            answer = (
+                "I gathered matching data, but I could not safely verify the written "
+                "answer against all of the evidence, so I am withholding it. Please retry."
+            )
+            key_numbers = []
+            caveats = [f"Answer withheld: {verdict['reason']}"]
+            quality_warnings.append("reasoning answer withheld after failed verification")
+    else:
+        _push("faithfulness_judge", "skipped", reason="no_evidence")
+
+    # Without rows, only call it "answered" when the agent terminated cleanly
+    # (stopped_reason == "ok"); budget exhaustion / errors are surfaced honestly.
+    if (rows or tool_results) and quality_warnings:
+        resolution = "verification_failed"
+    elif rows:
+        resolution = "answered"
+    elif agent["stopped_reason"] == "ok":
+        resolution = "no_data"
+    else:
+        resolution = "error"
+
     _emit("answer_preview", {
         "answer": answer,
         "sql": sql,
@@ -342,32 +384,9 @@ def _reasoning_mode(
         "chart": visuals["chart"],
         "charts": visuals["charts"],
         "mapIntent": visuals["map_intent"],
-        "resolution": resolution_preview,
+        "resolution": resolution,
         "key_numbers": key_numbers,
     })
-
-    # Faithfulness gate on the final answer; the agent may have used
-    # peer_stats / multiple SQLs, so we pass the full tool trail too.
-    tool_results = agent.get("tool_results") or []
-    if (rows or tool_results) and not _is_trivial_scalar_answer(answer, key_numbers, rows):
-        verdict = judge_faithfulness(q, answer, rows, sql or "", tool_results)
-        _push("faithfulness_judge", "completed", **verdict)
-        _emit("faithfulness", verdict)
-        if not verdict["faithful"]:
-            confidence = "low"
-            caveats.append(f"An automated check couldn't verify part of this answer: {verdict['reason']}")
-            quality_warnings.append("answer failed automated faithfulness check")
-    else:
-        _push("faithfulness_judge", "skipped", reason="no_rows_or_trivial")
-
-    # Without rows, only call it "answered" when the agent terminated cleanly
-    # (stopped_reason == "ok"); budget exhaustion / errors are surfaced honestly.
-    if rows:
-        resolution = "answered"
-    elif agent["stopped_reason"] == "ok":
-        resolution = "no_data"
-    else:
-        resolution = "error"
     envelope = _envelope(
         question=question,
         answer=answer,
@@ -376,11 +395,11 @@ def _reasoning_mode(
         stages=stages,
         sql=sql,
         rows=display_rows,
-        tables=tables,
+        tables=tables or analysis.tables,
         geography_level=dataset.geography if dataset else None,
-        year=None,
+        year=analysis.effective_period,
         focus_state=None,
-        metric=None,
+        metric=(analysis.metric_columns[0] if analysis.metric_columns else None),
         caveats=caveats,
         key_numbers=key_numbers,
         quality_warnings=quality_warnings,
@@ -388,6 +407,7 @@ def _reasoning_mode(
         charts=visuals["charts"],
         map_intent=visuals["map_intent"],
         intent="ANALYTICAL",
+        analysis_contract=analysis.model_dump(),
         user_id=user_id,
         request_id=request_id,
     )
@@ -412,7 +432,7 @@ def answer_question(
     mode: str = "normal",
     on_event: "Callable[[str, dict[str, Any]], None] | None" = None,
 ) -> dict[str, Any]:
-    history = history or []
+    history = prior_history(history, question)
     mode = (mode or "normal").lower()
     _emit = on_event or (lambda _name, _data: None)
 
@@ -458,15 +478,10 @@ def answer_question(
                 env["suggested_followups"] = chips
         return env
 
-    if mode == "reasoning":
-        return _reasoning_mode(
-            question=question, q=q, history=history, stages=stages,
-            user_id=user_id, request_id=request_id, emit=_emit,
-        )
-
     routing = {k: ir[k] for k in (
         "tables", "columns", "geography_level", "year_strategy", "join_plan",
         "needs_clarification", "clarification", "confidence", "reason",
+        "operation", "flow_direction", "sort_direction", "top_k", "assumptions",
     )}
     _push("stage2_routing", "completed", **routing)
     if not routing["tables"] or routing["needs_clarification"]:
@@ -495,6 +510,10 @@ def answer_question(
             env["suggested_followups"] = chips
         return env
 
+    analysis = build_analysis_contract(q, routing)
+    analysis_data = analysis.model_dump()
+    _push("analysis_contract", "completed", **analysis_data)
+
     grounding = build_grounding(
         q,
         routing["tables"],
@@ -502,6 +521,20 @@ def answer_question(
         join_plan=routing["join_plan"],
     )
     _push("stage3_retrieval", "completed", tables=routing["tables"], resolved=grounding["resolved"])
+
+    if mode == "reasoning":
+        return _reasoning_mode(
+            question=question,
+            q=q,
+            history=history,
+            stages=stages,
+            user_id=user_id,
+            request_id=request_id,
+            routing=routing,
+            grounding=grounding,
+            analysis=analysis,
+            emit=_emit,
+        )
 
     # Verified Query Repository. Two modes, chosen by the matcher:
     #   exact    — the question means the same thing as the blessed one
@@ -529,16 +562,21 @@ def answer_question(
               id=verified_match.get("id"), score=round(verified_match.get("_score", 0.0), 3))
         try:
             blessed_sql = str(verified_match["sql"]).strip()
+            blessed_sql = stabilize_verified_ranking_sql(blessed_sql, analysis)
             validate_sql(blessed_sql)
-            blessed_rows = execute_select(
+            validate_semantic_sql(blessed_sql, q, analysis, grounding["resolved"])
+            fetched_blessed_rows = execute_select(
                 blessed_sql,
-                max_rows=int(os.getenv("MAX_RETURN_ROWS", "250")),
+                max_rows=int(os.getenv("MAX_RETURN_ROWS", "250")) + 1,
             )
+            max_rows = int(os.getenv("MAX_RETURN_ROWS", "250"))
+            blessed_rows = fetched_blessed_rows[:max_rows]
             gen = {
                 "sql": blessed_sql,
                 "rows": blessed_rows,
                 "error": None if blessed_rows else "empty_result",
                 "attempts": [],
+                "truncated": len(fetched_blessed_rows) > max_rows,
             }
             _push("stage4_sql_generation", "skipped",
                   reason="verified_query_used", row_count=len(blessed_rows))
@@ -550,7 +588,8 @@ def answer_question(
 
     if verified_match is None:
         gen = generate_and_execute(
-            q, grounding["text"], history, routing["tables"], exemplar=exemplar
+            q, grounding["text"], history, routing["tables"], exemplar=exemplar,
+            contract=analysis, resolved=grounding["resolved"],
         )
         _push(
             "stage4_sql_generation",
@@ -574,35 +613,11 @@ def answer_question(
             tables=routing["tables"],
             geography_level=routing["geography_level"],
             intent="ANALYTICAL",
+            analysis_contract=analysis_data,
             quality_warnings=[f"SQL generation failed: {gen['error']}"],
             user_id=user_id,
             request_id=request_id,
         )
-
-    # Auto-relax: 0-row result + a high-confidence value-fix → rewrite the SQL
-    # literal and re-run BEFORE composing the answer. Avoids the dead-end where
-    # the user sees "no data" plus a "did you mean" suggestion they have to
-    # retype manually.
-    relax_note: str | None = None
-    if not gen["rows"] and routing["tables"]:
-        fixes = _find_value_fixes(gen["sql"] or "", routing["tables"][0])
-        strong = [f for f in fixes if f[2] >= 0.85]
-        if strong:
-            relaxed_sql = _apply_value_fixes(gen["sql"] or "", strong)
-            if relaxed_sql != gen["sql"]:
-                try:
-                    validate_sql(relaxed_sql)
-                    relaxed_rows = execute_select(
-                        relaxed_sql,
-                        max_rows=int(os.getenv("MAX_RETURN_ROWS", "250")),
-                    )
-                except (SqlValidationError, Exception):
-                    relaxed_rows = []
-                if relaxed_rows:
-                    subs = "; ".join(f"`{a}` → `{b}`" for a, b, _ in strong[:3])
-                    relax_note = f"I couldn't find data for {subs}. Showing the closest match instead."
-                    gen = {**gen, "sql": relaxed_sql, "rows": relaxed_rows, "error": None}
-                    _push("auto_relax", "completed", substitutions=[{"from": a, "to": b, "score": s} for a, b, s in strong])
 
     # Peer / comparative context: cheap side-queries to give a single-state
     # answer real meaning (rank, vs national median, YoY). Never load-bearing
@@ -614,7 +629,7 @@ def answer_question(
         peer = compute_peer_context(
             table=routing["tables"][0],
             focus_state=fstate_val,
-            year=routing["year_strategy"],
+            year=analysis.effective_period,
             routing_columns=routing["columns"] or [],
             rows=gen["rows"],
         )
@@ -622,22 +637,33 @@ def answer_question(
         if peer_text:
             _push("peer_context", "completed", **{k: v for k, v in (peer or {}).items() if k in ("rank", "total_states", "yoy_change_pct")})
 
-    final = write_answer(q, gen["sql"], gen["rows"], grounding["text"], peer_text)
+    final = write_answer(
+        q, gen["sql"], gen["rows"], grounding["text"], peer_text,
+        truncated=bool(gen.get("truncated")),
+    )
     _push("stage4_answer_generation", "completed", confidence=final["confidence"])
+    if gen["rows"] and not final.get("valid", True):
+        retry = write_answer(
+            q,
+            gen["sql"],
+            gen["rows"],
+            grounding["text"],
+            peer_text,
+            previous_answer=final["answer"],
+            verification_issue=final.get("error") or "answer schema validation failed",
+            truncated=bool(gen.get("truncated")),
+        )
+        _push("answer_repair", "completed", reason="answer schema validation failed")
+        if retry.get("valid", True):
+            final = retry
 
-    if relax_note:
-        final["answer"] = f"*{relax_note}*\n\n{final['answer']}"
-
-    # If auto-relax didn't act (or didn't find rows) and we still have 0 rows,
-    # fall back to surfacing the soft suggestion.
+    # Never silently substitute a different entity.  A close match is offered
+    # as a question, while the result remains honestly empty.
     if not gen["rows"] and routing["tables"]:
         hint = _did_you_mean(gen["sql"] or "", routing["tables"][0])
         if hint:
             final["answer"] = (final["answer"] or "").rstrip() + f"\n\n*{hint}*"
 
-    # Compute visuals BEFORE faithfulness so the answer + chart + map can be
-    # streamed to the UI the moment the answer is written — faithfulness +
-    # suggested follow-ups attach as later events.
     resolution = "answered" if gen["rows"] else "no_data"
     primary_table = routing["tables"][0]
     dataset = get_dataset(primary_table)
@@ -653,6 +679,103 @@ def answer_question(
             map=visuals["map_intent"].get("mapType") if visuals["map_intent"].get("enabled") else "none",
         )
 
+    caveats = list(final["caveats"])
+    confidence = "low"
+    quality_warnings: list[str] = []
+    if gen["rows"] and final.get("valid", True):
+        verdict = judge_faithfulness(
+            q, final["answer"], gen["rows"], gen["sql"],
+            peer_context=peer_text,
+            data_notes=critical_warnings_for(routing["tables"]),
+        )
+        _push("faithfulness_judge", "completed", attempt=1, **verdict)
+        _emit("faithfulness", verdict)
+
+        if not verdict["faithful"] and verdict.get("available", True):
+            repaired = write_answer(
+                q, gen["sql"], gen["rows"], grounding["text"], peer_text,
+                previous_answer=final["answer"],
+                verification_issue=verdict["reason"],
+                truncated=bool(gen.get("truncated")),
+            )
+            _push("answer_repair", "completed", reason=verdict["reason"])
+            repaired_verdict = (
+                judge_faithfulness(
+                    q, repaired["answer"], gen["rows"], gen["sql"],
+                    peer_context=peer_text,
+                    data_notes=critical_warnings_for(routing["tables"]),
+                )
+                if repaired.get("valid", True)
+                else {
+                    "faithful": False,
+                    "available": False,
+                    "reason": "repaired answer failed response-schema validation",
+                }
+            )
+            _push("faithfulness_judge", "completed", attempt=2, **repaired_verdict)
+            _emit("faithfulness", repaired_verdict)
+            if repaired_verdict["faithful"]:
+                final = repaired
+                caveats = list(repaired["caveats"])
+            verdict = repaired_verdict
+        elif not verdict["faithful"]:
+            # One retry handles a transient verifier outage, but the answer is
+            # never accepted merely because the safety service is unavailable.
+            retry_verdict = judge_faithfulness(
+                q, final["answer"], gen["rows"], gen["sql"],
+                peer_context=peer_text,
+                data_notes=critical_warnings_for(routing["tables"]),
+            )
+            _push("faithfulness_judge", "completed", attempt=2, **retry_verdict)
+            _emit("faithfulness", retry_verdict)
+            verdict = retry_verdict
+
+        if verdict["faithful"]:
+            confidence = "high" if routing.get("confidence") == "high" else "medium"
+        else:
+            resolution = "verification_failed"
+            confidence = "low"
+            final = {
+                "answer": (
+                    "I found matching data, but I could not safely verify the written "
+                    "answer against the query results, so I am not presenting it as fact. "
+                    "Please retry; if this repeats, use the request ID when reporting it."
+                ),
+                "key_numbers": [],
+                "caveats": [],
+                "confidence": "low",
+            }
+            caveats = [f"Answer withheld: {verdict['reason']}"]
+            quality_warnings.append("answer withheld after failed faithfulness verification")
+    elif gen["rows"]:
+        _push("faithfulness_judge", "skipped", reason="answer_schema_invalid")
+        resolution = "verification_failed"
+        confidence = "low"
+        final = {
+            "answer": (
+                "I found matching data, but the model did not produce a valid "
+                "answer object after two attempts, so I am withholding the response."
+            ),
+            "key_numbers": [],
+            "caveats": [],
+            "confidence": "low",
+            "valid": False,
+        }
+        caveats = ["Answer withheld after repeated response-schema validation failure."]
+        quality_warnings.append("answer withheld after invalid response schema")
+    else:
+        _push("faithfulness_judge", "skipped")
+        confidence = "low"
+
+    if gen.get("truncated"):
+        caveats.append(
+            f"The displayed data is capped at {len(gen['rows'])} rows; it is not the complete result set."
+        )
+        quality_warnings.append("result set truncated at MAX_RETURN_ROWS")
+
+    # The UI sees prose only after the blocking verification gate.  Previously
+    # answer_preview exposed a known-bad draft and the later warning could not
+    # retract it.
     _emit("answer_preview", {
         "answer": final["answer"],
         "sql": gen["sql"],
@@ -664,27 +787,6 @@ def answer_question(
         "resolution": resolution,
         "key_numbers": final["key_numbers"],
     })
-
-    caveats = list(final["caveats"])
-    confidence = final["confidence"]
-    quality_warnings: list[str] = []
-    if gen["rows"]:
-        if _is_trivial_scalar_answer(final["answer"], final["key_numbers"], gen["rows"]):
-            _push("faithfulness_judge", "skipped", reason="trivial_scalar")
-        else:
-            verdict = judge_faithfulness(
-                q, final["answer"], gen["rows"], gen["sql"],
-                peer_context=peer_text,
-                data_notes=critical_warnings_for(routing["tables"]),
-            )
-            _push("faithfulness_judge", "completed", **verdict)
-            _emit("faithfulness", verdict)
-            if not verdict["faithful"]:
-                confidence = "low"
-                caveats.append(f"An automated check couldn't verify part of this answer: {verdict['reason']}")
-                quality_warnings.append("answer failed automated faithfulness check")
-    else:
-        _push("faithfulness_judge", "skipped")
 
     envelope = _envelope(
         question=question,
@@ -698,7 +800,7 @@ def answer_question(
         # Flag verified-query path so the UI can render a "Verified" badge.
         verified_match=({"id": verified_match["id"], "score": verified_match.get("_score")} if verified_match else None),
         geography_level=dataset.geography if dataset else routing["geography_level"],
-        year=routing["year_strategy"] or (dataset.default_year if dataset else None),
+        year=analysis.effective_period,
         focus_state=focus_state,
         metric=(routing["columns"][0] if routing["columns"] else None),
         caveats=caveats,
@@ -708,6 +810,8 @@ def answer_question(
         charts=visuals["charts"],
         map_intent=visuals["map_intent"],
         intent="ANALYTICAL",
+        analysis_contract=analysis_data,
+        data_truncated=bool(gen.get("truncated")),
         user_id=user_id,
         request_id=request_id,
     )

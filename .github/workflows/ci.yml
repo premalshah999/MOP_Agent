@@ -20,9 +20,12 @@ jobs:
       - run: pytest -q
       - run: python -m app.semantic.audit --format json
       # Strict golden gate only runs when the DeepSeek secret is set.
-      - name: Strict golden evaluation
+      - name: Strict golden + held-out evaluation
         if: env.DEEPSEEK_API_KEY != ''
-        run: python -m app.evals.run_evals
+        run: python -m app.evals.run_evals --suite both
+      - name: Same-query evidence repeatability
+        if: env.DEEPSEEK_API_KEY != ''
+        run: python -m app.evals.repeatability
 
   frontend:
     runs-on: ubuntu-latest

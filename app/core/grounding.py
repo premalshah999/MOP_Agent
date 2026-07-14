@@ -30,8 +30,9 @@ def _resolved_block(question: str, tables: list[str]) -> tuple[str, dict[str, An
             continue
         resolved[table] = entities
         for column, info in entities.items():
+            values = list(info.get("values") or [info["value"]])
             lines.append(
-                f"  - {table}.{column} = {info['value']!r}  "
+                f"  - {table}.{column} = {values!r}  "
                 f"(use this EXACT value/casing; match score {info['score']})"
             )
     if not lines:
@@ -57,10 +58,18 @@ def build_grounding(
     patterns = common_question_patterns()
 
     default_years = []
+    period_rows = []
     for t in tables:
         ds = get_dataset(t)
         if ds is not None:
             default_years.append(f"  - {t}: default year = {ds.default_year}")
+            periods = [str(value) for value in ds.available_years if "-" in str(value)]
+            if periods and ds.year_column:
+                period_rows.append(
+                    f"  - {t}: {ds.year_column} stores pre-aggregated period row(s) "
+                    f"{periods}. For a total over that exact period, filter to the "
+                    "period label; NEVER invent annual rows or sum it with a single-year row."
+                )
 
     parts: list[str] = ["SCHEMA FOR THE ROUTED TABLE(S)", "=" * 32, *schema_blocks]
     if warnings:
@@ -71,6 +80,8 @@ def build_grounding(
         parts += ["", resolved_text]
     if default_years:
         parts += ["", "DEFAULT YEAR PER TABLE (use unless the question says otherwise):", *default_years]
+    if period_rows:
+        parts += ["", "PRE-AGGREGATED PERIOD ROWS (critical):", *period_rows]
 
     # Scope conventions — the #1 source of run-to-run answer drift was the
     # model re-deciding time scope / direction / filters each run. These are

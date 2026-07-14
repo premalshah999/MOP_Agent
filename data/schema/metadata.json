@@ -1903,6 +1903,7 @@
       }
     },
     "contract_state_agency": {
+      "available": false,
       "description": "Federal spending broken down by BOTH agency AND state. Allows questions like 'how much did the Department of Defense spend in Maryland' or 'which agency gives the most grants to Texas'. 21 agencies \u00d7 50 states \u00d7 2 year-periods = 2,142 rows. Also includes employee and wage breakdown.",
       "source": "USAspending.gov + agency payroll aggregates",
       "grain": "One row per agency per state per year-period",
@@ -2041,6 +2042,7 @@
       }
     },
     "contract_county_agency": {
+      "available": false,
       "description": "Federal spending broken down by BOTH agency AND county. Most granular agency-level dataset. 21 agencies \u00d7 ~3,135 counties \u00d7 2 year-periods = ~93,700 rows. Use for questions like 'which agency gives the most grants to Montgomery County, Maryland'.",
       "source": "USAspending.gov + agency payroll aggregates",
       "grain": "One row per agency per county per year-period",
@@ -2164,6 +2166,7 @@
       }
     },
     "contract_cd_agency": {
+      "available": false,
       "description": "Federal spending broken down by BOTH agency AND 118th Congressional District. 21 agencies \u00d7 ~435 districts \u00d7 2 year-periods = ~18,355 rows. Use for questions like 'which congressional district gets the most Defense Department contracts'.",
       "source": "USAspending.gov + agency payroll aggregates",
       "grain": "One row per agency per congressional district per year-period",

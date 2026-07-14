@@ -59,7 +59,14 @@ def build_semantic_coverage_audit() -> dict[str, Any]:
     metadata_tables = metadata.get("tables", {})
 
     runtime_tables = set(manifest)
-    documented_tables = set(metadata_tables)
+    # Staged/retired tables may retain documentation for future ingestion, but
+    # they must be explicitly marked unavailable and must not masquerade as
+    # runtime catalog coverage.
+    documented_tables = {
+        table
+        for table, table_meta in metadata_tables.items()
+        if not isinstance(table_meta, dict) or table_meta.get("available", True)
+    }
     documented_not_loaded = sorted(documented_tables - runtime_tables)
     loaded_not_documented = sorted(runtime_tables - documented_tables)
 

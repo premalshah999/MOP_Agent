@@ -16,7 +16,7 @@ class ProductionSmokeTests(unittest.TestCase):
         from app.core.orchestrator import PIPELINE_VERSION
         from app.main import app
 
-        self.assertEqual(PIPELINE_VERSION, "llm-grounded-v3")
+        self.assertEqual(PIPELINE_VERSION, "llm-grounded-v4")
         self.assertEqual(app.title, "MOP Controlled Analytics Assistant")
 
 

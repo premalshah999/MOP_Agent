@@ -411,8 +411,6 @@ def ask_stream(body: AskRequest, request: Request, user: dict[str, Any] = Depend
         # titles survive even if the client never sends its rename call.
         title = body.question[:60] + ("..." if len(body.question) > 60 else "")
         update_thread(thread["id"], user["id"], title=title)
-    user_message = create_message(thread["id"], "user", body.question)
-
     stored_history: list[dict[str, Any]] = []
     for message in list_messages(thread["id"]):
         if message["role"] not in {"user", "assistant"}:
@@ -423,6 +421,9 @@ def ask_stream(body: AskRequest, request: Request, user: dict[str, Any] = Depend
             item["contract"] = formatted["contract"]
         stored_history.append(item)
     stored_history = stored_history[-12:]
+    # Capture context before persisting the current turn.  Otherwise the
+    # pipeline receives the same question once as history and once as input.
+    user_message = create_message(thread["id"], "user", body.question)
 
     events: "queue.Queue[tuple[str, Any]]" = queue.Queue()
     SENTINEL = object()
@@ -517,8 +518,6 @@ def ask(body: AskRequest, request: Request, user: dict[str, Any] = Depends(get_c
         # titles survive even if the client never sends its rename call.
         title = body.question[:60] + ("..." if len(body.question) > 60 else "")
         update_thread(thread["id"], user["id"], title=title)
-    user_message = create_message(thread["id"], "user", body.question)
-
     stored_history = []
     for message in list_messages(thread["id"]):
         if message["role"] not in {"user", "assistant"}:
@@ -529,6 +528,7 @@ def ask(body: AskRequest, request: Request, user: dict[str, Any] = Depends(get_c
             item["contract"] = formatted["contract"]
         stored_history.append(item)
     stored_history = stored_history[-12:]
+    user_message = create_message(thread["id"], "user", body.question)
     result = answer_question(
         body.question,
         body.history or stored_history,

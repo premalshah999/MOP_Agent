@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import os
 import re
+import json
 from typing import Any
 
+from app.core.analysis_contract import AnalysisContract
 from app.duckdb.connection import execute_select
 from app.llm import client
 from app.semantic.value_resolver import distinct_values, resolve_filter_value
 from app.sql.validator import SqlValidationError, validate_sql
+from app.sql.semantic_validator import normalize_generated_sql, validate_semantic_sql
 
 # `LOWER(col) = 'value'` or `col = 'value'` — capture column + literal.
 _FILTER_RE = re.compile(
@@ -37,7 +40,7 @@ def _probe_empty_filters(sql: str, tables: list[str]) -> str:
         seen.add(key)
         for table in tables:
             try:
-                match = resolve_filter_value(table, col, value, min_score=0.4)
+                match = resolve_filter_value(table, col, value, min_score=0.88)
             except Exception:
                 match = None
             if not match or match[0].lower() == value.lower():
@@ -57,52 +60,6 @@ def _probe_empty_filters(sql: str, tables: list[str]) -> str:
     return ("\n" + "\n".join(suggestions)) if suggestions else ""
 
 MAX_ATTEMPTS = 3
-
-_AUDIT_SYSTEM = """You audit a SQL query against the question it claims to answer.
-You are the last line of defense before results reach a state-government user.
-
-Check ONLY these three failure classes (ignore style, aliases, LIMIT choices):
-
-1. UNREQUESTED FILTER — a WHERE condition that NARROWS scope in a way the
-   question never asked for. The classic failure: the question says "state
-   average" (a geography concept) and the SQL filters
-   agency_name = 'Department of State'. Filtering an agency/industry/category
-   is ONLY valid when the question names one.
-2. TIME SCOPE — the conventions require the latest single year when the user
-   named none. Flag a query that aggregates across multiple years without the
-   user asking for a multi-year total/trend, or that picks a non-latest year
-   for no stated reason. (A missing year filter on a table that HAS a year
-   column = an implicit multi-year sum — flag it.) EXCEPTION: gov_state /
-   gov_county / gov_congress are single-snapshot tables — never flag them
-   for time scope.
-3. DIRECTION — for *_flow tables: "receives/inflow" must use the subawardee_*
-   side; "sends/outflow" must use the rcpt_* side.
-
-Return ONLY JSON: {"ok": <bool>, "problems": ["<specific problem>", ...]}
-ok=true when none of the three classes applies. Do not invent problems."""
-
-
-def _audit_scope(question: str, sql: str, conventions: str) -> list[str]:
-    """One fast LLM pass over the generated SQL. Returns [] when clean.
-    Never raises — an audit failure must not take down the pipeline."""
-    try:
-        raw = client.chat_json(
-            [
-                {"role": "system", "content": _AUDIT_SYSTEM},
-                {"role": "user", "content": (
-                    f"QUESTION: {question}\n\nSQL:\n{sql}\n\n"
-                    f"CONVENTIONS IN FORCE:\n{conventions[:1800]}\n\nAudit it."
-                )},
-            ],
-            temperature=0.0,
-            max_tokens=300,
-            purpose="sql_scope_audit",
-        )
-        if raw.get("ok"):
-            return []
-        return [str(x) for x in (raw.get("problems") or [])][:4]
-    except Exception:
-        return []
 
 _SYSTEM = """You are a DuckDB SQL expert for a fixed analytics catalog.
 
@@ -124,6 +81,8 @@ Hard rules:
 - Normalize state casing with LOWER() in filters and joins.
 - Return a focused result: include the label/dimension column(s) and the
   measure(s); ORDER BY the measure and LIMIT when the user asks for "top N".
+- Rankings must use a stable tie-breaker after the measure (normally the label
+  column), so identical requests cannot reshuffle tied rows between runs.
 - Keep every WHERE filter the question requires (scope, year, casing) EXACTLY
   as needed — never drop a filter. Separately, ADD the geographic identifier to
   the SELECT list so results can be mapped: county -> also SELECT `state` and
@@ -136,6 +95,8 @@ Return ONLY JSON: {"sql": "<the query>", "explanation": "<one sentence>"}"""
 
 def _ask_for_sql(messages: list[dict[str, str]]) -> str:
     raw = client.chat_json(messages, temperature=0.0, max_tokens=900, purpose="stage4_sql")
+    if not isinstance(raw, dict):
+        raise client.LLMError("SQL generator returned a non-object JSON response")
     return str(raw.get("sql") or "").strip()
 
 
@@ -145,6 +106,8 @@ def generate_and_execute(
     history: list[dict[str, Any]] | None = None,
     tables: list[str] | None = None,
     exemplar: dict[str, Any] | None = None,
+    contract: AnalysisContract | None = None,
+    resolved: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     max_rows = int(os.getenv("MAX_RETURN_ROWS", "250"))
     exemplar_block = ""
@@ -161,7 +124,8 @@ def generate_and_execute(
         )
     base_user = (
         f"GROUNDING\n========\n{grounding_text}{exemplar_block}\n\n"
-        f"QUESTION: {question}\n\nWrite the DuckDB SQL."
+        + (f"ANALYSIS CONTRACT (must satisfy exactly)\n{json.dumps(contract.model_dump(), default=str)}\n\n" if contract else "")
+        + f"QUESTION: {question}\n\nWrite the DuckDB SQL."
     )
     messages: list[dict[str, str]] = [
         {"role": "system", "content": _SYSTEM},
@@ -170,17 +134,22 @@ def generate_and_execute(
 
     attempts: list[dict[str, Any]] = []
     sql = ""
-    audited = False
     for attempt in range(MAX_ATTEMPTS):
         try:
             sql = _ask_for_sql(messages)
+            if contract is not None:
+                sql = normalize_generated_sql(sql, contract)
         except client.LLMError as exc:
-            return {"sql": sql, "rows": [], "error": f"LLM error: {exc}", "attempts": attempts}
+            return {"sql": sql, "rows": [], "error": f"LLM error: {exc}", "attempts": attempts, "truncated": False}
 
         record: dict[str, Any] = {"sql": sql}
         try:
             validate_sql(sql)
-            rows = execute_select(sql, max_rows=max_rows)
+            if contract is not None:
+                validate_semantic_sql(sql, question, contract, resolved)
+            fetched_rows = execute_select(sql, max_rows=max_rows + 1)
+            truncated = len(fetched_rows) > max_rows
+            rows = fetched_rows[:max_rows]
         except SqlValidationError as exc:
             record["error"] = f"validation: {exc}"
         except Exception as exc:  # duckdb execution error
@@ -188,28 +157,14 @@ def generate_and_execute(
         else:
             record["row_count"] = len(rows)
             attempts.append(record)
-            if rows and not audited:
-                # Scope audit: catch unrequested filters / wrong time scope /
-                # flow-direction mix-ups BEFORE the answer is written. One
-                # round only; the critique goes back through the same loop.
-                audited = True
-                conventions_start = grounding_text.find("ANALYSIS CONVENTIONS")
-                conventions = grounding_text[conventions_start:conventions_start + 2000] if conventions_start >= 0 else ""
-                problems = _audit_scope(question, sql, conventions)
-                if problems:
-                    record["scope_audit"] = problems
-                    messages += [
-                        {"role": "assistant", "content": f'{{"sql": {sql!r}}}'},
-                        {"role": "user", "content": (
-                            "A scope audit found problems with that query:\n- "
-                            + "\n- ".join(problems)
-                            + "\nRewrite the SQL to fix them, following the "
-                            "ANALYSIS CONVENTIONS. Return corrected JSON only."
-                        )},
-                    ]
-                    continue
             if rows or attempt == MAX_ATTEMPTS - 1:
-                return {"sql": sql, "rows": rows, "error": None if rows else "empty_result", "attempts": attempts}
+                return {
+                    "sql": sql,
+                    "rows": rows,
+                    "error": None if rows else "empty_result",
+                    "attempts": attempts,
+                    "truncated": truncated,
+                }
             # Empty result with retries left — likely a bad filter/casing/year.
             probe = _probe_empty_filters(sql, tables or [])
             feedback = (
@@ -233,4 +188,4 @@ def generate_and_execute(
             },
         ]
 
-    return {"sql": sql, "rows": [], "error": attempts[-1].get("error") if attempts else "no sql", "attempts": attempts}
+    return {"sql": sql, "rows": [], "error": attempts[-1].get("error") if attempts else "no sql", "attempts": attempts, "truncated": False}

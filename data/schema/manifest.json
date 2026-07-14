@@ -359,7 +359,6 @@
     "source_file": "state_flow.xlsx",
     "rows": 27436,
     "columns": [
-      "Unnamed: 0",
       "rcpt_st_cd",
       "subawardee_st_cd",
       "subaward_amount_year",
@@ -398,7 +397,6 @@
     "source_file": "congress_flow.xlsx",
     "rows": 115827,
     "columns": [
-      "Unnamed: 0",
       "prime_awardee_stcd118",
       "subawardee_stcd118",
       "rcpt_cd_name",

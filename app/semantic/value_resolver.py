@@ -1,10 +1,10 @@
-"""Live filter-value resolution.
+"""Resolve explicitly mentioned entities to canonical values in DuckDB.
 
-The LLM must filter on values that actually exist in the data with the exact
-casing/spelling each table uses (state casing differs per table; agency names are
-long canonical strings). This module reads DISTINCT values straight from DuckDB and
-fuzzy-matches the user's phrasing to a real value, so the grounding pack can tell the
-SQL writer the exact string to use.
+This deliberately does *not* compare an entire question with every value.  A
+full-question fuzzy score made generic language such as "state average" look
+like a mention of the Department of State, and could even invent a geography.
+Resolution now requires an exact phrase, a column-appropriate alias, or a very
+close typo-sized token window.  Multiple named values are retained.
 """
 
 from __future__ import annotations
@@ -17,48 +17,54 @@ from app.duckdb.connection import execute_select
 from app.semantic.registry import get_dataset, quote_identifier
 
 
-# Columns worth resolving against real data (entity-like, not measures).
 RESOLVABLE_COLUMNS = (
     "state", "county", "cd_118", "agency", "agency_name",
     "rcpt_state_name", "subawardee_state_name", "rcpt_cd_name", "subawardee_cd_name",
     "naics_2digit_title",
 )
 
-# Common shorthand the user might type for long canonical strings.
-_ALIASES = {
-    "dod": "defense",
-    "dept of defense": "defense",
-    "department of defense": "defense",
+_AGENCY_ALIASES = {
+    "dod": "defense", "dept of defense": "defense",
+    "department of defense": "defense", "defense department": "defense",
+    "department of defence": "defense", "defence department": "defense",
     "hhs": "health and human services",
-    "hud": "housing and urban development",
-    "dhs": "homeland security",
-    "doj": "justice",
-    "doe": "energy",
+    "hud": "housing and urban development", "dhs": "homeland security",
+    "doj": "justice", "doe": "energy", "energy department": "energy",
     "usda": "agriculture",
-    "va": "veterans affairs",
-    "dot": "transportation",
-    "treasury": "treasury",
-    "dc": "district of columbia",
+    "va": "veterans affairs", "dot": "transportation",
+    "treasury": "treasury", "state department": "state",
 }
-
-
-_GENERIC_TOKENS = {"department", "of", "the", "and", "office", "us", "u", "s"}
+_STATE_ABBREVIATIONS = {
+    "AL": "alabama", "AK": "alaska", "AZ": "arizona", "AR": "arkansas",
+    "CA": "california", "CO": "colorado", "CT": "connecticut", "DE": "delaware",
+    "FL": "florida", "GA": "georgia", "HI": "hawaii", "ID": "idaho",
+    "IL": "illinois", "IN": "indiana", "IA": "iowa", "KS": "kansas",
+    "KY": "kentucky", "LA": "louisiana", "ME": "maine", "MD": "maryland",
+    "MA": "massachusetts", "MI": "michigan", "MN": "minnesota", "MS": "mississippi",
+    "MO": "missouri", "MT": "montana", "NE": "nebraska", "NV": "nevada",
+    "NH": "new hampshire", "NJ": "new jersey", "NM": "new mexico", "NY": "new york",
+    "NC": "north carolina", "ND": "north dakota", "OH": "ohio", "OK": "oklahoma",
+    "OR": "oregon", "PA": "pennsylvania", "RI": "rhode island", "SC": "south carolina",
+    "SD": "south dakota", "TN": "tennessee", "TX": "texas", "UT": "utah",
+    "VT": "vermont", "VA": "virginia", "WA": "washington", "WV": "west virginia",
+    "WI": "wisconsin", "WY": "wyoming", "DC": "district of columbia",
+}
+_GENERIC = {
+    "department", "of", "the", "and", "office", "agency", "state", "county",
+    "district", "government", "federal", "us", "u", "s",
+}
 
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", str(text).lower())).strip()
 
 
-def _content_tokens(text: str) -> set[str]:
-    return {t for t in _norm(text).split() if t not in _GENERIC_TOKENS and len(t) > 2}
+def _content_tokens(text: str) -> list[str]:
+    return [t for t in _norm(text).split() if t not in _GENERIC and len(t) > 2]
 
 
-# maxsize bumped from 256 → 2048 for 40-50 concurrent users; eviction otherwise
-# thrashes high-frequency lookups (state names, agency names) and forces
-# DuckDB re-hits on the hot path. ~few hundred KB of memory at the limit.
 @lru_cache(maxsize=2048)
 def distinct_values(table_name: str, column: str, limit: int = 2000) -> tuple[str, ...]:
-    """DISTINCT non-null values of `column` in `table_name`, read live from DuckDB."""
     dataset = get_dataset(table_name)
     if dataset is None or column not in dataset.columns:
         return ()
@@ -71,23 +77,78 @@ def distinct_values(table_name: str, column: str, limit: int = 2000) -> tuple[st
     return tuple(str(r["v"]) for r in rows if r.get("v") not in (None, ""))
 
 
-def _similarity(query_norm: str, candidate: str) -> float:
-    cand = _norm(candidate)
-    if not query_norm or not cand:
+def _exact_phrase(question_norm: str, candidate_norm: str) -> bool:
+    return bool(candidate_norm and re.search(rf"\b{re.escape(candidate_norm)}\b", question_norm))
+
+
+def _window_score(question_norm: str, candidate_norm: str) -> float:
+    """Best same-size n-gram score; never score the whole question."""
+    q_tokens = question_norm.split()
+    c_tokens = candidate_norm.split()
+    if not c_tokens:
         return 0.0
-    if cand in query_norm:
-        return 1.0
-    cand_tokens = set(cand.split())
-    q_tokens = set(query_norm.split())
-    overlap = len(cand_tokens & q_tokens) / len(cand_tokens) if cand_tokens else 0.0
-    best_window = 0.0
-    qt = query_norm.split()
-    size = len(cand.split())
-    if size and len(qt) >= size:
-        for i in range(0, len(qt) - size + 1):
-            window = " ".join(qt[i : i + size])
-            best_window = max(best_window, SequenceMatcher(None, window, cand).ratio())
-    return max(SequenceMatcher(None, query_norm, cand).ratio(), best_window, overlap * 0.95)
+    best = 0.0
+    sizes = {len(c_tokens)}
+    if len(c_tokens) > 1:
+        sizes.add(len(c_tokens) - 1)
+        sizes.add(len(c_tokens) + 1)
+    for size in sizes:
+        if size <= 0 or size > len(q_tokens):
+            continue
+        for i in range(len(q_tokens) - size + 1):
+            window = " ".join(q_tokens[i:i + size])
+            best = max(best, SequenceMatcher(None, window, candidate_norm).ratio())
+    return best
+
+
+def _alias_expansions(column: str, question: str) -> list[str]:
+    expansions: list[str] = []
+    q_norm = _norm(question)
+    if column in {"agency", "agency_name"}:
+        for alias, expansion in _AGENCY_ALIASES.items():
+            if re.search(rf"\b{re.escape(alias)}\b", q_norm):
+                expansions.append(expansion)
+    if column in {"state", "rcpt_state_name", "subawardee_state_name"}:
+        # Two-letter words such as IN/OR/ME are unsafe after lower-casing.
+        # Postal aliases are accepted only when the user typed uppercase.
+        for code, expansion in _STATE_ABBREVIATIONS.items():
+            if re.search(rf"(?<![A-Za-z]){code}(?![A-Za-z])", question):
+                expansions.append(expansion)
+    return expansions
+
+
+def resolve_filter_values(
+    table_name: str,
+    column: str,
+    question: str,
+    *,
+    min_score: float = 0.88,
+) -> list[tuple[str, float]]:
+    """All canonical values explicitly named in ``question``, best first."""
+    values = distinct_values(table_name, column)
+    if not values:
+        return []
+    q_norm = _norm(question)
+    expansions = _alias_expansions(column, question)
+    matches: list[tuple[str, float]] = []
+    for value in values:
+        cand = _norm(value)
+        score = 0.0
+        if _exact_phrase(q_norm, cand):
+            score = 1.0
+        for expansion in expansions:
+            if expansion == cand or _exact_phrase(cand, expansion):
+                score = max(score, 0.99)
+        if score == 0.0:
+            # Typo recovery is allowed only for a distinctive candidate.  A
+            # candidate whose only content is "state"/"county" is not an entity.
+            content = _content_tokens(value)
+            if content:
+                score = _window_score(q_norm, cand)
+        if score >= min_score:
+            matches.append((value, score))
+    matches.sort(key=lambda item: (item[1], len(item[0])), reverse=True)
+    return matches
 
 
 def resolve_filter_value(
@@ -95,51 +156,13 @@ def resolve_filter_value(
     column: str,
     question: str,
     *,
-    min_score: float = 0.7,
+    min_score: float = 0.88,
 ) -> tuple[str, float] | None:
-    """Best canonical value of `column` mentioned in `question`, or None.
-
-    Returns (exact_value_as_stored, score). The value has the exact casing used by
-    this table so it can be dropped straight into a WHERE clause.
-    """
-    values = distinct_values(table_name, column)
-    if not values:
-        return None
-    q = _norm(question)
-    expansions = [
-        expansion
-        for alias, expansion in _ALIASES.items()
-        if re.search(rf"\b{re.escape(alias)}\b", q)
-    ]
-    q_tokens = set(q.split())
-    best: tuple[str, float] | None = None
-    for value in values:
-        cand_norm = _norm(value)
-        cand_tokens = set(cand_norm.split())
-        score = _similarity(q, value)
-        # An alias expansion whose words are all inside this candidate is a
-        # strong signal (e.g. "defense" -> "Department of Defense").
-        for expansion in expansions:
-            exp_tokens = set(expansion.split())
-            if exp_tokens and (exp_tokens <= cand_tokens or expansion in cand_norm):
-                score = max(score, 0.97)
-        # All of the candidate's distinctive words appear in the question
-        # (e.g. "veterans affairs" -> "Department of Veterans Affairs").
-        content = _content_tokens(value)
-        if content and content <= q_tokens:
-            score = max(score, 0.93)
-        # On ties, prefer the LONGEST candidate — the most specific match
-        # (e.g. "MIAMI-DADE" over "DADE"/"MIAMI", "NEW YORK" over "YORK").
-        if best is None or score > best[1] or (score == best[1] and len(value) > len(best[0])):
-            best = (value, score)
-    if best and best[1] >= min_score:
-        return best
-    return None
+    matches = resolve_filter_values(table_name, column, question, min_score=min_score)
+    return matches[0] if matches else None
 
 
 def resolve_entities(table_name: str, question: str) -> dict[str, dict[str, object]]:
-    """For every resolvable column present in the table, the best value the
-    question refers to. Shape: {column: {"value": str, "score": float}}."""
     dataset = get_dataset(table_name)
     if dataset is None:
         return {}
@@ -147,7 +170,11 @@ def resolve_entities(table_name: str, question: str) -> dict[str, dict[str, obje
     for column in RESOLVABLE_COLUMNS:
         if column not in dataset.columns:
             continue
-        match = resolve_filter_value(table_name, column, question)
-        if match:
-            resolved[column] = {"value": match[0], "score": round(match[1], 3)}
+        matches = resolve_filter_values(table_name, column, question)
+        if matches:
+            resolved[column] = {
+                "value": matches[0][0],
+                "values": [value for value, _ in matches],
+                "score": round(matches[0][1], 3),
+            }
     return resolved
