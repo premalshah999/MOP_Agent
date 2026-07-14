@@ -103,8 +103,8 @@ def test_twice_failed_answer_uses_verified_evidence_fallback(monkeypatch):
     )
     previews = [payload for name, payload in events if name == "answer_preview"]
     assert result["resolution"] == "answered"
-    assert "verified query results directly" in result["answer"]
-    assert "100.0" in result["answer"]
+    assert result["answer"] == "Verified grants for MARYLAND: **$100**."
+    assert result["key_numbers"][0]["value"] == "$100"
     assert all("Wrong draft" not in preview["answer"] for preview in previews)
     assert result["contract"]["supported"] is True
     assert any(

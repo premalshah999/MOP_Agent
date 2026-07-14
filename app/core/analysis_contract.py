@@ -69,7 +69,7 @@ def _explicit_operation(question: str, proposed: Any) -> Operation:
         return "comparison"
     if re.search(r"\b(by agency|by category|breakdown|composition)\b", q):
         return "breakdown"
-    if re.search(r"\b(total|average|mean|median|sum)\b", q):
+    if re.search(r"\b(total|average|mean|median|sum|how much|how many)\b", q):
         return "aggregate"
     if re.search(r"\bat\s+(?:least|most)\b", q):
         return "lookup"

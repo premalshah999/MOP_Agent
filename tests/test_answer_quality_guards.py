@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 
-from app.core.formatting import validate_key_numbers_against_rows
+from app.core.analysis_contract import build_analysis_contract
+from app.core.formatting import (
+    validate_key_numbers_against_row_sets,
+    validate_key_numbers_against_rows,
+)
 from app.core.peer_context import compute_peer_context, render_peer_context
 from app.evals.faithfulness import judge_faithfulness
 from app.llm import client
@@ -76,3 +80,82 @@ def test_endpoint_trend_delta_is_verified() -> None:
     )
     assert kept == [item]
     assert dropped == []
+
+
+def test_how_much_is_always_an_aggregate_contract() -> None:
+    contract = build_analysis_contract(
+        "How much subcontract funding flows out of Maryland?",
+        {
+            "tables": ["state_flow"],
+            "columns": ["subaward_amount_year"],
+            "geography_level": "state",
+            "operation": "breakdown",
+            "flow_direction": "outflow",
+        },
+    )
+    assert contract.operation == "aggregate"
+
+
+def test_reasoning_key_number_can_use_an_earlier_independent_query() -> None:
+    total = {
+        "label": "Total Maryland outflow",
+        "value": 25_114_674_528.13,
+        "unit": "USD",
+    }
+    kept, dropped = validate_key_numbers_against_row_sets(
+        [total],
+        [
+            [{"destination_state": "Tennessee", "outflow_dollars": 6_526_000_000}],
+            [{"total_outflow": 25_114_674_528.13}],
+        ],
+    )
+    assert kept == [total]
+    assert dropped == []
+
+
+def test_reasoning_validation_never_sums_across_separate_queries() -> None:
+    unsupported = {
+        "label": "Combined",
+        "value": 31_640_674_528.13,
+        "unit": "USD",
+    }
+    kept, dropped = validate_key_numbers_against_row_sets(
+        [unsupported],
+        [
+            [{"top_destination": 6_526_000_000}],
+            [{"total_outflow": 25_114_674_528.13}],
+        ],
+    )
+    assert kept == []
+    assert dropped == ["Combined"]
+
+
+def test_flow_scope_guard_rejects_other_states_when_intra_state_is_included() -> None:
+    verdict = judge_faithfulness(
+        "How much subcontract funding flows out of Maryland?",
+        "Maryland sent $25.1B to subawardees in other states.",
+        [{"total_outflow": 25_114_674_528.13}],
+        "SELECT SUM(subaward_amount_year) AS total_outflow "
+        "FROM mart_state_flow WHERE rcpt_state_name = 'Maryland'",
+    )
+    assert verdict["faithful"] is False
+    assert "intra-state" in verdict["reason"]
+
+
+def test_flow_scope_guard_accepts_explicit_intra_state_disclosure(monkeypatch) -> None:
+    client.set_stub(
+        lambda messages, json_mode, purpose: json.dumps(
+            {"faithful": True, "complete": True, "reason": "Scope is disclosed."}
+        )
+    )
+    try:
+        verdict = judge_faithfulness(
+            "How much subcontract funding flows out of Maryland?",
+            "Maryland sent $25.1B to other states and Maryland itself.",
+            [{"total_outflow": 25_114_674_528.13}],
+            "SELECT SUM(subaward_amount_year) AS total_outflow "
+            "FROM mart_state_flow WHERE rcpt_state_name = 'Maryland'",
+        )
+    finally:
+        client.clear_stub()
+    assert verdict["faithful"] is True

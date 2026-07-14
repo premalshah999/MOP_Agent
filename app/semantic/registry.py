@@ -267,7 +267,10 @@ def _warnings_index() -> dict[str, list[str]]:
     sfd = warnings.get("state_flow_duplicate_columns", {})
     add("state_flow", sfd.get("fix", "Use rcpt_state_name / subawardee_state_name.") +
         " state_flow has NO year column (all available records). "
-        "subaward_amount_year can be negative (clawbacks).")
+        "subaward_amount_year can be negative (clawbacks). Totals include "
+        "intra-state flows (for example, Maryland to Maryland) unless the SQL "
+        "explicitly excludes them; never describe an unfiltered total as only "
+        "funding to or from other states.")
 
     cfi = warnings.get("congress_flow_integer_district_id", {})
     add("congress_flow", cfi.get("fix", "Use rcpt_cd_name; never join the integer district id to cd_118."))

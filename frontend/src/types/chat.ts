@@ -147,7 +147,6 @@ export interface ChatMessage {
   pipelineTrace?: PipelineTrace;
   quality?: PipelineQuality;
   suggestedFollowups?: string[];
-  suggestReasoningQuestion?: string;  // set when the normal-mode answer would benefit from reasoning
   keyNumbers?: KeyNumber[];
   caveats?: string[];
   confidence?: 'high' | 'medium' | 'low' | string;

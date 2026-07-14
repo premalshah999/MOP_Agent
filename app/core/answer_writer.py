@@ -53,6 +53,9 @@ Rules:
   "above the national median", "ranks among", "compared to other states").
   Those claims are ONLY allowed when explicit peer-context data is given.
   Without peer context: state only the value(s), no positional framing.
+- HARD RULE: Flow totals include same-geography subawards unless the SQL
+  explicitly excludes them. Never describe an unfiltered flow total as only
+  funding to/from "other states". Say it includes intra-state flows.
 - If rows are empty, say plainly that the data returned nothing for that query
   and suggest the most likely reason (filter/year/scope) — do not guess a value.
 - For rankings or multi-row results, use a short markdown table.

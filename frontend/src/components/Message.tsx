@@ -1,4 +1,4 @@
-import { BadgeCheck, Copy, Database, TerminalSquare, Lightbulb, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { BadgeCheck, Copy, Database, TerminalSquare, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { sendFeedback } from '@/lib/api';
 import { useSettings } from '@/lib/settings';
 import { motion } from 'motion/react';
@@ -132,13 +132,12 @@ function Md({ content, tone, glossary }: { content: string; tone: 'user' | 'assi
 interface MessageProps extends ChatMessage {
   onOpenDetail?: (tab: 'sql' | 'data') => void;
   onAskFollowup?: (text: string) => void;
-  onRerunReasoning?: (text: string) => void;
   /** Which tab is currently active in the detail panel for this message (if any) */
   activeDetailTab?: 'sql' | 'data' | null;
   datasetId?: string;
 }
 
-export function Message({ id, role, content, sqlQuery, data, rowCount, chart, charts, evidence, resolution, error, ts, mapIntent, datasetId, onOpenDetail, activeDetailTab, suggestedFollowups, suggestReasoningQuestion, onAskFollowup, onRerunReasoning, keyNumbers, caveats, confidence, glossary, verifiedQuery }: MessageProps) {
+export function Message({ id, role, content, sqlQuery, data, rowCount, chart, charts, evidence, resolution, error, ts, mapIntent, datasetId, onOpenDetail, activeDetailTab, suggestedFollowups, onAskFollowup, keyNumbers, caveats, confidence, glossary, verifiedQuery }: MessageProps) {
   const settings = useSettings();
   const effectiveGlossary = settings.glossaryTooltips ? glossary : undefined;
   const [verdict, setVerdict] = useState<'up' | 'down' | null>(null);
@@ -284,17 +283,6 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
             rows={rows}
           />
         </Suspense>
-      )}
-
-      {role === 'assistant' && !error && suggestReasoningQuestion && onRerunReasoning && (
-        <button
-          type="button"
-          onClick={() => onRerunReasoning(suggestReasoningQuestion)}
-          className="mt-3 inline-flex items-center gap-1.5 text-[12px] text-[var(--muted)] hover:text-[var(--ink)] underline-offset-2 hover:underline"
-        >
-          <Lightbulb size={13} className="opacity-70" />
-          Get peer context — re-run in reasoning mode
-        </button>
       )}
 
       {role === 'assistant' && !error && settings.showFollowups && suggestedFollowups && suggestedFollowups.length > 0 && onAskFollowup && (

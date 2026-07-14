@@ -211,3 +211,39 @@ def validate_key_numbers_against_rows(
         else:
             dropped.append(str(it.get("label", "")) or "unknown")
     return kept, dropped
+
+
+def validate_key_numbers_against_row_sets(
+    items: list[dict[str, Any]],
+    row_sets: list[list[dict[str, Any]]],
+    *,
+    rel_tol: float = 0.01,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate structured numbers against independent query results.
+
+    Reasoning mode can execute a scalar query and then a separate breakdown.
+    Treating all of those rows as one table would invent cross-query sums, while
+    validating only the final query would reject a valid scalar from an earlier
+    tool call. An item is accepted when it is supported by any one numeric
+    result set, with aggregates calculated only within that result set.
+    """
+    if not items:
+        return [], []
+    numeric_sets = [
+        rows for rows in row_sets
+        if rows and (_row_numeric_pool(rows) or _row_aggregate_pool(rows))
+    ]
+    if not numeric_sets:
+        return list(items), []
+
+    kept: list[dict[str, Any]] = []
+    dropped: list[str] = []
+    for item in items:
+        if any(
+            validate_key_numbers_against_rows([item], rows, rel_tol=rel_tol)[0]
+            for rows in numeric_sets
+        ):
+            kept.append(item)
+        else:
+            dropped.append(str(item.get("label", "")) or "unknown")
+    return kept, dropped

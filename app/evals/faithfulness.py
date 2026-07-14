@@ -7,6 +7,7 @@ and attach a caveat when an answer drifts from the data.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.llm import client
@@ -46,6 +47,40 @@ MUST match your final conclusion.
 Return ONLY JSON: {"faithful": <bool>, "complete": <bool>, "reason": "<one sentence>"}"""
 
 
+_FLOW_SQL_RE = re.compile(r"\bmart_(?:state|county|congress)_flow\b", re.IGNORECASE)
+_CROSS_GEOGRAPHY_ONLY_RE = re.compile(
+    r"\b(?:to|from)\s+(?:sub-?awardees?\s+in\s+|prime awardees?\s+in\s+)?other states\b"
+    r"|\boutside\s+(?:of\s+)?[a-z .-]+",
+    re.IGNORECASE,
+)
+_INTRA_SCOPE_DISCLOSED_RE = re.compile(
+    r"\b(?:including|includes?)\s+(?:[a-z .-]+\s+itself|intra[- ]state|same[- ]state)\b"
+    r"|\bother states\b.{0,80}\b(?:and|including)\s+[a-z .-]+\b",
+    re.IGNORECASE,
+)
+_FLOW_EXCLUSION_RE = re.compile(
+    r"(?:rcpt|subawardee)_(?:state_name|st_cd).{0,80}(?:<>|!=|\bnot\s+in\b)"
+    r"|(?:<>|!=).{0,80}(?:rcpt|subawardee)_(?:state_name|st_cd)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _flow_scope_problem(answer: str, sql: str) -> str | None:
+    """Catch a material scope claim that numeric row checks cannot detect."""
+    if not _FLOW_SQL_RE.search(sql or ""):
+        return None
+    if not _CROSS_GEOGRAPHY_ONLY_RE.search(answer or ""):
+        return None
+    if _INTRA_SCOPE_DISCLOSED_RE.search(answer or ""):
+        return None
+    if _FLOW_EXCLUSION_RE.search(sql or ""):
+        return None
+    return (
+        "The answer says the flow is only to or from other states, but the SQL "
+        "does not exclude intra-state subawards."
+    )
+
+
 def judge_faithfulness(
     question: str,
     answer: str,
@@ -55,6 +90,15 @@ def judge_faithfulness(
     peer_context: str = "",
     data_notes: list[str] | None = None,
 ) -> dict[str, Any]:
+    scope_problem = _flow_scope_problem(answer, sql)
+    if scope_problem:
+        return {
+            "faithful": False,
+            "data_faithful": False,
+            "complete": True,
+            "available": True,
+            "reason": scope_problem,
+        }
     extra = ""
     if data_notes:
         # Analyst-authored data-quality warnings (from the semantic registry,

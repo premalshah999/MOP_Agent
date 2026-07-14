@@ -651,3 +651,41 @@
       AND year = '2024'
   verified: true
   notes: "spending_state_agency stores year as STRING and state in UPPERCASE — LOWER() the state literal for match; year '2024' is FY2024 single-year, '2020-2024' is the 5-year aggregate row."
+
+- id: vq042
+  question: "how much subcontract funding flows into maryland?"
+  paraphrases:
+    - "how much subaward funding flows into maryland?"
+    - "total subcontract funding received by maryland"
+  table: state_flow
+  sql: |
+    SELECT 'Maryland' AS destination,
+           SUM(subaward_amount_year) AS total_subaward_inflow
+    FROM mart_state_flow
+    WHERE LOWER(subawardee_state_name) = 'maryland'
+  verified: true
+  direct_render: true
+  caveats:
+    - "Includes intra-state subawards (Maryland to Maryland), not only funding from other states."
+    - "Covers all available records; state_flow has no year column."
+    - "Amounts are net of negative adjustments such as clawbacks."
+  notes: "Analyst-reviewed scalar. Includes Maryland-to-Maryland subawards; state_flow has no year column."
+
+- id: vq043
+  question: "how much subcontract funding flows out of maryland?"
+  paraphrases:
+    - "how much subaward funding flows out of maryland?"
+    - "total subcontract funding sent by maryland prime recipients"
+  table: state_flow
+  sql: |
+    SELECT 'Maryland' AS source,
+           SUM(subaward_amount_year) AS total_subaward_outflow
+    FROM mart_state_flow
+    WHERE LOWER(rcpt_state_name) = 'maryland'
+  verified: true
+  direct_render: true
+  caveats:
+    - "Includes intra-state subawards (Maryland to Maryland), not only funding sent to other states."
+    - "Covers all available records; state_flow has no year column."
+    - "Amounts are net of negative adjustments such as clawbacks."
+  notes: "Analyst-reviewed scalar. Includes Maryland-to-Maryland subawards; state_flow has no year column."

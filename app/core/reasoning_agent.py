@@ -46,6 +46,9 @@ RULES
   numbers a tool returned: 0.824 is NOT "above the 75th percentile" when the
   p75 is 0.826. When two numbers are close, quote both instead of a bucket
   label ("top quartile"/"bottom quartile"). Never invent a threshold.
+- Flow totals include same-geography subawards unless SQL explicitly excludes
+  them. Never call an unfiltered flow total funding only to/from "other states";
+  say "all states, including intra-state flows" when that scope matters.
 - If you're not 100% sure of a column name, casing, or filter value, call
   `get_schema` and/or `distinct_values` BEFORE `run_sql`.
 - For "is X high?", "where does X stand?", or distributional questions, prefer
@@ -73,8 +76,24 @@ CATALOG (use exact table ids)
 {catalog}"""
 
 
-def _build_user(question: str, history: list[dict[str, Any]] | None) -> str:
+def _build_user(
+    question: str,
+    history: list[dict[str, Any]] | None,
+    *,
+    operation: str | None = None,
+    flow_direction: str | None = None,
+) -> str:
     parts = [f"QUESTION: {question}"]
+    if operation:
+        contract = [f"operation={operation}"]
+        if flow_direction and flow_direction != "none":
+            contract.append(f"flow_direction={flow_direction}")
+        if operation == "aggregate":
+            contract.append(
+                "return the requested scalar total/amount as the primary result; "
+                "do not replace it with a destination, source, agency, or other breakdown"
+            )
+        parts.append("REQUIRED ANSWER CONTRACT: " + "; ".join(contract))
     if history:
         # Carry structured focus from the last assistant turn if present.
         for h in reversed(history):
@@ -163,6 +182,8 @@ def run_reasoning_agent(
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
     semantic_guard: Callable[[str], None] | None = None,
     allowed_tables: set[str] | None = None,
+    operation: str | None = None,
+    flow_direction: str | None = None,
 ) -> dict[str, Any]:
     emit = on_event or (lambda _n, _d: None)
     """Run the agent. Returns a dict the orchestrator can wrap into the
@@ -171,23 +192,42 @@ def run_reasoning_agent(
     system = _AGENT_SYSTEM.format(domain=domain_summary(), catalog=catalog_for_prompt())
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system},
-        {"role": "user", "content": _build_user(question, history)},
+        {
+            "role": "user",
+            "content": _build_user(
+                question,
+                history,
+                operation=operation,
+                flow_direction=flow_direction,
+            ),
+        },
     ]
     trace: list[dict[str, Any]] = []
     tool_results: list[dict[str, Any]] = []  # full results — used by faithfulness/judge
     sql_history: list[str] = []
     last_rows: list[dict[str, Any]] = []
+    primary_sql: str | None = None
+    primary_rows: list[dict[str, Any]] = []
     used_tokens = 0
     started = time.time()
 
+    def _selected_evidence() -> tuple[list[dict[str, Any]], str | None]:
+        if operation == "aggregate" and primary_rows:
+            return primary_rows, primary_sql
+        return last_rows, sql_history[-1] if sql_history else None
+
     def _finish(reason: str, answer: str, key_numbers: list, caveats: list, step: int) -> dict[str, Any]:
+        # An investigation may run a direct scalar followed by a supplemental
+        # breakdown. For an aggregate question, the scalar is still the
+        # requested result and must remain the displayed SQL/data.
+        selected_rows, selected_sql = _selected_evidence()
         return {
             "answer": answer,
             "key_numbers": key_numbers,
             "caveats": caveats,
-            "sql": sql_history[-1] if sql_history else None,
+            "sql": selected_sql,
             "sql_history": sql_history,
-            "rows": last_rows,
+            "rows": selected_rows,
             "trace": trace,
             "tool_results": tool_results,
             "stopped_reason": reason,
@@ -230,11 +270,14 @@ def run_reasoning_agent(
             # synthesise via the normal-mode answer pipeline (same path as
             # budget-exhausted); otherwise admit we couldn't answer.
             trace.append({"step": step, "name": "no_tool_call", "summary": "model returned prose without a tool call; routing to row-grounded synthesis"})
-            if last_rows:
-                last_sql = sql_history[-1] if sql_history else ""
+            synthesis_rows, synthesis_sql = _selected_evidence()
+            if synthesis_rows:
                 try:
                     synth = write_answer(
-                        question, last_sql, last_rows[:60], grounding_text="",
+                        question,
+                        synthesis_sql or "",
+                        synthesis_rows[:60],
+                        grounding_text="",
                         extra_evidence=_evidence_digest(tool_results),
                     )
                 except Exception:
@@ -302,6 +345,9 @@ def run_reasoning_agent(
             if name == "run_sql" and not result.get("error") and isinstance(result_rows, list) and result_rows:
                 sql_history.append(result["sql"])
                 last_rows = [row for row in result_rows if isinstance(row, dict)]
+                if operation == "aggregate" and not primary_rows and len(last_rows) == 1:
+                    primary_sql = result["sql"]
+                    primary_rows = list(last_rows)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
@@ -311,11 +357,14 @@ def run_reasoning_agent(
     # Budget exhausted — if we collected rows, use the SAME answer pipeline as
     # normal mode (few-shots, structured envelope, formatted key_numbers).
     # That eliminates the "reasoning answers feel rougher than normal" tax.
-    if last_rows:
-        last_sql = sql_history[-1] if sql_history else ""
+    synthesis_rows, synthesis_sql = _selected_evidence()
+    if synthesis_rows:
         try:
             synth = write_answer(
-                question, last_sql, last_rows[:60], grounding_text="",
+                question,
+                synthesis_sql or "",
+                synthesis_rows[:60],
+                grounding_text="",
                 extra_evidence=_evidence_digest(tool_results),
             )
         except Exception:

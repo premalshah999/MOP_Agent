@@ -207,7 +207,7 @@ function fallbackGeoValue(
       && !/fips|code|_id$/i.test(key),
   );
   const sided = sidePattern ? candidates.filter(([key]) => sidePattern.test(key)) : [];
-  if (sided.length === 1) return sided[0][1];
+  if (sidePattern) return sided.length === 1 ? sided[0][1] : null;
   return candidates.length === 1 ? candidates[0][1] : null;
 }
 
@@ -232,24 +232,24 @@ function detectRegions(rows: Record<string, unknown>[], mapIntent: ChatbotMapInt
   let duplicate = false;
 
   const districtKeys = side === 'source'
-    ? ['source_district', 'origin_district', 'rcpt_cd_name', 'cd_118', 'district', 'label']
+    ? ['source_district', 'origin_district', 'rcpt_cd_name']
     : side === 'destination'
-      ? ['destination_district', 'subawardee_cd_name', 'cd_118', 'district', 'label']
+      ? ['destination_district', 'subawardee_cd_name']
       : ['cd_118', 'district', 'label'];
   const countyKeys = side === 'source'
-    ? ['source_county', 'origin_county', 'rcpt_cty_name', 'county', 'county_name', 'label']
+    ? ['source_county', 'origin_county', 'rcpt_cty_name']
     : side === 'destination'
-      ? ['destination_county', 'subawardee_cty_name', 'county', 'county_name', 'label']
+      ? ['destination_county', 'subawardee_cty_name']
       : ['county', 'county_name', 'label'];
   const stateKeys = side === 'source'
-    ? ['source', 'origin', 'source_state', 'rcpt_state_name', 'rcpt_state', 'state', 'state_name', 'label']
+    ? ['source', 'origin', 'source_state', 'rcpt_state_name', 'rcpt_state']
     : side === 'destination'
-      ? ['destination', 'destination_state', 'subawardee_state_name', 'subawardee_state', 'state', 'state_name', 'label']
+      ? ['destination', 'destination_state', 'subawardee_state_name', 'subawardee_state']
       : ['state', 'state_name', 'label'];
   const countyStateKeys = side === 'source'
-    ? ['source_state', 'rcpt_state_name', 'rcpt_state', 'state', 'state_name', 'state_abbr']
+    ? ['source_state', 'rcpt_state_name', 'rcpt_state']
     : side === 'destination'
-      ? ['destination_state', 'subawardee_state_name', 'subawardee_state', 'state', 'state_name', 'state_abbr']
+      ? ['destination_state', 'subawardee_state_name', 'subawardee_state']
       : ['state', 'state_name', 'state_abbr'];
 
   const setUnique = (collection: Map<string, Region>, region: Region) => {

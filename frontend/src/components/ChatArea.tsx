@@ -188,13 +188,6 @@ export function ChatArea({
           : m,
       );
 
-      const contractType = (response.contract as { contract_type?: string } | undefined)?.contract_type;
-      const shouldSuggestReasoning =
-        effectiveMode === 'normal' &&
-        contractType === 'ANALYTICAL' &&
-        response.resolution === 'answered' &&
-        (response.row_count ?? 0) <= 1;
-
       const assistantMsg: ChatMessage = {
         id: assistantId,
         role: 'assistant',
@@ -214,7 +207,6 @@ export function ChatArea({
         pipelineTrace: response.pipelineTrace,
         quality: response.quality,
         suggestedFollowups: response.suggested_followups ?? undefined,
-        suggestReasoningQuestion: shouldSuggestReasoning ? q : undefined,
         keyNumbers: response.key_numbers ?? undefined,
         caveats: response.caveats ?? undefined,
         confidence: response.confidence ?? undefined,
@@ -355,7 +347,6 @@ export function ChatArea({
                       )
                     }
                     onAskFollowup={(text) => void send(text)}
-                    onRerunReasoning={(text) => void send(text, 'reasoning')}
                   />
                 ))}
                 {showLivePlaceholder && (

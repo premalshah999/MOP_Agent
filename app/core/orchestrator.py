@@ -15,7 +15,10 @@ from app.core import meta_answer
 from app.core.answer_writer import write_answer
 from app.core.analysis_contract import AnalysisContract, build_analysis_contract
 from app.core.clarifier import generate_clarification_chips
-from app.core.formatting import format_key_numbers, validate_key_numbers_against_rows
+from app.core.formatting import (
+    format_key_numbers,
+    validate_key_numbers_against_row_sets,
+)
 from app.core.glossary import detect_terms
 from app.core.peer_context import compute_peer_context, render_peer_context
 from app.core.verified_queries import match as match_verified_query
@@ -129,18 +132,20 @@ def _envelope(
     verified_match: dict[str, Any] | None = None,
     analysis_contract: dict[str, Any] | None = None,
     data_truncated: bool = False,
+    key_number_row_sets: list[list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     rows = rows or []
     tables = tables or []
-    assumptions = assumptions or []
-    caveats = caveats or []
+    assumptions = list(assumptions or [])
+    caveats = list(caveats or [])
     # Validate every LLM-emitted key_number against the actual rows BEFORE
     # formatting. Drops fabricated values (LLM arithmetic miss) and
     # downgrades confidence if anything was dropped — prevents the most
     # visible hallucination class: a wrong number in the headline callout.
     raw_kn = list(key_numbers or [])
-    if raw_kn and rows:
-        kept_kn, dropped_kn = validate_key_numbers_against_rows(raw_kn, rows)
+    validation_sets = key_number_row_sets if key_number_row_sets is not None else [rows]
+    if raw_kn and any(validation_sets):
+        kept_kn, dropped_kn = validate_key_numbers_against_row_sets(raw_kn, validation_sets)
         if dropped_kn:
             # User-facing wording: sound deliberate, not like debug output.
             # The dropped labels still go to quality_warnings/logs for us.
@@ -241,6 +246,35 @@ def _envelope(
 _MART_RE = _re.compile(r"\bmart_([a-z_]+)", _re.IGNORECASE)
 
 
+def _reasoning_evidence_row_sets(
+    display_rows: list[dict[str, Any]],
+    tool_results: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """Return the independent numeric evidence sets collected by the agent."""
+    row_sets: list[list[dict[str, Any]]] = [display_rows] if display_rows else []
+    for tool_result in tool_results:
+        result = tool_result.get("result") or {}
+        if result.get("error"):
+            continue
+        if tool_result.get("name") == "run_sql":
+            result_rows = [
+                row for row in (result.get("rows") or []) if isinstance(row, dict)
+            ]
+            if result_rows:
+                row_sets.append(result_rows)
+        elif tool_result.get("name") == "peer_stats":
+            stats = result.get("stats")
+            if isinstance(stats, dict) and stats:
+                row_sets.append([stats])
+            for key in ("top5", "bottom5"):
+                result_rows = [
+                    row for row in (result.get(key) or []) if isinstance(row, dict)
+                ]
+                if result_rows:
+                    row_sets.append(result_rows)
+    return row_sets
+
+
 def _reasoning_mode(
     *,
     question: str,
@@ -274,6 +308,8 @@ def _reasoning_mode(
         on_event=_emit,
         semantic_guard=_reasoning_sql_guard,
         allowed_tables=set(analysis.tables),
+        operation=analysis.operation,
+        flow_direction=analysis.flow_direction,
     )
     _push(
         "reasoning_agent",
@@ -314,8 +350,16 @@ def _reasoning_mode(
     # Faithfulness is blocking here too.  Reasoning mode previously bypassed
     # the normal semantic contract and streamed its draft before verification.
     tool_results = agent.get("tool_results") or []
+    data_notes = critical_warnings_for(tables or analysis.tables)
     if rows or tool_results:
-        verdict = judge_faithfulness(q, answer, rows, sql or "", tool_results)
+        verdict = judge_faithfulness(
+            q,
+            answer,
+            rows,
+            sql or "",
+            tool_results,
+            data_notes=data_notes,
+        )
         _push("faithfulness_judge", "completed", attempt=1, **verdict)
         _emit("faithfulness", verdict)
         if not verdict["faithful"] and verdict.get("available", True) and rows:
@@ -330,7 +374,14 @@ def _reasoning_mode(
             )
             _push("answer_repair", "completed", reason=verdict["reason"])
             repaired_verdict = (
-                judge_faithfulness(q, repaired["answer"], rows, sql or "", tool_results)
+                judge_faithfulness(
+                    q,
+                    repaired["answer"],
+                    rows,
+                    sql or "",
+                    tool_results,
+                    data_notes=data_notes,
+                )
                 if repaired.get("valid", True)
                 else {
                     "faithful": False,
@@ -346,7 +397,14 @@ def _reasoning_mode(
                 caveats = list(repaired["caveats"])
             verdict = repaired_verdict
         elif not verdict["faithful"]:
-            retry_verdict = judge_faithfulness(q, answer, rows, sql or "", tool_results)
+            retry_verdict = judge_faithfulness(
+                q,
+                answer,
+                rows,
+                sql or "",
+                tool_results,
+                data_notes=data_notes,
+            )
             _push("faithfulness_judge", "completed", attempt=2, **retry_verdict)
             _emit("faithfulness", retry_verdict)
             verdict = retry_verdict
@@ -404,6 +462,7 @@ def _reasoning_mode(
         map_intent=visuals["map_intent"],
         intent="ANALYTICAL",
         analysis_contract=analysis.model_dump(),
+        key_number_row_sets=_reasoning_evidence_row_sets(display_rows, tool_results),
         user_id=user_id,
         request_id=request_id,
     )
@@ -634,11 +693,29 @@ def answer_question(
         if peer_text:
             _push("peer_context", "completed", **{k: v for k, v in (peer or {}).items() if k in ("rank", "total_states", "yoy_change_pct")})
 
-    final = write_answer(
-        q, gen["sql"], gen["rows"], grounding["text"], peer_text,
-        truncated=bool(gen.get("truncated")),
+    direct_verified_render = bool(
+        verified_match
+        and verified_match.get("direct_render") is True
+        and len(gen["rows"]) == 1
+        and not gen.get("truncated")
     )
-    _push("stage4_answer_generation", "completed", confidence=final["confidence"])
+    if direct_verified_render:
+        final = render_verified_rows(gen["rows"], fallback=False)
+        verified_caveats = verified_match.get("caveats") if verified_match else None
+        if isinstance(verified_caveats, list) and verified_caveats:
+            final["caveats"] = [str(item) for item in verified_caveats]
+        _push(
+            "stage4_answer_generation",
+            "skipped",
+            reason="analyst_verified_direct_render",
+            confidence=final["confidence"],
+        )
+    else:
+        final = write_answer(
+            q, gen["sql"], gen["rows"], grounding["text"], peer_text,
+            truncated=bool(gen.get("truncated")),
+        )
+        _push("stage4_answer_generation", "completed", confidence=final["confidence"])
     if gen["rows"] and not final.get("valid", True):
         retry = write_answer(
             q,
@@ -679,7 +756,14 @@ def answer_question(
     caveats = list(final["caveats"])
     confidence = "low"
     quality_warnings: list[str] = []
-    if gen["rows"] and final.get("valid", True):
+    if direct_verified_render:
+        confidence = "high"
+        _push(
+            "faithfulness_judge",
+            "skipped",
+            reason="analyst_verified_query_with_mechanical_row_rendering",
+        )
+    elif gen["rows"] and final.get("valid", True):
         verdict = judge_faithfulness(
             q, final["answer"], gen["rows"], gen["sql"],
             peer_context=peer_text,

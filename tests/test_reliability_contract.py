@@ -4,6 +4,8 @@ import json
 
 from app.core.analysis_contract import build_analysis_contract
 from app.core.contextualize import prior_history
+from app.core.verified_queries import match as match_verified_query
+from app.core.verified_queries import reload_repo
 from app.evals.faithfulness import judge_faithfulness
 from app.llm import client
 from app.semantic import value_resolver
@@ -201,6 +203,18 @@ def test_scalar_aggregate_ignores_model_only_sort_direction():
     )
     assert none_contract.sort_direction == "none"
     assert desc_contract.sort_direction == "none"
+
+
+def test_maryland_flow_totals_have_exact_verified_queries():
+    reload_repo()
+    inflow = match_verified_query("How much subcontract funding flows into Maryland?")
+    outflow = match_verified_query("How much subcontract funding flows out of Maryland?")
+    assert inflow and inflow["id"] == "vq042" and inflow["_mode"] == "exact"
+    assert outflow and outflow["id"] == "vq043" and outflow["_mode"] == "exact"
+    assert inflow["direct_render"] is True
+    assert outflow["direct_render"] is True
+    assert "intra-state" in inflow["caveats"][0]
+    assert "intra-state" in outflow["caveats"][0]
 
 
 def test_implicit_superlative_gets_bounded_result_shape():

@@ -630,8 +630,8 @@ def _fallback_geo_text(row: dict[str, Any], level: str, side: str) -> str | None
         and not re.search(r"fips|code|_id$", key, re.I)
     ]
     sided = [value for key, value in candidates if side_hint and side_hint.search(key)]
-    if len(sided) == 1:
-        return sided[0]
+    if side_hint is not None:
+        return sided[0] if len(sided) == 1 else None
     return candidates[0][1] if len(candidates) == 1 else None
 
 
@@ -652,7 +652,7 @@ def _geo_identity(row: dict[str, Any], level: str, side: str) -> str | None:
         destination = ("destination_district", "subawardee_cd_name")
         direct = ("cd_118", "district", "label")
     ordered = source if side == "source" else destination if side == "destination" else direct
-    identity = _first_text(row, (*ordered, *direct)) or _fallback_geo_text(row, level, side)
+    identity = _first_text(row, ordered) or _fallback_geo_text(row, level, side)
     if level != "county" or not identity:
         return identity
     state = _geo_state(row, side)
@@ -664,7 +664,7 @@ def _geo_state(row: dict[str, Any], side: str) -> str | None:
     destination = ("destination_state", "subawardee_state_name", "subawardee_state")
     direct = ("state", "state_name", "state_abbr")
     ordered = source if side == "source" else destination if side == "destination" else direct
-    return _first_text(row, (*ordered, *direct)) or _fallback_geo_text(row, "state", side)
+    return _first_text(row, ordered) or _fallback_geo_text(row, "state", side)
 
 
 def _focus_state(question: str, resolved: dict[str, Any]) -> str | None:
@@ -711,6 +711,8 @@ def build_map_intent(
     identities = [identity for row in rows if (identity := _geo_identity(row, level, geo_side))]
     if not identities:
         return disabled
+    if len(identities) != len(rows):
+        return {**disabled, "reason": "Not every returned row identifies the mapped geography."}
     # A choropleth needs exactly one value per boundary. Agency×state and
     # multi-year rows used to overwrite earlier values in JavaScript Map.set().
     if len(set(identity.casefold() for identity in identities)) != len(identities):

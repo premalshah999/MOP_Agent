@@ -299,6 +299,38 @@ def test_focused_outflow_map_uses_destinations() -> None:
     assert "destinations" in visual["map_intent"]["subtitle"].lower()
 
 
+def test_scalar_inflow_does_not_map_the_filtered_destination_as_an_origin() -> None:
+    visual = build_visuals(
+        "How much subcontract funding flows into Maryland?",
+        {
+            "tables": ["state_flow"],
+            "columns": ["subaward_amount_year"],
+            "geography_level": "state",
+            "flow_direction": "inflow",
+            "operation": "aggregate",
+        },
+        {"state_flow": {"state": {"value": "Maryland"}}},
+        [{"state": "Maryland", "total_inflow": 26_962_782_666.86}],
+    )
+    assert visual["map_intent"]["enabled"] is False
+
+
+def test_scalar_outflow_does_not_map_the_filtered_source_as_a_destination() -> None:
+    visual = build_visuals(
+        "How much subcontract funding flows out of Maryland?",
+        {
+            "tables": ["state_flow"],
+            "columns": ["subaward_amount_year"],
+            "geography_level": "state",
+            "flow_direction": "outflow",
+            "operation": "aggregate",
+        },
+        {"state_flow": {"state": {"value": "Maryland"}}},
+        [{"state": "Maryland", "total_outflow": 25_114_674_528.13}],
+    )
+    assert visual["map_intent"]["enabled"] is False
+
+
 def test_flow_map_tolerates_safe_model_chosen_geo_alias() -> None:
     visual = build_visuals(
         "Which states send the most subawards into Maryland?",
