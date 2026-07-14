@@ -13,11 +13,12 @@ DuckDB value lookups, then verified:
 Chat API
   -> Stage 1  intent        (ANALYTICAL | CLARIFY | UNANSWERABLE | META | OUT_OF_SCOPE)
   -> Stage 2  routing        (pick the exact catalog table(s) — the critical gate)
+  -> analysis contract       (operation, metric, entity, period, direction, limit)
   -> Stage 3  retrieval      (schema + critical warnings + live resolved filter values)
   -> Stage 4  SQL generation (DuckDB SQL + self-repair loop)
-            -> SQL validator (read-only allow-list) -> DuckDB executor
+            -> structural + semantic validators -> DuckDB executor
   -> Stage 4  grounded answer (strictly from returned rows)
-  -> faithfulness judge       (flags any claim unsupported by the data)
+  -> blocking verification    (repair/recheck, or withhold unsupported prose)
 ```
 
 Non-analytical messages never touch the database: META/UNANSWERABLE get a
@@ -25,22 +26,27 @@ grounded explanation, CLARIFY asks one question back, OUT_OF_SCOPE is declined.
 
 ## LLM provider (required)
 
-DeepSeek (OpenAI-compatible). Set `DEEPSEEK_API_KEY` in `.env`. Without a key the
+DeepSeek (OpenAI-compatible) is the current local provider. Set
+`DEEPSEEK_API_KEY` in `.env`. Without a key the
 app still boots and the contract is intact, but every analytical question fails
 safe to a clarification prompt. The client also supports recorded fixtures
 (`LLM_MODE=fixture`) and an injectable stub for fully offline tests.
+
+The analytical contract and validators are provider-neutral. Switching to
+Gemini still requires a client adapter, but does not require rewriting the
+grounding, SQL semantics, or answer-verification policy.
 
 ## Backend layout
 
 ```text
 app/
-  core/        intent, router, grounding, sql_writer, answer_writer,
-               meta_answer, orchestrator
+  core/        intent, router, typed analysis contract, grounding, sql_writer,
+               answer_writer, meta_answer, orchestrator
   llm/         DeepSeek client (live + fixture + stub modes)
   semantic/    registry (metadata.json catalog), value_resolver (live DuckDB)
-  sql/         validator + executor (read-only, allow-listed)
+  sql/         structural + semantic validators (read-only, allow-listed)
   duckdb/      manifest-driven view registration
-  evals/       reference engine, golden_questions.yaml, run_evals, faithfulness
+  evals/       golden + held-out references, repeatability, faithfulness
   api/ storage/ observability/ schemas/ main.py
 ```
 
@@ -60,7 +66,8 @@ Backend `http://127.0.0.1:8000` · Frontend `http://127.0.0.1:5173`
 
 ```bash
 pytest -q                          # per-stage suites (live tests skip w/o key)
-python -m app.evals.run_evals      # strict golden gate (needs DEEPSEEK_API_KEY)
+python -m app.evals.run_evals --suite both  # golden + held-out live gate
+python -m app.evals.repeatability           # identical-query evidence gate
 python -m app.semantic.audit --format markdown
 cd frontend && npm run typecheck && npm run build
 ```
