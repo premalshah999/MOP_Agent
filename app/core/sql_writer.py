@@ -58,6 +58,52 @@ def _probe_empty_filters(sql: str, tables: list[str]) -> str:
 
 MAX_ATTEMPTS = 3
 
+_AUDIT_SYSTEM = """You audit a SQL query against the question it claims to answer.
+You are the last line of defense before results reach a state-government user.
+
+Check ONLY these three failure classes (ignore style, aliases, LIMIT choices):
+
+1. UNREQUESTED FILTER — a WHERE condition that NARROWS scope in a way the
+   question never asked for. The classic failure: the question says "state
+   average" (a geography concept) and the SQL filters
+   agency_name = 'Department of State'. Filtering an agency/industry/category
+   is ONLY valid when the question names one.
+2. TIME SCOPE — the conventions require the latest single year when the user
+   named none. Flag a query that aggregates across multiple years without the
+   user asking for a multi-year total/trend, or that picks a non-latest year
+   for no stated reason. (A missing year filter on a table that HAS a year
+   column = an implicit multi-year sum — flag it.) EXCEPTION: gov_state /
+   gov_county / gov_congress are single-snapshot tables — never flag them
+   for time scope.
+3. DIRECTION — for *_flow tables: "receives/inflow" must use the subawardee_*
+   side; "sends/outflow" must use the rcpt_* side.
+
+Return ONLY JSON: {"ok": <bool>, "problems": ["<specific problem>", ...]}
+ok=true when none of the three classes applies. Do not invent problems."""
+
+
+def _audit_scope(question: str, sql: str, conventions: str) -> list[str]:
+    """One fast LLM pass over the generated SQL. Returns [] when clean.
+    Never raises — an audit failure must not take down the pipeline."""
+    try:
+        raw = client.chat_json(
+            [
+                {"role": "system", "content": _AUDIT_SYSTEM},
+                {"role": "user", "content": (
+                    f"QUESTION: {question}\n\nSQL:\n{sql}\n\n"
+                    f"CONVENTIONS IN FORCE:\n{conventions[:1800]}\n\nAudit it."
+                )},
+            ],
+            temperature=0.0,
+            max_tokens=300,
+            purpose="sql_scope_audit",
+        )
+        if raw.get("ok"):
+            return []
+        return [str(x) for x in (raw.get("problems") or [])][:4]
+    except Exception:
+        return []
+
 _SYSTEM = """You are a DuckDB SQL expert for a fixed analytics catalog.
 
 Write ONE read-only query (SELECT or WITH ... SELECT) that answers the question,
@@ -124,6 +170,7 @@ def generate_and_execute(
 
     attempts: list[dict[str, Any]] = []
     sql = ""
+    audited = False
     for attempt in range(MAX_ATTEMPTS):
         try:
             sql = _ask_for_sql(messages)
@@ -141,6 +188,26 @@ def generate_and_execute(
         else:
             record["row_count"] = len(rows)
             attempts.append(record)
+            if rows and not audited:
+                # Scope audit: catch unrequested filters / wrong time scope /
+                # flow-direction mix-ups BEFORE the answer is written. One
+                # round only; the critique goes back through the same loop.
+                audited = True
+                conventions_start = grounding_text.find("ANALYSIS CONVENTIONS")
+                conventions = grounding_text[conventions_start:conventions_start + 2000] if conventions_start >= 0 else ""
+                problems = _audit_scope(question, sql, conventions)
+                if problems:
+                    record["scope_audit"] = problems
+                    messages += [
+                        {"role": "assistant", "content": f'{{"sql": {sql!r}}}'},
+                        {"role": "user", "content": (
+                            "A scope audit found problems with that query:\n- "
+                            + "\n- ".join(problems)
+                            + "\nRewrite the SQL to fix them, following the "
+                            "ANALYSIS CONVENTIONS. Return corrected JSON only."
+                        )},
+                    ]
+                    continue
             if rows or attempt == MAX_ATTEMPTS - 1:
                 return {"sql": sql, "rows": rows, "error": None if rows else "empty_result", "attempts": attempts}
             # Empty result with retries left — likely a bad filter/casing/year.

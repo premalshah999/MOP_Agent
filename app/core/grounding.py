@@ -71,6 +71,35 @@ def build_grounding(
         parts += ["", resolved_text]
     if default_years:
         parts += ["", "DEFAULT YEAR PER TABLE (use unless the question says otherwise):", *default_years]
+
+    # Scope conventions — the #1 source of run-to-run answer drift was the
+    # model re-deciding time scope / direction / filters each run. These are
+    # ANALYST CONVENTIONS, stated once, applied everywhere.
+    parts += [
+        "",
+        "ANALYSIS CONVENTIONS (defaults — apply unless the user explicitly asks otherwise):",
+        "  - TIME SCOPE: when the user names no year or period, filter to the LATEST",
+        "    single year for each table (flow tables: act_dt_fis_yr = 2024;",
+        "    contract/spending tables: year = '2024'; ACS: Year = 2023; FINRA state:",
+        "    Year = 2021). NEVER aggregate across multiple years unless the user",
+        "    explicitly asks for a multi-year total or a trend — a silent multi-year",
+        "    SUM changes the meaning of every number in the answer.",
+        "  - The word 'state' in phrases like 'state average', 'state total', or",
+        "    'state level' is a GEOGRAPHY term. It is NEVER the U.S. Department of",
+        "    State. Only filter agency_name/agency when the user explicitly NAMES a",
+        "    federal agency.",
+        "  - 'State average per district/county' means: that state's own total",
+        "    divided by (or AVG across) its own districts/counties, computed from",
+        "    the same table.",
+    ]
+    if any(t.endswith("_flow") for t in tables):
+        parts += [
+            "  - FLOW DIRECTION: 'receives / inflow / incoming money' = the",
+            "    SUBAWARDEE side — group or filter on subawardee_cd_name /",
+            "    subawardee_state_name / subawardee_cty_name. 'sends / outflow /",
+            "    money going out' = the prime-recipient side (rcpt_*). Never mix",
+            "    the two sides in one aggregation.",
+        ]
     if year_strategy:
         parts += ["", f"ROUTER YEAR STRATEGY: {year_strategy}"]
     if join_plan:
