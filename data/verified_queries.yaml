@@ -1,0 +1,653 @@
+# Verified Query Repository
+# ==========================
+# Hand-curated (question, blessed SQL) pairs. When a user's question matches
+# any entry's `question` or `paraphrases` above the configured similarity
+# threshold (see app/core/verified_queries.py), the orchestrator skips the
+# LLM SQL-generation stage entirely and uses the blessed SQL directly. The
+# answer is then composed by the normal answer-writer pipeline so it still
+# reads naturally — but the underlying SQL is provably correct, no
+# hallucination surface at the data-retrieval stage.
+#
+# `verified: true` means an analyst reviewed and signed off. Only verified
+# entries are used for matching. Entries with `verified: false` are
+# bootstrap stubs — review them, fix if needed, flip the flag.
+#
+# Add new entries by appending to the list. Numeric `id` is for cross-
+# reference in logs and the admin dashboard; keep them unique.
+
+- id: vq001
+  question: "what was Maryland's median household income in 2023?"
+  paraphrases:
+    - "median household income in maryland 2023"
+    - "maryland household income"
+    - "average household income in maryland"
+  table: acs_state
+  sql: |
+    SELECT state, "Median household income"
+    FROM mart_acs_state
+    WHERE LOWER(state) = 'maryland' AND Year = 2023
+  verified: true
+  notes: "Direct ACS 1-year estimate lookup."
+
+- id: vq002
+  question: "top 5 states by median household income in 2023"
+  paraphrases:
+    - "highest median household income states"
+    - "richest states by household income"
+    - "top states by median income 2023"
+  table: acs_state
+  sql: |
+    SELECT state, "Median household income"
+    FROM mart_acs_state
+    WHERE Year = 2023 AND "Median household income" IS NOT NULL
+    ORDER BY "Median household income" DESC
+    LIMIT 5
+  verified: true
+  notes: "Includes DC + PR; 'state' column case is lowercase."
+
+- id: vq003
+  question: "what was Maryland's poverty rate in 2023?"
+  paraphrases:
+    - "maryland poverty rate"
+    - "how poor is maryland"
+    - "percent below poverty in maryland"
+  table: acs_state
+  sql: |
+    SELECT state, "Below poverty" AS poverty_rate
+    FROM mart_acs_state
+    WHERE LOWER(state) = 'maryland' AND Year = 2023
+  verified: true
+  notes: "ACS 'Below poverty' is a percentage, not a count."
+
+- id: vq004
+  question: "top 10 counties in maryland by grants"
+  paraphrases:
+    - "best counties in maryland for grants"
+    - "highest-grant counties in maryland"
+    - "top maryland counties federal grants"
+  table: contract_county
+  sql: |
+    SELECT county, "Grants"
+    FROM mart_contract_county
+    WHERE LOWER(state) = 'maryland' AND year = '2024'
+      AND "Grants" IS NOT NULL
+    ORDER BY "Grants" DESC
+    LIMIT 10
+  verified: true
+  notes: "Year stored as STRING in contract_county; FY2024 = most recent."
+
+- id: vq005
+  question: "top 10 states by debt ratio"
+  paraphrases:
+    - "states with highest debt ratio"
+    - "most indebted states"
+    - "states with highest leverage"
+  table: gov_state
+  sql: |
+    SELECT state, Debt_Ratio
+    FROM mart_gov_state
+    WHERE Debt_Ratio IS NOT NULL
+    ORDER BY Debt_Ratio DESC
+    LIMIT 10
+  verified: true
+  notes: "Debt_Ratio = Total_Liabilities / Total_Assets, single FY2023 snapshot."
+
+- id: vq006
+  question: "top 15 states by financial literacy"
+  paraphrases:
+    - "states with highest financial literacy"
+    - "most financially literate states"
+    - "best states by financial literacy"
+    - "top ten states by fin lit"
+    - "top states by fin lit"
+    - "highest fin lit states"
+  table: finra_state
+  sql: |
+    SELECT state, financial_literacy
+    FROM mart_finra_state
+    WHERE Year = 2021 AND financial_literacy IS NOT NULL
+    ORDER BY financial_literacy DESC
+    LIMIT 15
+  verified: true
+  notes: "NFCS 2021 is the most recent wave with state-level data."
+
+- id: vq007
+  question: "top 5 states by poverty rate"
+  paraphrases:
+    - "highest poverty rate states"
+    - "poorest states"
+    - "worst states by poverty"
+  table: acs_state
+  sql: |
+    SELECT state, "Below poverty" AS poverty_rate
+    FROM mart_acs_state
+    WHERE Year = 2023 AND "Below poverty" IS NOT NULL
+    ORDER BY "Below poverty" DESC
+    LIMIT 5
+  verified: true
+  notes: "Highest = worst (largest share below poverty)."
+
+- id: vq008
+  question: "compare Maryland and Virginia on grants"
+  paraphrases:
+    - "maryland vs virginia grants"
+    - "maryland or virginia better for grants"
+    - "compare md and va federal grants"
+  table: contract_state
+  sql: |
+    SELECT state, "Grants"
+    FROM mart_contract_state
+    WHERE LOWER(state) IN ('maryland', 'virginia') AND year = '2024'
+    ORDER BY "Grants" DESC
+  verified: true
+  notes: "Year is STRING in contract_state."
+
+- id: vq009
+  question: "subcontract inflow to maryland"
+  paraphrases:
+    - "total subaward money flowing into maryland"
+    - "subaward inflow maryland"
+    - "money flowing into maryland from subcontracts"
+  table: state_flow
+  sql: |
+    SELECT 'Maryland' AS destination,
+           SUM(subaward_amount_year) AS total_subaward_inflow,
+           COUNT(*) AS source_count
+    FROM mart_state_flow
+    WHERE LOWER(subawardee_state_name) = 'maryland'
+  verified: true
+  notes: "Inflow TO Maryland = where the SUBAWARDEE (recipient of the subaward) is based in MD. Returns the scalar total; breakdown variant lives as a follow-up question, not the headline."
+
+- id: vq010
+  question: "top counties in maryland with maximum funding"
+  paraphrases:
+    - "top funded counties in maryland"
+    - "highest funded counties in maryland"
+    - "biggest grant counties in md"
+  table: contract_county
+  sql: |
+    SELECT county,
+           ("Grants" + "Contracts" + "Direct Payments") AS total_funding
+    FROM mart_contract_county
+    WHERE LOWER(state) = 'maryland' AND year = '2024'
+      AND "Grants" IS NOT NULL
+    ORDER BY total_funding DESC
+    LIMIT 10
+  verified: true
+  notes: "Maximum funding = grants + contracts + direct payments combined."
+
+- id: vq011
+  question: "maryland congressional districts by free cash flow"
+  paraphrases:
+    - "md congressional districts free cash flow"
+    - "maryland districts by cash flow"
+    - "md cd free cash flow"
+  table: gov_congress
+  sql: |
+    SELECT cd_118, Free_Cash_Flow
+    FROM mart_gov_congress
+    WHERE cd_118 LIKE 'MD-%'
+    ORDER BY Free_Cash_Flow DESC
+  verified: true
+  notes: "cd_118 column is the 118th-congress district id (e.g. 'MD-04')."
+
+- id: vq012
+  question: "top 10 counties in maryland by liabilities per capita"
+  paraphrases:
+    - "highest liabilities per capita in maryland counties"
+    - "md counties most debt per person"
+    - "maryland counties by liabilities per capita"
+  table: gov_county
+  sql: |
+    SELECT county, Total_Liabilities_per_capita
+    FROM mart_gov_county
+    WHERE LOWER(state) = 'maryland'
+      AND Total_Liabilities_per_capita IS NOT NULL
+    ORDER BY Total_Liabilities_per_capita DESC
+    LIMIT 10
+  verified: true
+  notes: "gov_county Year column is 'Fiscal Year 2023' string; only one fiscal year present so no filter needed."
+
+- id: vq013
+  question: "which agencies provide the most grants to maryland"
+  paraphrases:
+    - "top agencies funding maryland"
+    - "biggest grant-giving agencies for maryland"
+    - "which federal agencies give the most grants to md"
+  table: spending_state_agency
+  sql: |
+    SELECT agency, "Grants"
+    FROM mart_spending_state_agency
+    WHERE LOWER(state) = 'maryland' AND year = '2024'
+      AND "Grants" IS NOT NULL
+    ORDER BY "Grants" DESC
+    LIMIT 10
+  verified: true
+  notes: "Agency-level federal-grant breakdown for one state."
+
+- id: vq014
+  question: "top states by asian population share"
+  paraphrases:
+    - "states with highest asian population share"
+    - "states with biggest asian percentage"
+    - "most asian-populated states"
+  table: acs_state
+  sql: |
+    SELECT state, "Asian" AS asian_share
+    FROM mart_acs_state
+    WHERE Year = 2023 AND "Asian" IS NOT NULL
+    ORDER BY "Asian" DESC
+    LIMIT 10
+  verified: true
+  notes: "ACS 'Asian' column is a PERCENTAGE (population share), not a count."
+
+- id: vq015
+  question: "top counties in california by total assets"
+  paraphrases:
+    - "biggest asset counties in california"
+    - "wealthiest counties in ca by assets"
+    - "california counties ranked by assets"
+    - "counties in ca with biggest assets"
+    - "ca counties biggest assets"
+  table: gov_county
+  sql: |
+    SELECT county, Total_Assets
+    FROM mart_gov_county
+    WHERE LOWER(state) = 'california' AND Total_Assets IS NOT NULL
+    ORDER BY Total_Assets DESC
+    LIMIT 10
+  verified: true
+  notes: "Government-finance asset totals at county level, FY2023."
+
+- id: vq016
+  question: "financial stress counties in texas"
+  paraphrases:
+    - "most financially stressed counties in tx"
+    - "texas counties with highest financial constraint"
+    - "tx counties under financial stress"
+  table: finra_county
+  sql: |
+    SELECT county, financial_constraint
+    FROM mart_finra_county
+    WHERE LOWER(state) = 'texas' AND Year = 2021
+      AND financial_constraint IS NOT NULL
+    ORDER BY financial_constraint DESC
+    LIMIT 10
+  verified: true
+  notes: "FINRA NFCS county survey is single-wave 2021."
+
+- id: vq017
+  question: "top counties in maryland by college degree attainment"
+  paraphrases:
+    - "most educated counties in maryland"
+    - "md counties with highest bachelor's attainment"
+    - "top maryland counties by bachelors degree"
+  table: acs_county
+  sql: |
+    SELECT county, "Education >= Bachelor's" AS bachelors_share
+    FROM mart_acs_county
+    WHERE LOWER(state) = 'maryland' AND Year = 2023
+      AND "Education >= Bachelor's" IS NOT NULL
+    ORDER BY "Education >= Bachelor's" DESC
+    LIMIT 10
+  verified: true
+  notes: "ACS bachelor's-degree column is a PERCENTAGE share of adults."
+
+- id: vq018
+  question: "largest grant counties in california"
+  paraphrases:
+    - "top california counties by grants"
+    - "biggest grant receiving counties in ca"
+    - "ca counties with most federal grants"
+  table: contract_county
+  sql: |
+    SELECT county, "Grants"
+    FROM mart_contract_county
+    WHERE LOWER(state) = 'california' AND year = '2024'
+      AND "Grants" IS NOT NULL
+    ORDER BY "Grants" DESC
+    LIMIT 10
+  verified: true
+  notes: "contract_county.year is a string."
+
+- id: vq019
+  question: "what is the debt ratio for texas"
+  paraphrases:
+    - "texas debt ratio"
+    - "how indebted is texas"
+    - "tx liabilities to assets ratio"
+  table: gov_state
+  sql: |
+    SELECT state, Debt_Ratio
+    FROM mart_gov_state
+    WHERE LOWER(state) = 'texas'
+  verified: true
+  notes: "Debt_Ratio = Total_Liabilities / Total_Assets; FY2023 snapshot."
+
+- id: vq020
+  question: "where does california stand on total assets"
+  paraphrases:
+    - "california state assets"
+    - "ca total assets"
+    - "how much does california have in assets"
+  table: gov_state
+  sql: |
+    SELECT state, Total_Assets
+    FROM mart_gov_state
+    WHERE LOWER(state) = 'california'
+  verified: true
+  notes: "Single-state lookup; peer_context will add national-rank framing."
+
+- id: vq021
+  question: "top counties in maryland by federal employment"
+  paraphrases:
+    - "maryland counties with most federal jobs"
+    - "md counties ranked by employment"
+    - "biggest federal-employment counties in maryland"
+  table: contract_county
+  sql: |
+    SELECT county, "Federal Residents", "Resident Wage"
+    FROM mart_contract_county
+    WHERE LOWER(state) = 'maryland' AND year = '2024'
+      AND "Federal Residents" IS NOT NULL
+    ORDER BY "Federal Residents" DESC
+    LIMIT 10
+  verified: true
+  notes: "'Federal Residents' is the count of federal employees living in the county — the direct employment measure. 'Resident Wage' (their total wages) included as context."
+
+- id: vq022
+  question: "where does maryland rank nationally for debt ratio"
+  paraphrases:
+    - "maryland debt ratio national rank"
+    - "how does md compare in debt ratio"
+    - "maryland debt ratio vs other states"
+  table: gov_state
+  sql: |
+    SELECT state, Debt_Ratio
+    FROM mart_gov_state
+    WHERE Debt_Ratio IS NOT NULL
+    ORDER BY Debt_Ratio DESC
+  verified: true
+  notes: "Return all states sorted so the rank claim is verifiable from the rows themselves; the LLM finds Maryland's position in the sorted list."
+
+# =============================================================================
+# Batch 2 (2026-07-06): production-log gov_state per-capita ranking shapes.
+# Drawn from data/query_log.jsonl — the "which 15 states have the highest/lowest
+# X per capita" family accounts for >200 asks across ~15 unique metrics.
+# All gov_state entries are single-snapshot (FY2023); no year filter needed.
+# =============================================================================
+
+- id: vq023
+  question: "which 15 states have the highest total liabilities per capita?"
+  paraphrases:
+    - "top 15 states by total liabilities per capita"
+    - "states with the highest total liabilities per capita"
+    - "most indebted states per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Total_Liabilities_per_capita
+    FROM mart_gov_state
+    WHERE Total_Liabilities_per_capita IS NOT NULL
+    ORDER BY Total_Liabilities_per_capita DESC
+    LIMIT 15
+  verified: true
+  notes: "Top-45 production shape. gov_state per-capita fields are already normalized by POPULATION."
+
+- id: vq024
+  question: "which 15 states have the lowest total liabilities per capita?"
+  paraphrases:
+    - "bottom 15 states by total liabilities per capita"
+    - "states with the lowest total liabilities per capita"
+    - "least indebted states per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Total_Liabilities_per_capita
+    FROM mart_gov_state
+    WHERE Total_Liabilities_per_capita IS NOT NULL AND Total_Liabilities > 0
+    ORDER BY Total_Liabilities_per_capita ASC
+    LIMIT 15
+  verified: true
+
+- id: vq025
+  question: "which 15 states have the highest revenue per capita?"
+  paraphrases:
+    - "top 15 states by revenue per capita"
+    - "states with the highest state revenue per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Revenue_per_capita
+    FROM mart_gov_state
+    WHERE Revenue_per_capita IS NOT NULL
+    ORDER BY Revenue_per_capita DESC
+    LIMIT 15
+  verified: true
+
+- id: vq026
+  question: "which 15 states have the lowest revenue per capita?"
+  paraphrases:
+    - "bottom 15 states by revenue per capita"
+    - "states with the lowest state revenue per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Revenue_per_capita
+    FROM mart_gov_state
+    WHERE Revenue_per_capita IS NOT NULL AND Total_Liabilities > 0
+    ORDER BY Revenue_per_capita ASC
+    LIMIT 15
+  verified: true
+
+- id: vq027
+  question: "which 15 states have the highest expenses per capita?"
+  paraphrases:
+    - "top 15 states by expenses per capita"
+    - "states with the highest expenditure per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Expenses_per_capita
+    FROM mart_gov_state
+    WHERE Expenses_per_capita IS NOT NULL
+    ORDER BY Expenses_per_capita DESC
+    LIMIT 15
+  verified: true
+
+- id: vq028
+  question: "which 15 states have the lowest expenses per capita?"
+  paraphrases:
+    - "bottom 15 states by expenses per capita"
+    - "states with the lowest expenditure per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Expenses_per_capita
+    FROM mart_gov_state
+    WHERE Expenses_per_capita IS NOT NULL AND Total_Liabilities > 0
+    ORDER BY Expenses_per_capita ASC
+    LIMIT 15
+  verified: true
+
+- id: vq029
+  question: "which 15 states have the highest net pension liability per capita?"
+  paraphrases:
+    - "top 15 states by net pension liability per capita"
+    - "states with the largest pension debts per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Net_Pension_Liability_per_capita
+    FROM mart_gov_state
+    WHERE Net_Pension_Liability_per_capita IS NOT NULL
+    ORDER BY Net_Pension_Liability_per_capita DESC
+    LIMIT 15
+  verified: true
+
+- id: vq030
+  question: "which 15 states have the lowest net pension liability per capita?"
+  paraphrases:
+    - "bottom 15 states by net pension liability per capita"
+    - "states with the smallest pension debts per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Net_Pension_Liability_per_capita
+    FROM mart_gov_state
+    WHERE Net_Pension_Liability_per_capita IS NOT NULL AND Total_Liabilities > 0
+    ORDER BY Net_Pension_Liability_per_capita ASC
+    LIMIT 15
+  verified: true
+
+- id: vq031
+  question: "which 15 states have the highest net position per capita?"
+  paraphrases:
+    - "top 15 states by net position per capita"
+    - "states with the strongest net position per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Net_Position_per_capita
+    FROM mart_gov_state
+    WHERE Net_Position_per_capita IS NOT NULL
+    ORDER BY Net_Position_per_capita DESC
+    LIMIT 15
+  verified: true
+  notes: "Net position = assets - liabilities; positive is fiscally healthy."
+
+- id: vq032
+  question: "which 15 states have the lowest net position per capita?"
+  paraphrases:
+    - "bottom 15 states by net position per capita"
+    - "states with the weakest net position per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Net_Position_per_capita
+    FROM mart_gov_state
+    WHERE Net_Position_per_capita IS NOT NULL AND Total_Liabilities > 0
+    ORDER BY Net_Position_per_capita ASC
+    LIMIT 15
+  verified: true
+
+- id: vq033
+  question: "which 15 states have the highest free cash flow per capita?"
+  paraphrases:
+    - "top 15 states by free cash flow per capita"
+    - "states with the highest FCF per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Free_Cash_Flow_per_capita
+    FROM mart_gov_state
+    WHERE Free_Cash_Flow_per_capita IS NOT NULL
+    ORDER BY Free_Cash_Flow_per_capita DESC
+    LIMIT 15
+  verified: true
+
+- id: vq034
+  question: "which 15 states have the lowest free cash flow per capita?"
+  paraphrases:
+    - "bottom 15 states by free cash flow per capita"
+    - "states with the lowest FCF per capita"
+  table: gov_state
+  sql: |
+    SELECT state, Free_Cash_Flow_per_capita
+    FROM mart_gov_state
+    WHERE Free_Cash_Flow_per_capita IS NOT NULL AND Total_Liabilities > 0
+    ORDER BY Free_Cash_Flow_per_capita ASC
+    LIMIT 15
+  verified: true
+
+- id: vq035
+  question: "which 15 states have the highest net OPEB liability per capita?"
+  paraphrases:
+    - "top 15 states by net OPEB liability per capita"
+    - "states with the largest OPEB liabilities per capita"
+  table: gov_state
+  sql: |
+    SELECT state, "Net_OPEB_Liability_per_capita"
+    FROM mart_gov_state
+    WHERE "Net_OPEB_Liability_per_capita" IS NOT NULL
+    ORDER BY "Net_OPEB_Liability_per_capita" DESC
+    LIMIT 15
+  verified: true
+  notes: "OPEB = Other Post-Employment Benefits, primarily retiree healthcare."
+
+- id: vq036
+  question: "which 15 states have the lowest net OPEB liability per capita?"
+  paraphrases:
+    - "bottom 15 states by net OPEB liability per capita"
+    - "states with the smallest OPEB liabilities per capita"
+  table: gov_state
+  sql: |
+    SELECT state, "Net_OPEB_Liability_per_capita"
+    FROM mart_gov_state
+    WHERE "Net_OPEB_Liability_per_capita" IS NOT NULL AND Total_Liabilities > 0
+    ORDER BY "Net_OPEB_Liability_per_capita" ASC
+    LIMIT 15
+  verified: true
+
+- id: vq037
+  question: "which 15 states have the highest long-term debt per capita?"
+  paraphrases:
+    - "top 15 states by long-term debt per capita"
+    - "states with the highest non-current liabilities per capita"
+  table: gov_state
+  sql: |
+    SELECT state, "Non-Current_Liabilities_per_capita"
+    FROM mart_gov_state
+    WHERE "Non-Current_Liabilities_per_capita" IS NOT NULL
+    ORDER BY "Non-Current_Liabilities_per_capita" DESC
+    LIMIT 15
+  verified: true
+  notes: "Long-term debt maps to Non-Current_Liabilities (obligations due beyond one year). Column requires double-quoting for the hyphen."
+
+- id: vq038
+  question: "which 15 states have the lowest long-term debt per capita?"
+  paraphrases:
+    - "bottom 15 states by long-term debt per capita"
+    - "states with the lowest non-current liabilities per capita"
+  table: gov_state
+  sql: |
+    SELECT state, "Non-Current_Liabilities_per_capita"
+    FROM mart_gov_state
+    WHERE "Non-Current_Liabilities_per_capita" IS NOT NULL AND Total_Liabilities > 0
+    ORDER BY "Non-Current_Liabilities_per_capita" ASC
+    LIMIT 15
+  verified: true
+
+- id: vq039
+  question: "which 15 states have the highest current ratio?"
+  paraphrases:
+    - "top 15 states by current ratio"
+    - "states with the strongest short-term liquidity"
+  table: gov_state
+  sql: |
+    SELECT state, Current_Ratio
+    FROM mart_gov_state
+    WHERE Current_Ratio IS NOT NULL
+    ORDER BY Current_Ratio DESC
+    LIMIT 15
+  verified: true
+  notes: "Current ratio = current assets / current liabilities. Higher = more short-term liquidity."
+
+- id: vq040
+  question: "which 15 states have the lowest current ratio?"
+  paraphrases:
+    - "bottom 15 states by current ratio"
+    - "states with the weakest short-term liquidity"
+  table: gov_state
+  sql: |
+    SELECT state, Current_Ratio
+    FROM mart_gov_state
+    WHERE Current_Ratio IS NOT NULL AND Total_Liabilities > 0
+    ORDER BY Current_Ratio ASC
+    LIMIT 15
+  verified: true
+
+- id: vq041
+  question: "how much did the department of defense spend in maryland in 2024?"
+  paraphrases:
+    - "DoD spending in maryland 2024"
+    - "department of defense contracts to maryland 2024"
+    - "how much federal defense money went to maryland"
+  table: spending_state_agency
+  sql: |
+    SELECT state, Contracts, Grants, "Direct Payments"
+    FROM mart_spending_state_agency
+    WHERE agency = 'Department of Defense'
+      AND LOWER(state) = 'maryland'
+      AND year = '2024'
+  verified: true
+  notes: "spending_state_agency stores year as STRING and state in UPPERCASE — LOWER() the state literal for match; year '2024' is FY2024 single-year, '2020-2024' is the 5-year aggregate row."

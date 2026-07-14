@@ -1,0 +1,65 @@
+# Reasoning-mode task set. These are deliberately questions a one-shot SQL can't
+# answer well: peer comparisons, "is X high?", cross-dataset framing, outlier
+# checks, distribution awareness. They are graded by an LLM judge on a rubric
+# (groundedness / completeness / usefulness / no-hallucination 0-10), not
+# strict string match. Threshold: average score >= 7 and >= 80% of tasks pass.
+
+- id: r01
+  question: is Marylands debt ratio high compared to other states
+  note: needs peer_stats; expect "above median / above average" framing with the value
+
+- id: r02
+  question: how does Texas federal contracts compare to its peers
+  note: peer_stats ranking; expect a rank or quartile + the dollar value
+
+- id: r03
+  question: which county in California stands out the most for total assets
+  note: ranking inside one state; the top county dwarfs the rest — expect that observation
+
+- id: r04
+  question: rank congressional districts by free cash flow and call out which ones are negative
+  note: explore + classify; expect both top positive + the negative ones surfaced
+
+- id: r05
+  question: compare Maryland and Virginia on federal funding per capita
+  note: per-capita measure, two states; expect both values + delta
+
+- id: r06
+  question: is Baltimore City an outlier among Maryland counties for federal grants
+  note: single subdivision vs intra-state distribution; expect "how it ranks among MD counties" with a number
+
+- id: r07
+  question: which states have both high financial literacy and low poverty
+  note: cross-dataset intersection (finra_state x acs_state); expect a small list + reasonable threshold framing
+
+- id: r08
+  question: how much do Maryland counties vary in their financial stress
+  note: intra-state distribution of finra_county.financial_constraint; expect range / spread
+
+- id: r09
+  question: is Californias federal employee count proportional to its population
+  note: ratio reasoning — needs Employees (contract_state) and Total population (acs_state); expect a per-resident framing
+
+- id: r10
+  question: which agency gives the most uneven distribution of grants across states
+  note: needs grouping by agency + a spread metric across states; expect a specific agency name with rationale
+
+- id: r11
+  question: whats the gap between Marylands richest and poorest counties on grants
+  note: top vs bottom within MD on contract_county.Grants; expect both values + the gap
+
+- id: r12
+  question: in 2024, are subaward inflows concentrated in a few districts or spread evenly
+  note: congress_flow inflow distribution; expect a top-N share or Gini-style framing in words
+
+- id: r13
+  question: are wealthier states (by median income) generally more financially literate
+  note: cross-dataset directional question; expect a qualitative answer grounded in a small joined sample
+
+- id: r14
+  question: which Maryland county has the highest poverty rate, and how does its debt ratio compare to the state median
+  note: "chained: find county -> peer_stats; expect both facts joined in the answer"
+
+- id: r15
+  question: in the FINRA financial constraint index, where does Maryland rank
+  note: simple peer_stats ranking call; expect rank or "Nth of 51"

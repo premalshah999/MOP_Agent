@@ -1,0 +1,342 @@
+# Golden suite for the LLM-grounded pipeline.
+#
+# intent taxonomy (Stage 1):
+#   ANALYTICAL    answerable with SQL over the catalog
+#   CLARIFY       answerable in principle but ambiguous -> must ask back
+#   UNANSWERABLE  asks for data not in the catalog
+#   META          about the assistant / the data / a definition (no SQL)
+#   OUT_OF_SCOPE  not about this data at all
+#
+# For ANALYTICAL: `tables` is the routing gate (Stage 2); `reference_sql` is an
+# independent hand-verified query (Stage 4 ground truth). `expect` modes:
+#   row_count:N | min_rows:N | top_label:true | scalar:true(+rel_tol) |
+#   answer_contains:[...]
+
+# ---------------- ANALYTICAL ----------------
+- id: g01
+  question: top 10 counties in maryland by grants
+  intent: ANALYTICAL
+  tables: [contract_county]
+  must_columns: [state, Grants]
+  reference_sql: >
+    SELECT county AS label, "Grants" AS v FROM mart_contract_county
+    WHERE LOWER(state) = 'maryland' AND year = '2024'
+    ORDER BY "Grants" DESC LIMIT 10
+  expect: { row_count: 10, top_label: true }
+  faithfulness: true
+
+- id: g02
+  question: top 5 states by poverty rate
+  intent: ANALYTICAL
+  tables: [acs_state]
+  must_columns: ["Below poverty"]
+  reference_sql: >
+    SELECT state AS label, "Below poverty" AS v FROM mart_acs_state
+    WHERE Year = 2023 ORDER BY "Below poverty" DESC LIMIT 5
+  expect: { row_count: 5, top_label: true }
+  faithfulness: true
+
+- id: g03
+  question: top 10 states by debt ratio
+  intent: ANALYTICAL
+  tables: [gov_state]
+  must_columns: [Debt_Ratio]
+  note: gov tables have no real year filter
+  reference_sql: >
+    SELECT state AS label, Debt_Ratio AS v FROM mart_gov_state
+    ORDER BY Debt_Ratio DESC LIMIT 10
+  expect: { row_count: 10, top_label: true }
+
+- id: g04
+  question: top 15 states by financial literacy
+  intent: ANALYTICAL
+  tables: [finra_state]
+  must_columns: [financial_literacy]
+  reference_sql: >
+    SELECT state AS label, financial_literacy AS v FROM mart_finra_state
+    WHERE Year = 2021 ORDER BY financial_literacy DESC LIMIT 15
+  expect: { row_count: 15, top_label: true }
+
+- id: g05
+  question: how many grant dollars did Maryland receive
+  intent: ANALYTICAL
+  tables: [contract_state]
+  must_columns: [state, Grants]
+  reference_sql: >
+    SELECT "Grants" AS v FROM mart_contract_state
+    WHERE LOWER(state) = 'maryland' AND year = '2024'
+  expect: { scalar: true, rel_tol: 0.01 }
+  faithfulness: true
+
+- id: g06
+  question: compare Maryland vs Virginia on grants
+  intent: ANALYTICAL
+  tables: [contract_state]
+  must_columns: [state, Grants]
+  reference_sql: >
+    SELECT state AS label, "Grants" AS v FROM mart_contract_state
+    WHERE LOWER(state) IN ('maryland','virginia') AND year = '2024'
+    ORDER BY "Grants" DESC
+  expect: { row_count: 2 }
+  faithfulness: true
+
+- id: g07
+  question: which agencies give the most grants to Maryland
+  intent: ANALYTICAL
+  tables: [spending_state_agency]
+  must_columns: [state, agency, Grants]
+  reference_sql: >
+    SELECT agency AS label, "Grants" AS v FROM mart_spending_state_agency
+    WHERE LOWER(state) = 'maryland' AND year = '2024'
+    ORDER BY "Grants" DESC LIMIT 10
+  expect: { top_label: true }
+  faithfulness: true
+
+- id: g08
+  question: subcontract inflow to Maryland
+  intent: ANALYTICAL
+  tables: [state_flow]
+  must_columns: [subawardee_state_name, subaward_amount_year]
+  note: inflow TO Maryland = destination = subawardee_state_name; no year column
+  reference_sql: >
+    SELECT SUM(subaward_amount_year) AS v FROM mart_state_flow
+    WHERE LOWER(subawardee_state_name) = 'maryland'
+  expect: { scalar: true, rel_tol: 0.01 }
+
+- id: g09
+  question: trend of average financial literacy by year
+  intent: ANALYTICAL
+  tables: [finra_state]
+  must_columns: [Year, financial_literacy]
+  reference_sql: >
+    SELECT Year AS label, AVG(financial_literacy) AS v FROM mart_finra_state
+    GROUP BY Year ORDER BY Year
+  expect: { min_rows: 5 }
+
+- id: g10
+  question: top 10 counties in Maryland by liabilities per capita
+  intent: ANALYTICAL
+  tables: [gov_county]
+  must_columns: [state, Total_Liabilities_per_capita]
+  note: per-capita column + no year filter
+  reference_sql: >
+    SELECT county AS label, Total_Liabilities_per_capita AS v FROM mart_gov_county
+    WHERE LOWER(state) = 'maryland' ORDER BY Total_Liabilities_per_capita DESC LIMIT 10
+  expect: { row_count: 10, top_label: true }
+
+- id: g11
+  question: county with the most assets in california
+  intent: ANALYTICAL
+  tables: [gov_county]
+  must_columns: [state, Total_Assets]
+  reference_sql: >
+    SELECT county AS label, Total_Assets AS v FROM mart_gov_county
+    WHERE LOWER(state) = 'california' ORDER BY Total_Assets DESC LIMIT 1
+  expect: { top_label: true }
+
+- id: g12
+  question: financial stress in texas counties
+  intent: ANALYTICAL
+  tables: [finra_county]
+  must_columns: [state, financial_constraint]
+  note: finra_county only has year 2021; financial_constraint == stress
+  reference_sql: >
+    SELECT county AS label, financial_constraint AS v FROM mart_finra_county
+    WHERE LOWER(state) = 'texas' ORDER BY financial_constraint DESC LIMIT 10
+  expect: { top_label: true }
+
+- id: g13
+  question: top counties in Maryland by college degree attainment
+  intent: ANALYTICAL
+  tables: [acs_county]
+  must_columns: [state, "Education >= Bachelor's"]
+  reference_sql: >
+    SELECT county AS label, "Education >= Bachelor's" AS v FROM mart_acs_county
+    WHERE LOWER(state) = 'maryland' AND Year = 2023
+    ORDER BY "Education >= Bachelor's" DESC LIMIT 10
+  expect: { top_label: true }
+  faithfulness: true
+
+- id: g14
+  question: Maryland congressional districts by free cash flow
+  intent: ANALYTICAL
+  tables: [gov_congress]
+  must_columns: [cd_118, Free_Cash_Flow]
+  note: cash flow is gov_congress, NOT fund_flow
+  reference_sql: >
+    SELECT cd_118 AS label, Free_Cash_Flow AS v FROM mart_gov_congress
+    WHERE cd_118 LIKE 'MD-%' ORDER BY Free_Cash_Flow DESC
+  expect: { min_rows: 1, top_label: true }
+
+- id: g15
+  question: where does Maryland rank nationally on debt ratio
+  intent: ANALYTICAL
+  tables: [gov_state]
+  must_columns: [state, Debt_Ratio]
+  reference_sql: >
+    SELECT state AS label, Debt_Ratio AS v FROM mart_gov_state
+    ORDER BY Debt_Ratio DESC
+  expect: { answer_contains: ["maryland"] }
+  faithfulness: true
+
+- id: g16
+  question: where is the maximum asian population by count
+  intent: ANALYTICAL
+  tables: [acs_state]
+  must_columns: ["Total population", Asian]
+  note: Asian is a percentage; count is derived population*share
+  reference_sql: >
+    SELECT state AS label, ("Total population" * "Asian" / 100.0) AS v
+    FROM mart_acs_state WHERE Year = 2023 ORDER BY v DESC LIMIT 1
+  expect: { top_label: true }
+  faithfulness: true
+
+- id: g17
+  question: top states by asian population share
+  intent: ANALYTICAL
+  tables: [acs_state]
+  must_columns: [Asian]
+  reference_sql: >
+    SELECT state AS label, "Asian" AS v FROM mart_acs_state
+    WHERE Year = 2023 ORDER BY "Asian" DESC LIMIT 10
+  expect: { top_label: true }
+
+- id: g18
+  question: epartment of defence biggest deals by state
+  intent: ANALYTICAL
+  tables: [spending_state_agency]
+  must_columns: [agency, Contracts]
+  note: typo tolerance + DoD alias + deals->contracts
+  reference_sql: >
+    SELECT state AS label, "Contracts" AS v FROM mart_spending_state_agency
+    WHERE agency = 'Department of Defense' AND year = '2024'
+    ORDER BY "Contracts" DESC LIMIT 10
+  expect: { top_label: true }
+  faithfulness: true
+
+- id: g19
+  question: states with the highest financial literacy and their government debt ratio
+  intent: ANALYTICAL
+  tables: [finra_state, gov_state]
+  must_columns: [state, financial_literacy, Debt_Ratio]
+  note: cross-dataset join with state-casing trap
+  reference_sql: >
+    SELECT f.state AS label, f.financial_literacy AS v, g.Debt_Ratio
+    FROM mart_finra_state f JOIN mart_gov_state g ON LOWER(f.state) = LOWER(g.state)
+    WHERE f.Year = 2021 ORDER BY f.financial_literacy DESC LIMIT 10
+  expect: { min_rows: 1, top_label: true }
+  faithfulness: true
+
+- id: g20
+  question: how many federal contract dollars did Virginia receive
+  intent: ANALYTICAL
+  tables: [contract_state]
+  must_columns: [state, Contracts]
+  note: contract_state has a 2024 row and a 2020-2024 row; use the 2024 period
+  reference_sql: >
+    SELECT "Contracts" AS v FROM mart_contract_state
+    WHERE LOWER(state) = 'virginia' AND year = '2024'
+  expect: { scalar: true, rel_tol: 0.01 }
+
+- id: g21
+  question: states with the highest median household income
+  intent: ANALYTICAL
+  tables: [acs_state]
+  must_columns: ["Median household income"]
+  reference_sql: >
+    SELECT state AS label, "Median household income" AS v FROM mart_acs_state
+    WHERE Year = 2023 ORDER BY "Median household income" DESC LIMIT 10
+  expect: { top_label: true }
+
+- id: g22
+  question: what is the debt ratio for Texas
+  intent: ANALYTICAL
+  tables: [gov_state]
+  must_columns: [state, Debt_Ratio]
+  note: must NOT add a year filter (gov single snapshot)
+  reference_sql: >
+    SELECT Debt_Ratio AS v FROM mart_gov_state WHERE LOWER(state) = 'texas'
+  expect: { scalar: true, rel_tol: 0.001 }
+
+- id: g23
+  question: total contract dollars to California in 2024
+  intent: ANALYTICAL
+  tables: [contract_state]
+  must_columns: [state, Contracts]
+  note: year is a string '2024'
+  reference_sql: >
+    SELECT "Contracts" AS v FROM mart_contract_state
+    WHERE LOWER(state) = 'california' AND year = '2024'
+  expect: { scalar: true, rel_tol: 0.01 }
+
+# ---------------- CLARIFY ----------------
+- id: g24
+  question: How much federal money goes to Maryland?
+  intent: CLARIFY
+  no_sql: true
+  note: contracts vs grants vs direct payments vs all, and which table
+
+- id: g25
+  question: show me the best states
+  intent: CLARIFY
+  no_sql: true
+  note: best by which metric?
+
+- id: g26
+  question: which is better, Maryland or Virginia?
+  intent: CLARIFY
+  no_sql: true
+
+# ---------------- UNANSWERABLE ----------------
+- id: g27
+  question: top counties with the maximum crime rate
+  intent: UNANSWERABLE
+  no_sql: true
+  note: no crime data in the catalog
+
+- id: g28
+  question: unemployment rate by state
+  intent: UNANSWERABLE
+  no_sql: true
+
+- id: g29
+  question: GDP growth for Maryland over the last decade
+  intent: UNANSWERABLE
+  no_sql: true
+
+# ---------------- META ----------------
+- id: g30
+  question: who are you?
+  intent: META
+  no_sql: true
+
+- id: g31
+  question: what data do you have?
+  intent: META
+  no_sql: true
+
+- id: g32
+  question: what is FINRA?
+  intent: META
+  no_sql: true
+
+- id: g33
+  question: what does grants mean in this dataset?
+  intent: META
+  no_sql: true
+
+- id: g34
+  question: what years are available for FINRA county data?
+  intent: META
+  no_sql: true
+
+# ---------------- OUT_OF_SCOPE ----------------
+- id: g35
+  question: what's the weather in Baltimore today?
+  intent: OUT_OF_SCOPE
+  no_sql: true
+
+- id: g36
+  question: tell me a joke
+  intent: OUT_OF_SCOPE
+  no_sql: true
