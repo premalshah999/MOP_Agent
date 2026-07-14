@@ -257,7 +257,7 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
                 {block.subtitle && <p className="text-[12px] text-[var(--muted)]">{block.subtitle}</p>}
               </div>
               <Suspense fallback={<div className="h-32 animate-pulse rounded-[8px] bg-[var(--surface-2)]" />}>
-                <VegaChart spec={block.spec} />
+                <VegaChart spec={block.spec} ariaLabel={block.title} />
               </Suspense>
             </div>
           ))}
@@ -266,7 +266,7 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
 
       {!hasChartBlocks && hasChart && (
         <Suspense fallback={<div className="mt-3 h-32 animate-pulse rounded-[8px] bg-[var(--surface-2)]" />}>
-          <VegaChart spec={chart!} />
+          <VegaChart spec={chart!} ariaLabel="Answer visualization" />
         </Suspense>
       )}
 

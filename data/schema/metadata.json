@@ -5,7 +5,7 @@
     "total_tables": 20,
     "note": "This file is the primary knowledge source for the NL-to-SQL agent. Keep it current as datasets are updated.",
     "last_updated": "2026-03-03",
-    "seventh_dataset": "Agency-level federal spending: contract_state_agency, contract_county_agency, contract_cd_agency"
+    "seventh_dataset": "Agency-level federal spending: spending_state_agency"
   },
   "_critical_warnings": {
     "state_name_casing": {
@@ -2296,7 +2296,7 @@
       "agency_filter": "Use LIKE for agency: WHERE agency LIKE '%Defense%' or exact string 'Department of Defense'"
     },
     "example_multi_table_query": "SELECT a.state, a.financial_literacy, g.Net_Pension_Liability_per_capita FROM finra_state a JOIN gov_state g ON LOWER(a.state) = LOWER(g.state) WHERE a.Year = 2021 ORDER BY a.financial_literacy DESC",
-    "agency_tables": "contract_state_agency, contract_county_agency, contract_cd_agency all have an 'agency' column \u2014 always filter with exact string e.g. WHERE agency = 'Department of Defense'",
+    "agency_tables": "spending_state_agency has an 'agency' column \u2014 always filter with an exact string such as WHERE agency = 'Department of Defense'",
     "flow_to_other_tables": "state_flow uses rcpt_state_name (Title Case) \u2014 join with LOWER(rcpt_state_name) = LOWER(other.state). county_flow uses integer FIPS (rcpt_cty) \u2014 join with rcpt_cty = gov_county.fips. congress_flow CANNOT be joined to other congress tables on district ID \u2014 use only rcpt_cd_name for filtering.",
     "congress_flow_warning": "congress_flow.prime_awardee_stcd118 is an INTEGER (e.g. 200), NOT the 'MD-08' string format used in all other congress tables. Never join these columns directly."
   },
@@ -2308,6 +2308,6 @@
     "gov_tables_no_year_filter": "gov_state/county/congress have only one year \u2014 never add a year filter",
     "per_capita_comparison": "Use _per_capita columns for fair cross-state/county comparison",
     "finra_interpretation": "Higher financial_literacy = more literate population. Higher financial_constraint = more stressed.",
-    "flow_total": "SUM(subaward_amount) GROUP BY rcpt_state_name for total flow originating from each state"
+    "flow_total": "For state_flow use SUM(subaward_amount_year); for county_flow/congress_flow use SUM(subaward_amount). Group the rcpt_* side for originating/outflow totals and the subawardee_* side for destination/inflow totals."
   }
 }

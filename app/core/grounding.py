@@ -30,7 +30,8 @@ def _resolved_block(question: str, tables: list[str]) -> tuple[str, dict[str, An
             continue
         resolved[table] = entities
         for column, info in entities.items():
-            values = list(info.get("values") or [info["value"]])
+            raw_values = info.get("values")
+            values = list(raw_values) if isinstance(raw_values, (list, tuple)) else [info["value"]]
             lines.append(
                 f"  - {table}.{column} = {values!r}  "
                 f"(use this EXACT value/casing; match score {info['score']})"
@@ -90,8 +91,9 @@ def build_grounding(
         "",
         "ANALYSIS CONVENTIONS (defaults — apply unless the user explicitly asks otherwise):",
         "  - TIME SCOPE: when the user names no year or period, filter to the LATEST",
-        "    single year for each table (flow tables: act_dt_fis_yr = 2024;",
-        "    contract/spending tables: year = '2024'; ACS: Year = 2023; FINRA state:",
+        "    single year for each table (county/congress flow: act_dt_fis_yr = 2024;",
+        "    state_flow: no year filter because it has no year column; contract/spending:",
+        "    year = '2024'; ACS: Year = 2023; FINRA state:",
         "    Year = 2021). NEVER aggregate across multiple years unless the user",
         "    explicitly asks for a multi-year total or a trend — a silent multi-year",
         "    SUM changes the meaning of every number in the answer.",

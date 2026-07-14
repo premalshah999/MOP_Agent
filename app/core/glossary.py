@@ -53,8 +53,3 @@ def detect_terms(text: str) -> dict[str, str]:
                 seen.add(k)
                 break
     return {k: _GLOSSARY[k] for k in seen}
-
-
-def get_glossary() -> dict[str, str]:
-    """Full glossary, for the About page or admin debugging."""
-    return dict(_GLOSSARY)

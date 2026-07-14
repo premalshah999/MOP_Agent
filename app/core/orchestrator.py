@@ -22,8 +22,6 @@ from app.core.verified_queries import match as match_verified_query
 from app.duckdb.connection import execute_select
 from app.sql.validator import SqlValidationError, validate_sql
 from app.core.grounding import build_grounding
-from app.core.intent import classify_intent  # kept for stage1 tests
-from app.core.router import route as route_question  # kept for stage2 tests
 from app.core.intent_route import classify_and_route
 from app.core.reasoning_agent import run_reasoning_agent
 from app.core.sql_writer import generate_and_execute
@@ -469,11 +467,11 @@ def answer_question(
         # CLARIFY path that bypasses routing.)
         if intent["intent"] == "CLARIFY":
             try:
-                chips = generate_clarification_chips(q)
+                clarification_chips = generate_clarification_chips(q)
             except Exception:
-                chips = []
-            if chips:
-                env["suggested_followups"] = chips
+                clarification_chips = []
+            if clarification_chips:
+                env["suggested_followups"] = clarification_chips
         return env
 
     routing = {k: ir[k] for k in (
@@ -487,11 +485,11 @@ def answer_question(
         # Attach 3-5 concrete clickable alternatives so the user doesn't have
         # to retype the question from scratch. Falls back to LLM-grounded
         # suggestions for novel ambiguity shapes.
-        chips: list[str] = []
+        clarification_chips = []
         try:
-            chips = generate_clarification_chips(q)
+            clarification_chips = generate_clarification_chips(q)
         except Exception:
-            chips = []
+            clarification_chips = []
         env = _envelope(
             question=question,
             answer=ask,
@@ -504,8 +502,8 @@ def answer_question(
             user_id=user_id,
             request_id=request_id,
         )
-        if chips:
-            env["suggested_followups"] = chips
+        if clarification_chips:
+            env["suggested_followups"] = clarification_chips
         return env
 
     analysis = build_analysis_contract(q, routing)
@@ -544,6 +542,7 @@ def answer_question(
     #              verified reference to adapt. The LLM decides; the
     #              repository only informs. Executing fuzzy matches verbatim
     #              served opposite-direction answers in adversarial testing.
+    gen: dict[str, Any]
     verified_match: dict[str, Any] | None = None
     exemplar: dict[str, Any] | None = None
     try:

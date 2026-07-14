@@ -48,19 +48,23 @@ def _check_expectation(case: GoldenCase, result: dict[str, Any]) -> tuple[bool, 
     if "min_rows" in exp and len(data) < exp["min_rows"]:
         return False, f"rows {len(data)} < {exp['min_rows']}"
     if exp.get("top_label"):
-        ref = run_reference_sql(case.reference_sql)
-        label = str(list(ref[0].values())[0]).lower()
+        if not case.reference_sql:
+            return False, "top-label expectation has no reference SQL"
+        reference_rows = run_reference_sql(case.reference_sql)
+        label = str(list(reference_rows[0].values())[0]).lower()
         if label not in blob.lower():
             return False, f"top label {label!r} missing"
     if exp.get("scalar"):
-        ref = float(reference_scalar(case.reference_sql))
+        if not case.reference_sql:
+            return False, "scalar expectation has no reference SQL"
+        reference_value = float(reference_scalar(case.reference_sql))
         tol = float(exp.get("rel_tol", 0.01))
         cands = _numbers(blob) + [
             float(k["value"]) for k in result.get("key_numbers", [])
             if str(k.get("value")).replace(".", "", 1).lstrip("-").isdigit()
         ]
-        if not any(abs(c - ref) <= tol * max(1.0, abs(ref)) for c in cands):
-            return False, f"no value ≈ {ref}"
+        if not any(abs(c - reference_value) <= tol * max(1.0, abs(reference_value)) for c in cands):
+            return False, f"no value ≈ {reference_value}"
     for needle in exp.get("answer_contains", []):
         if needle.lower() not in (result.get("answer") or "").lower():
             return False, f"answer missing {needle!r}"
@@ -130,7 +134,7 @@ def run_case_evals(cases: list[GoldenCase], suite: str = "golden") -> dict[str, 
         results.append(row)
 
     n = len(cases)
-    summary = {
+    summary: dict[str, Any] = {
         "total": n,
         "intent_accuracy": round(intent_ok / n, 3),
         "routing_accuracy": round(routing_ok / routing_total, 3) if routing_total else 1.0,

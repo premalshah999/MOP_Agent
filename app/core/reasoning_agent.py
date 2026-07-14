@@ -39,6 +39,9 @@ TOOLS
 RULES
 - Stay grounded: every number / ranking / claim in `text` must be supported by
   data returned from a tool call in THIS turn. No fabrication.
+- Cover every metric, entity, geography, comparison, and period explicitly
+  requested. For top/bottom N, include all N returned rows. If a requested
+  part has no evidence, identify that gap instead of silently skipping it.
 - Percentile / quartile / median claims must be arithmetically true from
   numbers a tool returned: 0.824 is NOT "above the 75th percentile" when the
   p75 is 0.826. When two numbers are close, quote both instead of a bucket
@@ -295,9 +298,10 @@ def run_reasoning_agent(
             trace.append({"step": step, "name": name, "args": args, "summary": summary})
             tool_results.append({"name": name, "args": args, "result": result})
             emit("tool", {"step": step, "name": name, "summary": summary, "error": result.get("error")})
-            if name == "run_sql" and not result.get("error") and result.get("rows"):
+            result_rows = result.get("rows")
+            if name == "run_sql" and not result.get("error") and isinstance(result_rows, list) and result_rows:
                 sql_history.append(result["sql"])
-                last_rows = result["rows"]
+                last_rows = [row for row in result_rows if isinstance(row, dict)]
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],

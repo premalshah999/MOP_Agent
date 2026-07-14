@@ -4,14 +4,9 @@ import re
 
 from app.semantic.registry import all_allowed_views
 
-try:
-    import sqlglot
-    from sqlglot import exp
-    from sqlglot.errors import ParseError
-except ImportError:  # pragma: no cover - requirements install sqlglot in normal runtime
-    sqlglot = None
-    exp = None
-    ParseError = Exception
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import ParseError
 
 
 FORBIDDEN_KEYWORDS = {
@@ -26,8 +21,6 @@ class SqlValidationError(ValueError):
 
 
 def _parser_table_refs(sql: str) -> tuple[set[str], set[str]]:
-    if sqlglot is None or exp is None:
-        return set(), set()
     try:
         statements = sqlglot.parse(sql, read="duckdb")
     except ParseError as exc:

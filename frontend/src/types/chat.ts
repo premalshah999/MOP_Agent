@@ -110,7 +110,8 @@ export interface HealthSummary {
   version?: string;
   checks?: {
     manifest_present?: boolean;
-    registered_table_count?: number;
+    registered_view_count?: number;
+    semantic_dataset_count?: number;
     frontend_built?: boolean;
     pipeline_ready?: boolean;
   };
@@ -226,6 +227,10 @@ export interface ChatbotMapIntent {
   level?: 'state' | 'county' | 'congress';
   year?: string;
   metric?: string;
+  metricLabel?: string;
+  unit?: string;
+  sortDirection?: 'asc' | 'desc';
+  geoSide?: 'direct' | 'source' | 'destination';
   agency?: string;
   state?: string;
   focusIds?: string[];

@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import maplibregl, { type LngLatBoundsLike, type MapGeoJSONFeature, type StyleSpecification } from 'maplibre-gl';
 import { buildApiUrl } from '@/lib/api';
 import type { ChatbotMapIntent } from '@/types/chat';
@@ -28,19 +28,23 @@ interface Region {
   key: string;
   label: string;
   value: number;
-  rank: number; // 1 = highest value
+  rank: number;
 }
 
 const GEO_CACHE = new Map<string, Promise<GeoCollection>>();
 function fetchGeo(name: 'states' | 'counties' | 'congress'): Promise<GeoCollection> {
   if (!GEO_CACHE.has(name)) {
-    GEO_CACHE.set(
-      name,
-      fetch(buildApiUrl(`/geo/${name}.geojson`)).then(async (r) => {
+    const request = fetch(buildApiUrl(`/geo/${name}.geojson`))
+      .then(async (r) => {
         if (!r.ok) throw new Error(`Failed to load ${name} boundaries`);
         return (await r.json()) as GeoCollection;
-      }),
-    );
+      })
+      .catch((error) => {
+        // A transient network failure must not poison the cache permanently.
+        GEO_CACHE.delete(name);
+        throw error;
+      });
+    GEO_CACHE.set(name, request);
   }
   return GEO_CACHE.get(name)!;
 }
@@ -59,6 +63,10 @@ const STATE_TO_POSTAL: Record<string, string> = {
   oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
   'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',
   virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY',
+  'puerto rico': 'PR', guam: 'GU', 'american samoa': 'AS',
+  'virgin islands': 'VI', 'u.s. virgin islands': 'VI', 'united states virgin islands': 'VI',
+  'northern mariana islands': 'MP', 'commonwealth of northern mariana islands': 'MP',
+  'commonwealth of the northern mariana islands': 'MP',
 };
 const POSTAL_TO_STATE = Object.fromEntries(Object.entries(STATE_TO_POSTAL).map(([n, a]) => [a, n]));
 
@@ -88,19 +96,29 @@ function toAbbr(v: unknown): string | null {
 
 function normDistrict(v: unknown): string | null {
   if (typeof v !== 'string') return null;
-  const m = v.toUpperCase().trim().match(/^([A-Z]{2})[-\s]?0?(\d{1,2})$/);
-  return m ? `${m[1]}-${m[2].padStart(2, '0')}` : null;
+  const text = v.trim();
+  const direct = text.toUpperCase().match(/^([A-Z]{2})[-\s]?0?(\d{1,2})$/);
+  if (direct) return `${direct[1]}-${direct[2].padStart(2, '0')}`;
+  const named = text.match(/^(.+?)\s+CD[-\s]?0?(\d{1,2})$/i);
+  if (!named) return null;
+  const state = toAbbr(named[1]);
+  return state ? `${state}-${named[2].padStart(2, '0')}` : null;
 }
 
 const MONEY_RE = /(contract|grant|payment|wage|fund|amount|asset|liabilit|revenue|expense|spend|income|bond|opeb|pension|cash|subaward|flow)/i;
-function isMoney(metric: string): boolean {
-  return !/ratio/i.test(metric) && MONEY_RE.test(metric);
+function normalizedUnit(metric: string, unit?: string): string {
+  if (unit) return unit.toLowerCase();
+  if (!/ratio/i.test(metric) && MONEY_RE.test(metric)) return 'usd';
+  if (/(percent|percentage|share|\brate\b)/i.test(metric)) return 'percent';
+  if (/(population|people|persons|count|household)/i.test(metric)) return 'persons';
+  return 'value';
 }
 
-function fmtValue(v: number, money: boolean): string {
+function fmtValue(v: number, unit: string): string {
   if (!Number.isFinite(v)) return 'N/A';
+  if (unit === 'percent') return `${v.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
   const sign = v < 0 ? '-' : '';
-  const p = money ? `${sign}$` : sign;
+  const p = unit === 'usd' ? `${sign}$` : sign;
   const a = Math.abs(v);
   if (a >= 1e9) return `${p}${(a / 1e9).toLocaleString(undefined, { maximumFractionDigits: 2 })}B`;
   if (a >= 1e6) return `${p}${(a / 1e6).toLocaleString(undefined, { maximumFractionDigits: 1 })}M`;
@@ -108,8 +126,9 @@ function fmtValue(v: number, money: boolean): string {
   return `${p}${a.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
-/* ── Choropleth scale: terracotta sequential, quintile steps ── */
+/* ── Choropleth scales: quantiles; zero-centered when signs diverge ── */
 const RAMP = ['#f6e2d8', '#edc0ab', '#e09a79', '#cd6f47', '#a34c27'];
+const DIVERGING_RAMP = ['#2868a8', '#7aadd2', '#eceae2', '#e3a080', '#a34c27'];
 
 function quintileBreaks(values: number[]): number[] {
   const sorted = [...values].sort((a, b) => a - b);
@@ -119,6 +138,17 @@ function quintileBreaks(values: number[]): number[] {
 function bucket(v: number, breaks: number[]): number {
   for (let i = 0; i < breaks.length; i++) if (v < breaks[i]) return i;
   return 4;
+}
+
+function colorFor(v: number, values: number[], breaks: number[]): string {
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (min < 0 && max > 0) {
+    const extent = Math.max(Math.abs(min), Math.abs(max)) || 1;
+    const normalized = Math.max(-1, Math.min(1, v / extent));
+    return DIVERGING_RAMP[Math.min(4, Math.floor(((normalized + 1) / 2) * 5))];
+  }
+  return RAMP[bucket(v, breaks)];
 }
 
 /* ── Geometry bounds (walks coordinates arrays) ── */
@@ -143,11 +173,49 @@ function boundsOf(features: GeoFeature[]): Bounds | null {
 
 /* ── Row → region matching ── */
 
-function detectRegions(rows: Record<string, unknown>[], metric: string | undefined): { level: GeoLevel; regions: Map<string, Region>; focusAbbr: string | null; metricCol: string } | null {
+interface DetectedRegions {
+  level: GeoLevel;
+  regions: Map<string, Region>;
+  focusAbbr: string | null;
+  metricCol: string;
+  rankDirection: 'highest' | 'lowest';
+}
+
+function firstValue(row: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== undefined && value !== null && String(value).trim()) return value;
+  }
+  return null;
+}
+
+function fallbackGeoValue(
+  row: Record<string, unknown>,
+  level: GeoLevel,
+  side: ChatbotMapIntent['geoSide'],
+): unknown {
+  const geographyPattern = level === 'state' ? /state/i : level === 'county' ? /county|cty/i : /district|(^|_)cd($|_)/i;
+  const sidePattern = side === 'source'
+    ? /send|source|origin|prime|rcpt/i
+    : side === 'destination'
+      ? /receiv|dest|subawardee/i
+      : null;
+  const candidates = Object.entries(row).filter(
+    ([key, value]) => typeof value === 'string'
+      && value.trim()
+      && geographyPattern.test(key)
+      && !/fips|code|_id$/i.test(key),
+  );
+  const sided = sidePattern ? candidates.filter(([key]) => sidePattern.test(key)) : [];
+  if (sided.length === 1) return sided[0][1];
+  return candidates.length === 1 ? candidates[0][1] : null;
+}
+
+function detectRegions(rows: Record<string, unknown>[], mapIntent: ChatbotMapIntent): DetectedRegions | null {
   if (!rows.length) return null;
   // metric column: named one if present, else first numeric non-geo column
   const first = rows[0];
-  let metricCol = metric && metric in first ? metric : '';
+  let metricCol = mapIntent.metric && mapIntent.metric in first ? mapIntent.metric : '';
   if (!metricCol) {
     for (const k of Object.keys(first)) {
       if (/(^state$|^county$|^cd_118$|fips|_name$|^year$|^rank$)/i.test(k)) continue;
@@ -156,36 +224,72 @@ function detectRegions(rows: Record<string, unknown>[], metric: string | undefin
   }
   if (!metricCol) return null;
 
+  const side = mapIntent.geoSide ?? 'direct';
+  const rankDirection: DetectedRegions['rankDirection'] = mapIntent.sortDirection === 'asc' ? 'lowest' : 'highest';
   const districts = new Map<string, Region>();
   const counties = new Map<string, Region>();
   const states = new Map<string, Region>();
+  let duplicate = false;
+
+  const districtKeys = side === 'source'
+    ? ['source_district', 'origin_district', 'rcpt_cd_name', 'cd_118', 'district', 'label']
+    : side === 'destination'
+      ? ['destination_district', 'subawardee_cd_name', 'cd_118', 'district', 'label']
+      : ['cd_118', 'district', 'label'];
+  const countyKeys = side === 'source'
+    ? ['source_county', 'origin_county', 'rcpt_cty_name', 'county', 'county_name', 'label']
+    : side === 'destination'
+      ? ['destination_county', 'subawardee_cty_name', 'county', 'county_name', 'label']
+      : ['county', 'county_name', 'label'];
+  const stateKeys = side === 'source'
+    ? ['source', 'origin', 'source_state', 'rcpt_state_name', 'rcpt_state', 'state', 'state_name', 'label']
+    : side === 'destination'
+      ? ['destination', 'destination_state', 'subawardee_state_name', 'subawardee_state', 'state', 'state_name', 'label']
+      : ['state', 'state_name', 'label'];
+  const countyStateKeys = side === 'source'
+    ? ['source_state', 'rcpt_state_name', 'rcpt_state', 'state', 'state_name', 'state_abbr']
+    : side === 'destination'
+      ? ['destination_state', 'subawardee_state_name', 'subawardee_state', 'state', 'state_name', 'state_abbr']
+      : ['state', 'state_name', 'state_abbr'];
+
+  const setUnique = (collection: Map<string, Region>, region: Region) => {
+    if (collection.has(region.key)) duplicate = true;
+    collection.set(region.key, region);
+  };
 
   for (const row of rows) {
     const value = toNumber(row[metricCol]);
     if (value === null) continue;
-    const cd = normDistrict(row.cd_118) ?? normDistrict(row.rcpt_cd_name) ?? normDistrict(row.subawardee_cd_name);
-    if (cd) { districts.set(cd, { key: cd, label: cd, value, rank: 0 }); continue; }
-    const county = typeof row.county === 'string' ? row.county : typeof row.county_name === 'string' ? row.county_name : null;
-    const cState = toAbbr(row.state) ?? toAbbr(row.state_abbr) ?? toAbbr(row.rcpt_state_name) ?? toAbbr(row.subawardee_state_name);
+    const cd = normDistrict(firstValue(row, districtKeys) ?? fallbackGeoValue(row, 'congress', side));
+    if (cd) { setUnique(districts, { key: cd, label: cd, value, rank: 0 }); continue; }
+    const county = firstValue(row, countyKeys) ?? fallbackGeoValue(row, 'county', side);
+    const cState = toAbbr(firstValue(row, countyStateKeys) ?? fallbackGeoValue(row, 'state', side));
     if (county && cState) {
       const key = `${cState}:${normName(county)}`;
-      counties.set(key, { key, label: `${titleCase(normName(county))}, ${cState}`, value, rank: 0 });
+      setUnique(counties, { key, label: `${titleCase(normName(county))}, ${cState}`, value, rank: 0 });
       continue;
     }
-    const st = toAbbr(row.state) ?? toAbbr(row.state_name) ?? toAbbr(row.rcpt_state_name) ?? toAbbr(row.subawardee_state_name) ?? toAbbr(row.label);
-    if (st) states.set(st, { key: st, label: titleCase(POSTAL_TO_STATE[st] ?? st), value, rank: 0 });
+    const st = toAbbr(firstValue(row, stateKeys) ?? fallbackGeoValue(row, 'state', side));
+    if (st) setUnique(states, { key: st, label: titleCase(POSTAL_TO_STATE[st] ?? st), value, rank: 0 });
   }
+  // Multiple values for one boundary cannot be represented faithfully by a
+  // choropleth. The server normally prevents this; keep this UI guard too.
+  if (duplicate) return null;
 
   const pick = (m: Map<string, Region>, level: GeoLevel) => {
-    const regions = new Map([...m.entries()].sort((a, b) => b[1].value - a[1].value));
+    const direction = rankDirection === 'lowest' ? 1 : -1;
+    const regions = new Map([...m.entries()].sort((a, b) => direction * (a[1].value - b[1].value)));
     let i = 0;
     regions.forEach((r) => { r.rank = ++i; });
     const stateSet = new Set(
       [...regions.keys()].map((k) => (level === 'county' ? k.split(':')[0] : level === 'congress' ? k.split('-')[0] : null)).filter(Boolean),
     );
-    return { level, regions, focusAbbr: stateSet.size === 1 ? ([...stateSet][0] as string) : null, metricCol };
+    return { level, regions, focusAbbr: stateSet.size === 1 ? ([...stateSet][0] as string) : null, metricCol, rankDirection };
   };
 
+  if (mapIntent.level === 'congress' && districts.size) return pick(districts, 'congress');
+  if (mapIntent.level === 'county' && counties.size) return pick(counties, 'county');
+  if (mapIntent.level === 'state' && states.size) return pick(states, 'state');
   if (districts.size) return pick(districts, 'congress');
   if (counties.size) return pick(counties, 'county');
   if (states.size) return pick(states, 'state');
@@ -216,15 +320,20 @@ interface MapViewProps {
 export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const featureBoundsRef = useRef(new Map<string, Bounds>());
   const hoveredIdRef = useRef<number | string | null>(null);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [hover, setHover] = useState<{ region: Region; x: number; y: number } | null>(null);
   const [pinned, setPinned] = useState<Region | null>(null);
 
-  const detected = useMemo(() => detectRegions(rows, mapIntent.metric), [rows, mapIntent.metric]);
-  const money = useMemo(() => isMoney(detected?.metricCol ?? mapIntent.metric ?? ''), [detected, mapIntent.metric]);
-  const metricLabel = (detected?.metricCol ?? mapIntent.metric ?? 'value').replace(/_/g, ' ');
+  const titleId = useId();
+  const detected = useMemo(() => detectRegions(rows, mapIntent), [rows, mapIntent]);
+  const unit = useMemo(
+    () => normalizedUnit(detected?.metricCol ?? mapIntent.metric ?? '', mapIntent.unit),
+    [detected?.metricCol, mapIntent.metric, mapIntent.unit],
+  );
+  const metricLabel = mapIntent.metricLabel ?? (detected?.metricCol ?? mapIntent.metric ?? 'value').replace(/_/g, ' ');
   const regionList = useMemo(() => (detected ? [...detected.regions.values()] : []), [detected]);
   const breaks = useMemo(() => (regionList.length ? quintileBreaks(regionList.map((r) => r.value)) : []), [regionList]);
 
@@ -242,6 +351,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
   useEffect(() => {
     if (!isOpen || !detected || !containerRef.current) return undefined;
     let disposed = false;
+    featureBoundsRef.current.clear();
     setReady(false); setFailed(null); setPinned(null); setHover(null);
 
     const style: StyleSpecification = {
@@ -278,6 +388,19 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
           id: 'states-base-line', type: 'line', source: 'states-base',
           paint: { 'line-color': '#fdfcfa', 'line-width': 1 },
         });
+        const focusPostal = toAbbr(mapIntent.state);
+        if (focusPostal && mapIntent.mapType.startsWith('flow-')) {
+          // The rows describe the opposite side of a focused flow (origins
+          // into the state or destinations from it), so keep the focal state
+          // visibly anchored even when it has no value row of its own.
+          map.addLayer({
+            id: 'flow-focus-line',
+            type: 'line',
+            source: 'states-base',
+            filter: ['==', ['get', 'abbr'], focusPostal],
+            paint: { 'line-color': '#1f1e1d', 'line-width': 2.4, 'line-dasharray': [2, 1] },
+          });
+        }
 
         // Data features (joined to rows), with value/rank/color baked in.
         const dataFeatures: GeoFeature[] = [];
@@ -292,6 +415,8 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
           if (inFocus && detected.level !== 'state') scopeFeatures.push(f);
           const region = detected.regions.get(key);
           if (!region) continue;
+          const featureBounds = boundsOf([f]);
+          if (featureBounds) featureBoundsRef.current.set(key, featureBounds);
           dataFeatures.push({
             ...f,
             properties: {
@@ -300,7 +425,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
               __label: region.label,
               __value: region.value,
               __rank: region.rank,
-              __color: RAMP[bucket(region.value, breaks)],
+              __color: colorFor(region.value, regionList.map((item) => item.value), breaks),
             },
           });
         }
@@ -381,42 +506,50 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
       window.removeEventListener('resize', onResize);
       map.remove();
       mapRef.current = null;
+      featureBoundsRef.current.clear();
     };
-  }, [isOpen, detected, breaks]);
+  }, [isOpen, detected, breaks, regionList, mapIntent.mapType, mapIntent.state]);
 
   const flyToRegion = (region: Region) => {
     setPinned(region);
     const map = mapRef.current;
     if (!map) return;
-    const src = map.getSource('data') as maplibregl.GeoJSONSource | undefined;
-    const data = (src as unknown as { _data?: GeoCollection })?._data;
-    const f = data?.features.find((x) => x.properties.__key === region.key);
-    if (f) {
-      const b = boundsOf([f]);
-      if (b) map.fitBounds(b as LngLatBoundsLike, { padding: 160, duration: 850, maxZoom: 8.5 });
-    }
+    const bounds = featureBoundsRef.current.get(region.key);
+    if (bounds) map.fitBounds(bounds as LngLatBoundsLike, { padding: 160, duration: 850, maxZoom: 8.5 });
   };
 
   if (!isOpen) return null;
 
   const top3 = regionList.slice(0, 3);
-  const minV = regionList.length ? regionList[regionList.length - 1].value : 0;
-  const maxV = regionList.length ? regionList[0].value : 0;
+  const values = regionList.map((region) => region.value);
+  const minV = values.length ? Math.min(...values) : 0;
+  const maxV = values.length ? Math.max(...values) : 0;
   const total = regionList.reduce((s, r) => s + r.value, 0);
+  const diverging = minV < 0 && maxV > 0;
+  const legendRamp = diverging ? DIVERGING_RAMP : RAMP;
 
   return (
     <div className="fixed inset-0 z-[120] bg-[#1f1e1d]/25 backdrop-blur-[2px]">
       <div className="absolute inset-0" onClick={onClose} />
-      <div className="absolute inset-3 flex flex-col overflow-hidden rounded-2xl bg-[var(--surface)] shadow-[0_24px_64px_rgba(31,30,29,0.18)] sm:inset-6">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="absolute inset-3 flex flex-col overflow-hidden rounded-2xl bg-[var(--surface)] shadow-[0_24px_64px_rgba(31,30,29,0.18)] sm:inset-6"
+      >
         {/* Header */}
         <header className="flex items-center justify-between gap-4 px-5 py-4 sm:px-6">
-          <h2 className="min-w-0 truncate font-display text-[20px] font-medium capitalize text-[var(--ink)] sm:text-[23px]">
-            {metricLabel} <span className="text-[var(--muted)]">— {detected?.level === 'county' ? 'counties' : detected?.level === 'congress' ? 'districts' : 'states'}</span>
-          </h2>
+          <div className="min-w-0">
+            <h2 id={titleId} className="truncate font-display text-[20px] font-medium text-[var(--ink)] sm:text-[23px]">
+              {mapIntent.title ?? `${metricLabel} by ${detected?.level === 'county' ? 'county' : detected?.level === 'congress' ? 'district' : 'state'}`}
+            </h2>
+            {mapIntent.subtitle && <p className="truncate text-[12px] text-[var(--muted)]">{mapIntent.subtitle}</p>}
+          </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close map"
+            autoFocus
             className="rounded-lg p-2 text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--ink)]"
           >
             <X size={17} />
@@ -447,8 +580,8 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
                 >
                   <div className="text-[12.5px] font-semibold text-[var(--ink)]">{hover.region.label}</div>
                   <div className="tabular-nums mt-0.5 flex items-baseline gap-2 text-[13px]">
-                    <span className="font-semibold text-[var(--accent)]">{fmtValue(hover.region.value, money)}</span>
-                    <span className="text-[10.5px] text-[var(--muted)]">#{hover.region.rank} of {regionList.length}</span>
+                    <span className="font-semibold text-[var(--accent)]">{fmtValue(hover.region.value, unit)}</span>
+                    <span className="text-[10.5px] text-[var(--muted)]">#{hover.region.rank} {detected.rankDirection} of {regionList.length}</span>
                   </div>
                 </div>
               )}
@@ -471,7 +604,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
                         {r.rank}
                       </span>
                       <span className="max-w-44 truncate text-[12px] font-medium text-[var(--ink)]">{r.label}</span>
-                      <span className="tabular-nums text-[11.5px] font-semibold text-[var(--muted)]">{fmtValue(r.value, money)}</span>
+                      <span className="tabular-nums text-[11.5px] font-semibold text-[var(--muted)]">{fmtValue(r.value, unit)}</span>
                     </button>
                   ))}
                 </div>
@@ -487,11 +620,11 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
                     </button>
                   </div>
                   <div className="tabular-nums mt-2 font-display text-[26px] font-semibold leading-none text-[var(--accent)]">
-                    {fmtValue(pinned.value, money)}
+                    {fmtValue(pinned.value, unit)}
                   </div>
                   <div className="mt-2 space-y-1 text-[11.5px] leading-4 text-[var(--muted)]">
-                    <div>Rank <span className="font-semibold text-[var(--ink)]">#{pinned.rank}</span> of {regionList.length} shown</div>
-                    {money && total > 0 && pinned.value > 0 && (
+                    <div>Rank <span className="font-semibold text-[var(--ink)]">#{pinned.rank}</span> {detected.rankDirection} of {regionList.length} shown</div>
+                    {unit === 'usd' && minV >= 0 && total > 0 && pinned.value > 0 && (
                       <div><span className="font-semibold text-[var(--ink)]">{((pinned.value / total) * 100).toFixed(1)}%</span> of the mapped total</div>
                     )}
                   </div>
@@ -501,13 +634,14 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
               {/* Legend */}
               {regionList.length > 1 && (
                 <div className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2.5 rounded-full border border-[var(--line-soft)] bg-[var(--surface)]/94 px-4 py-2 shadow-sm">
-                  <span className="tabular-nums text-[10.5px] font-medium text-[var(--muted)]">{fmtValue(minV, money)}</span>
+                  <span className="tabular-nums text-[10.5px] font-medium text-[var(--muted)]">{fmtValue(minV, unit)}</span>
                   <span className="flex overflow-hidden rounded-full">
-                    {RAMP.map((c) => (
+                    {legendRamp.map((c) => (
                       <span key={c} className="block h-2 w-7" style={{ backgroundColor: c }} />
                     ))}
                   </span>
-                  <span className="tabular-nums text-[10.5px] font-medium text-[var(--muted)]">{fmtValue(maxV, money)}</span>
+                  <span className="tabular-nums text-[10.5px] font-medium text-[var(--muted)]">{fmtValue(maxV, unit)}</span>
+                  <span className="hidden text-[9.5px] text-[var(--muted-2)] sm:inline">{diverging ? 'Centered at zero' : 'Quantile scale'}</span>
                 </div>
               )}
             </>

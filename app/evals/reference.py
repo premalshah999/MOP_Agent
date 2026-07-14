@@ -13,7 +13,7 @@ from functools import lru_cache
 from typing import Any
 
 import duckdb
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from app.paths import MANIFEST_PATH, ROOT_DIR
 

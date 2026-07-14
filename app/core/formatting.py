@@ -144,7 +144,7 @@ def _row_numeric_pool(rows: list[dict[str, Any]]) -> set[float]:
 
 
 def _row_aggregate_pool(rows: list[dict[str, Any]]) -> set[float]:
-    """Sums + means + min + max for every numeric column — covers the common
+    """Sums, means, extrema, and defensible endpoint/range deltas — covers the common
     LLM moves of presenting `Top N combined`, `average across listed rows`,
     `largest`, `smallest`. Only computed when there are <=60 rows (the
     answer prompt caps shown rows at 60 anyway)."""
@@ -163,6 +163,13 @@ def _row_aggregate_pool(rows: list[dict[str, Any]]) -> set[float]:
         agg.add(sum(vals) / len(vals))  # mean
         agg.add(min(vals))
         agg.add(max(vals))
+        if len(vals) >= 2:
+            # Trend answers commonly headline last-minus-first; range answers
+            # use max-minus-min. Include both signs without allowing every
+            # arbitrary pairwise difference to become a validation bypass.
+            endpoint_delta = vals[-1] - vals[0]
+            value_range = max(vals) - min(vals)
+            agg.update({endpoint_delta, -endpoint_delta, value_range, -value_range})
     return agg
 
 
@@ -177,9 +184,9 @@ def validate_key_numbers_against_rows(
     aggregate (sum / mean / min / max per numeric column).
 
     Items with no numeric value are kept as-is (they're descriptors, not
-    claims). Items with peer-context-only meaning (rank labels like
-    "National rank", "of 51") are also kept — those are validated separately
-    by the peer_context module."""
+    claims). Peer-context ranks are intentionally not exempt: this function
+    does not receive peer-query evidence, so accepting them here would create
+    an unverified structured-number bypass."""
     if not items:
         return [], []
     if not rows:
@@ -191,17 +198,10 @@ def validate_key_numbers_against_rows(
     if not pool:
         return list(items), []
 
-    def _is_rank_label(label: str) -> bool:
-        lc = label.lower()
-        return any(t in lc for t in ("rank", "place", "of 5", "of 50", "of 51", "of 52", "of 56"))
-
     kept: list[dict[str, Any]] = []
     dropped: list[str] = []
     for it in items:
         raw_val = it.get("value")
-        if _is_rank_label(str(it.get("label", ""))):
-            kept.append(it)  # peer_context owns rank validation
-            continue
         n = _to_float(raw_val)
         if n is None:
             kept.append(it)

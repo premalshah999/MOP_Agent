@@ -17,10 +17,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from app.core.orchestrator import answer_question
 from app.llm import client

@@ -164,15 +164,18 @@ def _year_column(meta: dict[str, Any], columns: list[str]) -> str | None:
 def _available_years(meta: dict[str, Any]) -> list[str | int]:
     raw = meta.get("year_values")
     if isinstance(raw, list) and raw:
-        return [str(v).strip("'\"") for v in raw]
+        values: list[str | int] = [str(v).strip("'\"") for v in raw]
+        return values
     rng = meta.get("year_range")
     if isinstance(rng, str) and rng.strip():
         found = [int(tok) for tok in re.findall(r"(?:19|20)\d{2}", rng)]
         is_range = ("–" in rng or "-" in rng) and "," not in rng and len(found) == 2
         if is_range:
             lo, hi = sorted(found)
-            return list(range(lo, hi + 1))
-        return found or [rng]
+            expanded: list[str | int] = list(range(lo, hi + 1))
+            return expanded
+        parsed: list[str | int] = list(found) if found else [rng]
+        return parsed
     return []
 
 
@@ -263,7 +266,8 @@ def _warnings_index() -> dict[str, list[str]]:
 
     sfd = warnings.get("state_flow_duplicate_columns", {})
     add("state_flow", sfd.get("fix", "Use rcpt_state_name / subawardee_state_name.") +
-        " state_flow has NO year column (lifetime aggregate). subaward_amount can be negative (clawbacks).")
+        " state_flow has NO year column (all available records). "
+        "subaward_amount_year can be negative (clawbacks).")
 
     cfi = warnings.get("congress_flow_integer_district_id", {})
     add("congress_flow", cfi.get("fix", "Use rcpt_cd_name; never join the integer district id to cd_118."))
@@ -530,7 +534,6 @@ def table_schema_block(table_name: str) -> str:
     ds = get_dataset(table_name)
     if ds is None:
         return f"(unknown table: {table_name})"
-    meta = metadata_doc().get("tables", {}).get(table_name, {})
     meta_cols = _effective_meta_cols(table_name)
     out: list[str] = [
         f"TABLE {table_name}  (view: {ds.view_name})",

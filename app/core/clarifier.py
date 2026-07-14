@@ -19,7 +19,6 @@ pick instead of retyping. Hybrid design:
 from __future__ import annotations
 
 import re
-from typing import Any
 
 from app.llm import client
 from app.semantic.registry import domain_summary

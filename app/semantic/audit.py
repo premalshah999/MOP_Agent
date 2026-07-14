@@ -166,7 +166,7 @@ def build_semantic_coverage_audit() -> dict[str, Any]:
     for table in loaded_not_documented:
         issues.append(AuditIssue("warning", "LOADED_TABLE_NOT_DOCUMENTED", "Runtime manifest loads a table absent from semantic metadata.", table))
 
-    summary = {
+    summary: dict[str, int | float] = {
         "runtime_table_count": len(runtime_tables),
         "documented_table_count": len(documented_tables),
         "registered_dataset_count": len(registry.datasets),

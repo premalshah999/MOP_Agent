@@ -4,6 +4,7 @@ import type { Result } from 'vega-embed';
 
 interface VegaChartProps {
   spec: Record<string, unknown>;
+  ariaLabel?: string;
 }
 
 /* Human number formatting for every axis/legend/text that doesn't set its
@@ -46,7 +47,7 @@ function mopFormat(value: unknown, params?: string): string {
   return humanNumber(n);
 }
 
-export function VegaChart({ spec }: VegaChartProps) {
+export function VegaChart({ spec, ariaLabel = 'Data visualization' }: VegaChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [renderKey, setRenderKey] = useState(0);
@@ -56,6 +57,7 @@ export function VegaChart({ spec }: VegaChartProps) {
 
     let disposed = false;
     let result: Result | null = null;
+    let resizeObserver: ResizeObserver | null = null;
     const normalizedSpec =
       typeof spec.$schema === 'string' && spec.$schema.includes('/vega-lite/v5')
         ? { ...spec, $schema: 'https://vega.github.io/schema/vega-lite/v6.json' }
@@ -114,6 +116,11 @@ export function VegaChart({ spec }: VegaChartProps) {
             },
           },
         });
+        if (disposed || !containerRef.current) return;
+        resizeObserver = new ResizeObserver(() => {
+          if (!disposed && result) void result.view.resize().runAsync();
+        });
+        resizeObserver.observe(containerRef.current);
       } catch (err) {
         console.warn('[VegaChart] Render failed:', err);
         if (!disposed) setError(err instanceof Error ? err.message : 'Chart could not be rendered.');
@@ -124,6 +131,7 @@ export function VegaChart({ spec }: VegaChartProps) {
 
     return () => {
       disposed = true;
+      resizeObserver?.disconnect();
       result?.finalize();
     };
   }, [spec, renderKey]);
@@ -146,7 +154,9 @@ export function VegaChart({ spec }: VegaChartProps) {
   return (
     <div
       ref={containerRef}
-      className="mt-3 w-full overflow-hidden rounded-[10px] border border-[var(--line-soft)] bg-[var(--surface)] px-4 py-3"
+      role="img"
+      aria-label={ariaLabel}
+      className="mt-3 w-full overflow-x-auto overflow-y-visible rounded-[10px] border border-[var(--line-soft)] bg-[var(--surface)] px-4 py-3"
     />
   );
 }

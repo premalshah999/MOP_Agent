@@ -1,4 +1,4 @@
-"""LLM-judge: is every quantitative claim in the answer supported by the rows?
+"""LLM judge for evidence faithfulness and question coverage.
 
 Used by the strict golden suite and by the orchestrator to downgrade confidence
 and attach a caveat when an answer drifts from the data.
@@ -11,7 +11,8 @@ from typing import Any
 
 from app.llm import client
 
-_SYSTEM = """You grade whether an answer is FAITHFUL to its data.
+_SYSTEM = """You grade whether an answer is FAITHFUL to its data and COMPLETE
+for the user's question.
 
 You get the question, the SQL that ran, and the EXACT rows it returned.
 
@@ -28,6 +29,13 @@ supported by the rows. Apply these allowances generously:
 UNFAITHFUL means: fabricated or contradictory numbers, wrong ordering, wrong
 entities, or quantitative claims with no support in the rows.
 
+COMPLETE means: the answer directly addresses every metric, entity, geography,
+comparison, period, and ranking slot explicitly requested when the evidence
+supports it. A concise answer is fine. For a requested top/bottom N whose rows
+contain N results, omitting returned entities is incomplete. If evidence for a
+requested part is missing, the answer must identify that limitation instead of
+silently ignoring the part.
+
 Only mark faithful=false for a real, material discrepancy.
 
 Decide FIRST, then write. `reason` must be ONE short sentence naming the
@@ -35,7 +43,7 @@ specific discrepancy (or confirming support) — no deliberation, no
 "wait"/"let me re-check"/"actually" thinking-aloud. The `faithful` boolean
 MUST match your final conclusion.
 
-Return ONLY JSON: {"faithful": <bool>, "reason": "<one sentence>"}"""
+Return ONLY JSON: {"faithful": <bool>, "complete": <bool>, "reason": "<one sentence>"}"""
 
 
 def judge_faithfulness(
@@ -89,7 +97,7 @@ def judge_faithfulness(
         f"ROWS ({len(rows)} total, showing up to 60):\n"
         f"{json.dumps(rows[:60], default=str, indent=2)}\n"
         f"{extra}\n\n"
-        "Grade faithfulness."
+        "Grade evidence faithfulness and question coverage."
     )
     try:
         raw = client.chat_json(
@@ -115,11 +123,21 @@ def judge_faithfulness(
             "available": False,
             "reason": "verification returned a non-object response",
         }
-    # Do not coerce strings: bool("false") is True in Python.
-    faithful = raw.get("faithful") is True
+    # Do not coerce strings: bool("false") is True in Python. Recorded judge
+    # fixtures without `complete` remain compatible; new responses must return
+    # a real boolean and incomplete answers fail the existing blocking gate.
+    data_faithful = raw.get("faithful") is True
+    complete = raw.get("complete") is True if "complete" in raw else True
+    faithful = data_faithful and complete
     reason = str(raw.get("reason") or "").strip()
     if not reason:
         reason = "verifier returned no reason"
     if len(reason) > 220:
         reason = reason[:217].rstrip() + "…"
-    return {"faithful": faithful, "available": True, "reason": reason}
+    return {
+        "faithful": faithful,
+        "data_faithful": data_faithful,
+        "complete": complete,
+        "available": True,
+        "reason": reason,
+    }

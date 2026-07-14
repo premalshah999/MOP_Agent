@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections import Counter, defaultdict
+from collections import Counter
 from typing import Any
 
 from fastapi import HTTPException

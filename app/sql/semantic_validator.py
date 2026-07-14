@@ -9,7 +9,7 @@ query or an answer itself.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, cast
 
 import sqlglot
 from sqlglot import exp
@@ -26,7 +26,7 @@ def _norm(value: Any) -> str:
 
 def _parse(sql: str) -> exp.Expression:
     try:
-        return sqlglot.parse_one(sql, read="duckdb")
+        return cast(exp.Expression, sqlglot.parse_one(sql, read="duckdb"))
     except Exception as exc:
         raise SqlValidationError(f"SQL parser rejected semantic validation: {exc}") from exc
 
@@ -39,8 +39,11 @@ def _physical_tables(tree: exp.Expression) -> set[str]:
 def _column_literals(tree: exp.Expression, column: str) -> set[str]:
     """String/numeric literals used to constrain a column."""
     found: set[str] = set()
-    predicate_types = (exp.EQ, exp.In, exp.Between)
-    for predicate in tree.find_all(predicate_types):
+    predicates: list[exp.Expression] = []
+    predicates.extend(tree.find_all(exp.EQ))
+    predicates.extend(tree.find_all(exp.In))
+    predicates.extend(tree.find_all(exp.Between))
+    for predicate in predicates:
         columns = {c.name.lower() for c in predicate.find_all(exp.Column)}
         if column.lower() not in columns:
             continue
@@ -51,7 +54,10 @@ def _column_literals(tree: exp.Expression, column: str) -> set[str]:
 
 def _positive_dimension_filters(tree: exp.Expression) -> list[tuple[str, str]]:
     filters: list[tuple[str, str]] = []
-    for predicate in tree.find_all((exp.EQ, exp.In)):
+    predicates: list[exp.Expression] = []
+    predicates.extend(tree.find_all(exp.EQ))
+    predicates.extend(tree.find_all(exp.In))
+    for predicate in predicates:
         columns = list(predicate.find_all(exp.Column))
         literals = [x for x in predicate.find_all(exp.Literal) if x.is_string]
         if not columns or not literals:
@@ -131,15 +137,15 @@ def semantic_sql_problems(
             continue
         constrained = {_norm(x) for x in _column_literals(tree, dataset.year_column)}
         available = {_norm(x) for x in dataset.available_years}
+        expected_values: list[str | int] = []
         if contract.requested_period and _norm(contract.requested_period) in available:
-            expected_values = [contract.requested_period]
+            expected_values.append(contract.requested_period)
         elif len(set(contract.requested_years)) > 1:
-            expected_values = list(dict.fromkeys(contract.requested_years))
-        elif contract.operation == "trend":
-            expected_values = []
-        else:
+            expected_values.extend(dict.fromkeys(contract.requested_years))
+        elif contract.operation != "trend":
             expected = contract.explicit_year if contract.explicit_year is not None else dataset.default_year
-            expected_values = [expected] if expected is not None else []
+            if expected is not None:
+                expected_values.append(expected)
         missing_years = [value for value in expected_values if _norm(value) not in constrained]
         if missing_years:
             problems.append(

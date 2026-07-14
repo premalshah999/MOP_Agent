@@ -18,10 +18,9 @@ from __future__ import annotations
 import re
 from difflib import SequenceMatcher
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from app.paths import DATA_DIR
 
@@ -186,7 +185,7 @@ def match(question: str, threshold: float | None = None) -> dict[str, Any] | Non
     q_tokens = _tokens(question)
     q_metric_tokens = q_tokens & _METRIC_KEYWORDS
     q_geo_tokens = q_tokens & _GEO_TOKENS
-    best: tuple[float, dict[str, Any]] | None = None
+    best: tuple[float, dict[str, Any], str] | None = None
     for entry in entries:
         candidates = [entry["question"], *(entry.get("paraphrases") or [])]
         for c in candidates:
