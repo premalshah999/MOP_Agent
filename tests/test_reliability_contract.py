@@ -185,6 +185,24 @@ def test_at_least_is_not_a_lowest_ranking():
     assert contract.top_k is None
 
 
+def test_scalar_aggregate_ignores_model_only_sort_direction():
+    base = {
+        "tables": ["state_flow"],
+        "columns": ["subaward_amount_year"],
+        "operation": "aggregate",
+    }
+    none_contract = build_analysis_contract(
+        "subcontract inflow to Maryland",
+        {**base, "sort_direction": "none"},
+    )
+    desc_contract = build_analysis_contract(
+        "subcontract inflow to Maryland",
+        {**base, "sort_direction": "desc"},
+    )
+    assert none_contract.sort_direction == "none"
+    assert desc_contract.sort_direction == "none"
+
+
 def test_implicit_superlative_gets_bounded_result_shape():
     single = build_analysis_contract(
         "which California county carries the most bonds",

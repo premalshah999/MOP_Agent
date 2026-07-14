@@ -28,6 +28,7 @@ from app.core.intent_route import classify_and_route
 from app.core.reasoning_agent import run_reasoning_agent
 from app.core.sql_writer import generate_and_execute
 from app.core.contextualize import contextualize, prior_history
+from app.core.evidence_renderer import render_verified_rows
 from app.sql.semantic_validator import stabilize_verified_ranking_sql, validate_semantic_sql
 from app.core.suggestions import suggest_followups
 from app.core.visuals import build_visuals, enrich_rows_for_map
@@ -354,22 +355,19 @@ def _reasoning_mode(
         if verdict["faithful"]:
             confidence = "high"
         else:
-            confidence = "low"
-            answer = (
-                "I gathered matching data, but I could not safely verify the written "
-                "answer against all of the evidence, so I am withholding it. Please retry."
-            )
-            key_numbers = []
-            caveats = [f"Answer withheld: {verdict['reason']}"]
-            quality_warnings.append("reasoning answer withheld after failed verification")
+            fallback = render_verified_rows(rows)
+            answer = fallback["answer"]
+            key_numbers = fallback["key_numbers"]
+            caveats = list(fallback["caveats"])
+            confidence = "high"
+            quality_warnings.append("model prose replaced with verified evidence-only fallback")
+            _push("evidence_fallback", "completed", reason=verdict["reason"])
     else:
         _push("faithfulness_judge", "skipped", reason="no_evidence")
 
     # Without rows, only call it "answered" when the agent terminated cleanly
     # (stopped_reason == "ok"); budget exhaustion / errors are surfaced honestly.
-    if (rows or tool_results) and quality_warnings:
-        resolution = "verification_failed"
-    elif rows:
+    if rows:
         resolution = "answered"
     elif agent["stopped_reason"] == "ok":
         resolution = "no_data"
@@ -733,36 +731,22 @@ def answer_question(
         if verdict["faithful"]:
             confidence = "high" if routing.get("confidence") == "high" else "medium"
         else:
-            resolution = "verification_failed"
-            confidence = "low"
-            final = {
-                "answer": (
-                    "I found matching data, but I could not safely verify the written "
-                    "answer against the query results, so I am not presenting it as fact. "
-                    "Please retry; if this repeats, use the request ID when reporting it."
-                ),
-                "key_numbers": [],
-                "caveats": [],
-                "confidence": "low",
-            }
-            caveats = [f"Answer withheld: {verdict['reason']}"]
-            quality_warnings.append("answer withheld after failed faithfulness verification")
+            final = render_verified_rows(
+                gen["rows"], truncated=bool(gen.get("truncated"))
+            )
+            caveats = list(final["caveats"])
+            confidence = "high"
+            quality_warnings.append("model prose replaced with verified evidence-only fallback")
+            _push("evidence_fallback", "completed", reason=verdict["reason"])
     elif gen["rows"]:
         _push("faithfulness_judge", "skipped", reason="answer_schema_invalid")
-        resolution = "verification_failed"
-        confidence = "low"
-        final = {
-            "answer": (
-                "I found matching data, but the model did not produce a valid "
-                "answer object after two attempts, so I am withholding the response."
-            ),
-            "key_numbers": [],
-            "caveats": [],
-            "confidence": "low",
-            "valid": False,
-        }
-        caveats = ["Answer withheld after repeated response-schema validation failure."]
-        quality_warnings.append("answer withheld after invalid response schema")
+        final = render_verified_rows(
+            gen["rows"], truncated=bool(gen.get("truncated"))
+        )
+        caveats = list(final["caveats"])
+        confidence = "high"
+        quality_warnings.append("invalid model response replaced with verified evidence-only fallback")
+        _push("evidence_fallback", "completed", reason="answer_schema_invalid")
     else:
         _push("faithfulness_judge", "skipped")
         confidence = "low"

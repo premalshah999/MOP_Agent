@@ -88,7 +88,7 @@ def test_failed_draft_is_repaired_before_any_preview(monkeypatch):
     assert [preview["answer"] for preview in previews] == ["Corrected: **$100**"]
 
 
-def test_twice_failed_answer_is_withheld(monkeypatch):
+def test_twice_failed_answer_uses_verified_evidence_fallback(monkeypatch):
     verdicts = iter(
         [
             {"faithful": False, "available": True, "reason": "unsupported draft"},
@@ -102,7 +102,12 @@ def test_twice_failed_answer_is_withheld(monkeypatch):
         on_event=lambda name, data: events.append((name, data)),
     )
     previews = [payload for name, payload in events if name == "answer_preview"]
-    assert result["resolution"] == "verification_failed"
-    assert "could not safely verify" in result["answer"]
+    assert result["resolution"] == "answered"
+    assert "verified query results directly" in result["answer"]
+    assert "100.0" in result["answer"]
     assert all("Wrong draft" not in preview["answer"] for preview in previews)
-    assert result["contract"]["supported"] is False
+    assert result["contract"]["supported"] is True
+    assert any(
+        stage["name"] == "evidence_fallback"
+        for stage in result["pipelineTrace"]["stages"]
+    )

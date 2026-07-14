@@ -90,16 +90,27 @@ def _flow_direction(question: str, proposed: Any) -> FlowDirection:
     return value if value in {"inflow", "outflow"} else "none"  # type: ignore[return-value]
 
 
-def _sort_direction(question: str, proposed: Any) -> SortDirection:
+def _sort_direction(
+    question: str,
+    *,
+    operation: Operation,
+) -> SortDirection:
     q = re.sub(r"\bat\s+(?:least|most)\b", "", question.lower())
-    if re.search(r"\b(bottom|lowest|smallest|least|fewest)\b", q):
+    if re.search(r"\b(bottom|lowest|smallest|least|fewest|ascending)\b", q):
         return "asc"
-    if re.search(r"\b(top|highest|largest|most|greatest)\b", q):
+    if re.search(r"\b(top|highest|largest|most|greatest|descending)\b", q):
         return "desc"
     if re.search(r"\bat\s+(?:least|most)\b", question.lower()):
         return "none"
-    value = str(proposed or "").strip().lower()
-    return value if value in {"asc", "desc"} else "none"  # type: ignore[return-value]
+    # Sorting is semantically meaningful only for a ranking.  For lookup,
+    # aggregate, comparison, correlation, and trend questions, accepting a
+    # model-proposed direction made the same scalar query alternate between
+    # `none` and `desc` even though its SQL and result were identical.  A bare
+    # ranking uses the conventional highest-first ordering; explicit user
+    # wording above always wins.
+    if operation == "ranking":
+        return "desc"
+    return "none"
 
 
 def build_analysis_contract(question: str, routing: dict[str, Any]) -> AnalysisContract:
@@ -172,7 +183,10 @@ def build_analysis_contract(question: str, routing: dict[str, Any]) -> AnalysisC
         requested_period=requested_period,
         effective_period=effective_period,
         year_strategy=str(routing.get("year_strategy") or ""),
-        sort_direction=_sort_direction(question, routing.get("sort_direction")),
+        sort_direction=_sort_direction(
+            question,
+            operation=operation,
+        ),
         top_k=top_k,
         join_plan=str(routing.get("join_plan") or ""),
         assumptions=assumptions,

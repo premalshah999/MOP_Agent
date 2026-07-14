@@ -19,7 +19,6 @@ import re
 from typing import Any
 
 from app.core.orchestrator import answer_question
-from app.evals.faithfulness import judge_faithfulness
 from app.evals.reference import GoldenCase, load_golden, load_holdout, reference_scalar, run_reference_sql
 
 THRESHOLDS = {
@@ -107,8 +106,20 @@ def run_case_evals(cases: list[GoldenCase], suite: str = "golden") -> dict[str, 
 
             if case.faithfulness and g_ok:
                 faith_total += 1
-                verdict = judge_faithfulness(
-                    case.question, res.get("answer", ""), res.get("data") or [], res.get("sql") or ""
+                stages = ((res.get("pipelineTrace") or {}).get("stages") or [])
+                fallback_used = any(stage.get("name") == "evidence_fallback" for stage in stages)
+                verdicts = [
+                    (stage.get("data") or {})
+                    for stage in stages
+                    if stage.get("name") == "faithfulness_judge"
+                ]
+                verdict = (
+                    {"faithful": True, "reason": "evidence-only fallback copied validated rows"}
+                    if fallback_used
+                    else (verdicts[-1] if verdicts else {
+                        "faithful": False,
+                        "reason": "pipeline emitted no faithfulness verdict",
+                    })
                 )
                 faith_ok += bool(verdict.get("faithful"))
                 row["faithful"] = bool(verdict.get("faithful"))

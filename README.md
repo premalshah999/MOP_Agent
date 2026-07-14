@@ -18,7 +18,7 @@ Chat API
   -> Stage 4  SQL generation (DuckDB SQL + self-repair loop)
             -> structural + semantic validators -> DuckDB executor
   -> Stage 4  grounded answer (strictly from returned rows)
-  -> blocking verification    (repair/recheck, or withhold unsupported prose)
+  -> blocking verification    (repair/recheck; otherwise render validated rows only)
 ```
 
 Non-analytical messages never touch the database: META/UNANSWERABLE get a
@@ -35,6 +35,11 @@ safe to a clarification prompt. The client also supports recorded fixtures
 The analytical contract and validators are provider-neutral. Switching to
 Gemini still requires a client adapter, but does not require rewriting the
 grounding, SQL semantics, or answer-verification policy.
+
+Model-written prose is never streamed before verification. If two verification
+attempts cannot establish that the prose matches the evidence, the assistant
+does not guess or silently refuse a valid query: it displays only the already
+validated result rows and labels that response as an evidence-only fallback.
 
 ## Backend layout
 
