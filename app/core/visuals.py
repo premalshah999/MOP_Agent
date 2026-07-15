@@ -60,6 +60,7 @@ _US_STATES = (
     "northern mariana islands", "commonwealth of northern mariana islands",
     "commonwealth of the northern mariana islands",
 )
+_STATE_DISPLAY_NAMES = {name.casefold(): name.title() for name in _US_STATES}
 
 _PRIMARY = "#c6613f"
 _ACCENT_NEG = "#2a78d6"
@@ -779,14 +780,32 @@ def enrich_rows_for_map(
     resolved: dict[str, Any],
     rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Inject a filtered county's state only when SQL omitted it from SELECT."""
-    if not rows or _infer_level(routing, rows) != "county":
+    """Return stable geography labels and fill safe county map context.
+
+    Models may project either ``state`` or ``LOWER(state) AS state`` while
+    returning identical evidence.  Canonicalizing known state names at the
+    response boundary prevents that harmless SQL choice from changing API
+    rows, charts, maps, and repeatability signatures.
+    """
+    if not rows:
         return rows
-    first = rows[0]
+    level = _infer_level(routing, rows)
+    display_rows = [dict(row) for row in rows]
+    if level == "state":
+        for row in display_rows:
+            for key, value in row.items():
+                if not isinstance(value, str):
+                    continue
+                canonical = _STATE_DISPLAY_NAMES.get(value.strip().casefold())
+                if canonical:
+                    row[key] = canonical
+    if level != "county":
+        return display_rows
+    first = display_rows[0]
     if any(key in first for key in ("state", "state_name", "rcpt_state", "subawardee_state", "rcpt_state_name", "subawardee_state_name")):
-        return rows
+        return display_rows
     state = _focus_state(question, resolved)
-    return [{**row, "state": state} for row in rows] if state else rows
+    return [{**row, "state": state} for row in display_rows] if state else display_rows
 
 
 def build_visuals(

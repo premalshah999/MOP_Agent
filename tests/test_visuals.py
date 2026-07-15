@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.core.visuals import build_visuals
+from app.core.visuals import build_visuals, enrich_rows_for_map
 
 
 def _valid_spec(spec: dict) -> bool:
@@ -15,6 +15,17 @@ def _valid_spec(spec: dict) -> bool:
         and ("mark" in spec or "layer" in spec)
         and "encoding" in spec
     )
+
+
+def test_state_display_rows_are_case_stable() -> None:
+    routing = {"tables": ["contract_state"], "geography_level": "state"}
+    lower = enrich_rows_for_map(
+        "Maryland grants", routing, {}, [{"state": "maryland", "Grants": 10}]
+    )
+    upper = enrich_rows_for_map(
+        "Maryland grants", routing, {}, [{"state": "MARYLAND", "Grants": 10}]
+    )
+    assert lower == upper == [{"state": "Maryland", "Grants": 10}]
 
 
 def test_ranking_emits_lollipop_and_state_map() -> None:
