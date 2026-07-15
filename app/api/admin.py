@@ -1,11 +1,11 @@
-"""Admin endpoints for the demo: usage summary, recent questions, recent
+"""Admin endpoints for operational usage summaries, recent questions, recent
 feedback. Gated by ADMIN_EMAILS (comma-separated env var).
 
 Reads two append-only JSONL logs:
   - data/runtime/query_log.jsonl  (written by app.observability.logging)
   - data/runtime/feedback.jsonl   (written by app.api.feedback)
 
-Kept intentionally small — the goal is post-demo visibility, not a BI tool.
+Kept intentionally small to provide operational visibility without a separate BI stack.
 """
 
 from __future__ import annotations

@@ -136,7 +136,7 @@ export function SettingsModal({ isOpen, onClose, onThreadsCleared }: SettingsMod
               </div>
               <Toggle
                 label="Extended analysis by default"
-                hint="New questions start in the slower, deeper reasoning mode."
+                hint="New questions start with additional evidence checks and comparative analysis."
                 value={settings.extendedByDefault}
                 onChange={(v) => updateSettings({ extendedByDefault: v })}
               />

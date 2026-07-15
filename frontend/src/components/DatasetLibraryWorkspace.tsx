@@ -13,7 +13,7 @@ interface DatasetLibraryWorkspaceProps {
   datasetCatalog: DatasetCatalogEntry[];
   selectedDatasetId: string;
   onSelectDataset: (id: string) => void;
-  onUseInChat: (id: string) => void;
+  onUseInChat: (id: string, question?: string) => void;
 }
 
 function compactRows(rows: number): string {
@@ -54,7 +54,7 @@ export function DatasetLibraryWorkspace({
       <div className="mx-auto w-full max-w-5xl px-5 py-8 lg:px-8">
         <h1 className="font-display text-[26px] font-medium tracking-tight text-[var(--ink)]">Data library</h1>
         <p className="mt-1.5 max-w-xl text-[13.5px] leading-6 text-[var(--muted)]">
-          The datasets behind every answer. Browse a family, download the exact files, or take a question straight to the chat.
+          The datasets behind analytical answers. Browse a family, download the exact files, or take a question straight to the chat.
         </p>
 
         <div className="mt-7 grid gap-8 lg:grid-cols-[240px_minmax(0,1fr)]">
@@ -140,7 +140,7 @@ export function DatasetLibraryWorkspace({
                     <button
                       key={`${guide.id}-${i}`}
                       type="button"
-                      onClick={() => onUseInChat(guide.id)}
+                      onClick={() => onUseInChat(guide.id, q)}
                       className="rounded-full border border-[var(--line)] bg-[var(--surface)] px-3.5 py-1.5 text-left text-[12.5px] text-[var(--muted)] transition hover:border-[var(--muted-2)] hover:text-[var(--ink)]"
                     >
                       {q}

@@ -78,11 +78,11 @@ export const DATASET_GUIDES: DatasetGuide[] = [
     name: 'Fund Flow',
     shortLabel: 'Flow',
     description: 'Subaward flows between recipient and subawardee geographies, with origin and destination detail.',
-    helper: 'Best for flow destination rankings and outbound trend questions.',
+    helper: 'Best for directional totals, origin and destination rankings, and county-level trends.',
     starterQuestions: [
       'Which states receive the most federal subaward funding from Maryland? Show top 15.',
       'Which states receive the smallest non-zero subaward amounts from California? Show bottom 10.',
-      'How have Maryland outbound subaward totals changed by fiscal year?',
+      'How did total subaward inflow to Maryland counties change by fiscal year from 2020 to 2024?',
       'Which 20 counties receive the highest subaward amounts from Maryland recipient counties?',
     ],
   },
@@ -96,7 +96,7 @@ export const DATASET_GUIDES: DatasetGuide[] = [
       'Do states with higher financial literacy scores tend to have lower government debt ratios?',
       'Do states with higher poverty rates receive higher grants per 1000 in 2024?',
       'Compare financial literacy and poverty rates across states.',
-      'Which congressional districts have high poverty rates but low contracts per 1000?',
+      'Which 15 congressional districts have the highest poverty rates, with contracts per 1000?',
     ],
   },
 ];

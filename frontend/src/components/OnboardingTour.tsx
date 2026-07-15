@@ -12,21 +12,21 @@ interface Step {
 const STEPS: Step[] = [
   {
     icon: <MessagesSquare size={22} className="text-[var(--ink)]" />,
-    title: 'Ask anything about the catalog',
+    title: 'Ask questions grounded in the catalog',
     body:
       'Type a question — or click one of the starter chips. The agent picks the right table, writes the SQL, runs it, and writes a grounded answer. No SQL knowledge required.',
   },
   {
     icon: <ScrollText size={22} className="text-[var(--ink)]" />,
-    title: 'Every answer is fully sourced',
+    title: 'Inspect the evidence behind answers',
     body:
       'You see the headline number, the prose, a Notes footer with caveats (year, methodology), and one-click access to the underlying SQL + raw rows. Charts and maps render inline when they help.',
   },
   {
     icon: <Lightbulb size={22} className="text-[var(--ink)]" />,
-    title: 'Reasoning mode for deeper questions',
+    title: 'Extended analysis for deeper questions',
     body:
-      'Tap the lightbulb in the composer for cross-dataset comparisons, peer rankings, and distributional questions. The agent runs multiple SQL queries and shows its work.',
+      'Tap the lightbulb in the composer for cross-dataset comparisons, peer rankings, and distributional questions. The assistant can run additional evidence checks before answering.',
   },
 ];
 

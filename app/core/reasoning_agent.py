@@ -19,6 +19,7 @@ import time
 from typing import Any, Callable
 
 from app.core.answer_writer import write_answer
+from app.core.contextualize import structured_memory
 from app.core.tools import TOOL_SCHEMAS, execute_tool
 from app.llm import client
 from app.schemas.final_answer import FinalAnswer
@@ -95,20 +96,9 @@ def _build_user(
             )
         parts.append("REQUIRED ANSWER CONTRACT: " + "; ".join(contract))
     if history:
-        # Carry structured focus from the last assistant turn if present.
-        for h in reversed(history):
-            if h.get("role") == "assistant" and isinstance(h.get("contract"), dict):
-                c = h["contract"]
-                facts = [
-                    ("table(s)", c.get("tables") or ([c.get("family")] if c.get("family") else [])),
-                    ("metric", c.get("metric")),
-                    ("focus_state", c.get("focus_state")),
-                    ("year", c.get("year")),
-                ]
-                lines = [f"  {k} = {v}" for k, v in facts if v]
-                if lines:
-                    parts.insert(0, "PRIOR FOCUS (carry over unless overridden):\n" + "\n".join(lines))
-                break
+        memory = structured_memory(history)
+        if memory:
+            parts.insert(0, memory + "\nUse this only for omitted follow-up context; the current QUESTION overrides it.")
         recent = [h for h in history if h.get("role") == "user"][-4:]
         if recent:
             convo = "\n".join(f"{h['role']}: {str(h.get('content', ''))[:300]}" for h in recent)
@@ -237,14 +227,26 @@ def run_reasoning_agent(
 
     for step in range(1, max_calls + 1):
         if time.time() - started > max_wall_s:
-            return _finish("wall_budget", "I ran out of time investigating this. Here's what I gathered so far — please rephrase or narrow the question.", [], [], step - 1)
+            return _finish(
+                "wall_budget",
+                "I couldn't complete this analysis within the request window. Please try again or narrow the scope.",
+                [], [], step - 1,
+            )
         if used_tokens > max_tokens:
-            return _finish("token_budget", "I ran out of token budget on this turn. Please narrow the question.", [], [], step - 1)
+            return _finish(
+                "token_budget",
+                "I couldn't complete this analysis within the request window. Please narrow the scope and try again.",
+                [], [], step - 1,
+            )
 
         try:
             resp = client.chat_tools(messages, tools=TOOL_SCHEMAS, temperature=0.0, max_tokens=1500, purpose="reasoning_agent")
-        except client.LLMError as exc:
-            return _finish("llm_error", f"I hit an LLM error mid-investigation: {exc}", [], [], step - 1)
+        except client.LLMError:
+            return _finish(
+                "llm_error",
+                "The analysis service became temporarily unavailable before it could finish. Please retry.",
+                [], [], step - 1,
+            )
 
         used_tokens += resp["usage"]["total_tokens"]
         tool_calls = resp["tool_calls"]
@@ -379,4 +381,8 @@ def run_reasoning_agent(
                 max_calls,
             )
 
-    return _finish("call_budget", "I used my full tool-call budget without producing a confident answer. Please narrow the question.", [], [], max_calls)
+    return _finish(
+        "call_budget",
+        "I couldn't complete a well-supported answer for that scope. Please narrow the question and try again.",
+        [], [], max_calls,
+    )

@@ -18,7 +18,8 @@ export function AuthScreen() {
 
     if (mode === 'register' && !name.trim()) return setError('Name is required');
     if (!email.trim()) return setError('Email is required');
-    if (!password || password.length < 6) return setError('Password must be at least 6 characters');
+    if (!password) return setError('Password is required');
+    if (mode === 'register' && password.length < 8) return setError('Password must be at least 8 characters');
 
     setSubmitting(true);
     try {
@@ -87,7 +88,7 @@ export function AuthScreen() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder={mode === 'register' ? 'At least 6 characters' : 'Your password'}
+              placeholder={mode === 'register' ? 'At least 8 characters' : 'Your password'}
               className="w-full border border-[var(--line)] bg-[var(--surface)] px-3 py-2.5 text-[14px] text-[var(--ink)] outline-none placeholder:text-[var(--muted-2)] focus:border-[var(--ink)]"
               autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
             />

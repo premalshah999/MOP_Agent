@@ -182,7 +182,7 @@ def write_answer(
         )
     except client.LLMError as exc:
         return {
-            "answer": f"I ran the query but could not compose a written answer ({exc}).",
+            "answer": "The data query completed, but the written summary is temporarily unavailable. Please retry.",
             "key_numbers": [],
             "caveats": [],
             "confidence": "low",
@@ -194,7 +194,7 @@ def write_answer(
         parsed = FinalAnswer.model_validate(raw)
     except Exception as exc:
         return {
-            "answer": f"I ran the query but the written answer failed schema validation ({exc}).",
+            "answer": "The data query completed, but the response could not be verified. Please retry.",
             "key_numbers": [],
             "caveats": [],
             "confidence": "low",
@@ -203,7 +203,7 @@ def write_answer(
         }
     if not parsed.answer.strip():
         return {
-            "answer": "I ran the query but the model returned an empty written answer.",
+            "answer": "The data query completed, but the written summary was empty. Please retry.",
             "key_numbers": [],
             "caveats": [],
             "confidence": "low",

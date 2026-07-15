@@ -105,6 +105,60 @@ def _stage(name: str, status: str, **data: Any) -> dict[str, Any]:
     return entry
 
 
+def _build_context_memory(
+    question: str,
+    analysis: AnalysisContract,
+    resolved: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the full analytical intent needed by later follow-ups.
+
+    Values come from the typed analysis contract and deterministic entity
+    resolver, never from generated answer prose.
+    """
+    filters: list[dict[str, Any]] = []
+    entities: list[str] = []
+    state_entities: list[str] = []
+    for table, columns in resolved.items():
+        if not isinstance(columns, dict):
+            continue
+        for column, info in columns.items():
+            if not isinstance(info, dict):
+                continue
+            raw_values = info.get("values")
+            values = (
+                list(raw_values)
+                if isinstance(raw_values, (list, tuple))
+                else [info.get("value")]
+            )
+            clean_values = [str(value) for value in values if value not in (None, "")]
+            if not clean_values:
+                continue
+            filters.append({"table": table, "column": column, "values": clean_values})
+            for value in clean_values:
+                if value not in entities:
+                    entities.append(value)
+                if "state" in str(column).casefold() and value not in state_entities:
+                    state_entities.append(value)
+    memory: dict[str, Any] = {
+        "standalone_question": question,
+        "tables": list(analysis.tables),
+        "metrics": list(analysis.metric_columns),
+        "geography_level": analysis.geography_level,
+        "operation": analysis.operation,
+        "flow_direction": analysis.flow_direction,
+        "period": analysis.effective_period,
+        "requested_period": analysis.requested_period,
+        "requested_years": list(analysis.requested_years),
+        "sort_direction": analysis.sort_direction,
+        "top_k": analysis.top_k,
+        "filters": filters,
+        "entities": entities,
+        "comparison_entities": state_entities if len(state_entities) > 1 else [],
+        "focus_state": state_entities[0] if len(state_entities) == 1 else None,
+    }
+    return {key: value for key, value in memory.items() if value not in (None, "", [], {})}
+
+
 def _envelope(
     *,
     question: str,
@@ -133,6 +187,7 @@ def _envelope(
     analysis_contract: dict[str, Any] | None = None,
     data_truncated: bool = False,
     key_number_row_sets: list[list[dict[str, Any]]] | None = None,
+    context_memory: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rows = rows or []
     tables = tables or []
@@ -171,6 +226,7 @@ def _envelope(
     charts = charts or []
     map_intent = map_intent or _empty_map_intent()
     analysis_contract = analysis_contract or {}
+    context_memory = context_memory or {}
     supported = resolution == "answered"
     log_pipeline_event(
         {
@@ -210,9 +266,11 @@ def _envelope(
             "chart_intent": {"enabled": bool(chart), "type": "vega-lite" if chart else None},
             "final_answer": {"answer": answer, "confidence": confidence},
             "analysis_contract": analysis_contract or None,
+            "context_memory": context_memory or None,
         },
         "contract": {
             "contract_type": intent,
+            "resolution": resolution,
             "family": tables[0] if tables else None,
             "metric": metric,
             "operation": analysis_contract.get("operation"),
@@ -227,6 +285,7 @@ def _envelope(
             "missing_slots": [],
             "assumptions": assumptions,
             "validation_message": quality_warnings[0] if quality_warnings else None,
+            "context_memory": context_memory or None,
         },
         "pipelineTrace": {"version": PIPELINE_VERSION, "stages": stages},
         "quality": {"status": "warning" if quality_warnings else "ok", "warnings": quality_warnings},
@@ -465,6 +524,9 @@ def _reasoning_mode(
         key_number_row_sets=_reasoning_evidence_row_sets(display_rows, tool_results),
         user_id=user_id,
         request_id=request_id,
+        context_memory=_build_context_memory(
+            q, analysis, grounding.get("resolved") or {}
+        ),
     )
     # Surface the full agent tool trail so the faithfulness judge and the
     # reasoning evaluator can see peer_stats / multi-SQL evidence, not just
@@ -506,6 +568,23 @@ def answer_question(
     ir = classify_and_route(q, history)
     intent = {k: ir[k] for k in ("intent", "requires_sql", "needs_clarification", "clarification_question", "reason")}
     _push("stage1_intent", "completed", **intent)
+
+    if ir.get("service_unavailable"):
+        _push("analysis_service", "unavailable")
+        return _envelope(
+            question=question,
+            answer=(
+                "The analysis service is temporarily unavailable. Your question "
+                "was not rejected or reinterpreted; please try it again shortly."
+            ),
+            resolution="error",
+            confidence="low",
+            stages=stages,
+            intent="ERROR",
+            quality_warnings=["intent and routing model unavailable"],
+            user_id=user_id,
+            request_id=request_id,
+        )
 
     if intent["intent"] != "ANALYTICAL":
         meta = meta_answer.respond(q, intent["intent"], intent)
@@ -576,6 +655,7 @@ def answer_question(
         join_plan=routing["join_plan"],
     )
     _push("stage3_retrieval", "completed", tables=routing["tables"], resolved=grounding["resolved"])
+    context_memory = _build_context_memory(q, analysis, grounding["resolved"])
 
     if mode == "reasoning":
         return _reasoning_mode(
@@ -656,11 +736,13 @@ def answer_question(
         )
 
     if not gen["sql"] or (gen["error"] and gen["error"] != "empty_result" and not gen["rows"]):
+        provider_unavailable = str(gen.get("error") or "").startswith("LLM error:")
         return _envelope(
             question=question,
             answer=(
-                "I could not produce a valid query for that. Try rephrasing, or "
-                "specify the measure, geography level, and time period."
+                "The analysis service became temporarily unavailable before it could finish. Please retry."
+                if provider_unavailable
+                else "I could not produce a valid query for that. Try rephrasing, or specify the measure, geography level, and time period."
             ),
             resolution="error",
             confidence="low",
@@ -670,6 +752,7 @@ def answer_question(
             geography_level=routing["geography_level"],
             intent="ANALYTICAL",
             analysis_contract=analysis_data,
+            context_memory=context_memory,
             quality_warnings=[f"SQL generation failed: {gen['error']}"],
             user_id=user_id,
             request_id=request_id,
@@ -881,6 +964,7 @@ def answer_question(
         data_truncated=bool(gen.get("truncated")),
         user_id=user_id,
         request_id=request_id,
+        context_memory=context_memory,
     )
     if envelope.get("resolution") == "answered":
         sf = suggest_followups(question, final["answer"], envelope.get("contract"))

@@ -2,7 +2,7 @@
 
 Appends each verdict to data/runtime/feedback.jsonl. Read by the admin
 dashboard alongside the existing query_log.jsonl. Kept intentionally small —
-this is for capturing demo + early-use signal, not a full feedback platform.
+this captures product-quality signals without becoming a full feedback platform.
 """
 
 from __future__ import annotations

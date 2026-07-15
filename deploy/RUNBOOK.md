@@ -36,15 +36,23 @@ No cron / logrotate required.
 
 To inspect retention: `ls -lh data/runtime/*.jsonl`.
 
-## Backups (TODO — not yet automated)
+## Backups
 
-Critical paths to back up daily:
-- `data/runtime/mop.sqlite3` (users, threads, messages, share tokens, feedback)
-- `data/runtime/query_log.jsonl*` (audit + analytics signal)
-- `data/runtime/feedback.jsonl*`
+Every deployment runs `deploy/backup.sh` before fetching or building. The
+archive contains a transactionally consistent SQLite snapshot, rotating query
+and feedback logs, the protected environment file, the current Git commit and
+patch, and a repository bundle. Archives are stored in
+`/opt/mop-agent-backups` with mode `0600`; the default on-host retention is 14
+days.
 
-Recommended: cron job that runs `sqlite3 mop.sqlite3 ".backup /tmp/backup.db"`
-then `rclone copy` (or `aws s3 cp`) to off-host storage.
+Run an additional snapshot manually with:
+
+```bash
+APP_DIR=/opt/mop-agent bash deploy/backup.sh
+```
+
+Copy these archives to approved off-host storage daily. On-host snapshots
+protect deployment rollback, but they do not protect against host loss.
 
 ## Concurrency notes (40–50 users)
 
@@ -54,7 +62,29 @@ then `rclone copy` (or `aws s3 cp`) to off-host storage.
 | DuckDB (analytical SQL) | Per-request fresh conn | Fine for read-only workload; views materialised at startup |
 | DeepSeek LLM | Single API key | OpenAI fallback wired in `app/llm/client.py`; honours 429 with backoff |
 | `lru_cache` on `distinct_values` | Eviction under diverse queries | Increased `maxsize` to 1024 |
-| Long queries blocking workers | Reasoning mode can take 30–60s | TODO: async queue — see open work |
+| Long analytical requests | Additional evidence checks can take longer | Hard wall/tool/token budgets plus four web workers |
+
+## Model-provider cutover gate
+
+Provider changes are release changes, not environment-only substitutions.
+Before changing the model or base URL, run the golden, held-out,
+repeatability, reasoning, and multi-turn suites with the candidate provider:
+
+```bash
+python -m app.evals.run_evals --suite both
+python -m app.evals.repeatability --repeats 5
+python -m app.evals.reasoning_eval
+python -m app.evals.conversation_eval --mode normal
+python -m app.evals.conversation_eval --mode reasoning
+```
+
+Do not cut over if any suite regresses. DeepSeek's official documentation says
+the `deepseek-chat` alias is scheduled for deprecation on July 24, 2026; either
+validate a current DeepSeek model or complete the tested Gemini cutover before
+that date. Gemini's OpenAI-compatible endpoint supports the interface used by
+this application, but semantic correctness still depends on these gates. See
+the official [DeepSeek model documentation](https://api-docs.deepseek.com/quick_start/pricing)
+and [Gemini OpenAI compatibility guide](https://ai.google.dev/gemini-api/docs/openai).
 
 ## Known data limitations (surface in About page)
 

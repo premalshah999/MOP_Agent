@@ -66,7 +66,7 @@ def _scalar_result(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
         "answer": f"Verified {label.lower()}{entity}: **{display_value}**.",
         "key_numbers": [raw_key_number],
         "caveats": [
-            "Evidence-only fallback: the value is copied directly from the validated query result."
+            "The value is copied directly from the validated query result."
         ],
         "confidence": "high",
         "valid": True,
@@ -110,15 +110,14 @@ def render_verified_rows(
         suffix = " and the executor also capped the full result" if truncated else ""
         note = f"\n\n_Shown: {visible} of {len(rows)} returned rows{suffix}."
     answer = (
-        "I could not safely validate the model-written interpretation, so here "
-        "are the verified query results directly, without additional claims.\n\n"
+        "Here are the verified query results, reported directly without additional interpretation.\n\n"
         + "\n".join([header, divider, *body])
         + note
     )
     return {
         "answer": answer,
         "key_numbers": [],
-        "caveats": ["Evidence-only fallback: values are copied directly from the validated query rows."],
+        "caveats": ["Values are copied directly from the validated query rows."],
         "confidence": "high",
         "valid": True,
     }

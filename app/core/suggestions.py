@@ -23,12 +23,15 @@ CATALOG (only these measures + geographies are available)
 {domain}
 
 Each suggestion:
-- is 4–9 words, lowercase first letter unless a proper noun
+- is 6–16 words, lowercase first letter unless a proper noun
 - explores a DIFFERENT angle the catalog supports (peer comparison, per-capita /
   per-1000 variant from the catalog, year trend within the data's year range,
   drill-down by an available sub-region, switch to a related catalog measure)
 - is self-contained enough to type as-is
 - prefer concrete state/county names over generic phrasings
+- preserves the current entity, metric, direction, and period unless it clearly
+  states the intended change
+- never suggests a trend when the current table has no year dimension
 
 Reply ONLY with JSON: {{"followups": ["...","...","..."]}}"""
 
@@ -43,9 +46,14 @@ def suggest_followups(
         return []
     ctx_lines: list[str] = []
     if contract:
+        memory = contract.get("context_memory")
+        if isinstance(memory, dict):
+            for k, v in memory.items():
+                if v not in (None, "", [], {}):
+                    ctx_lines.append(f"  {k} = {v}")
         for k in ("family", "metric", "focus_state", "year", "geography_level"):
             v = contract.get(k)
-            if v:
+            if v and not any(line.startswith(f"  {k} =") for line in ctx_lines):
                 ctx_lines.append(f"  {k} = {v}")
     ctx = "\nCONTEXT:\n" + "\n".join(ctx_lines) if ctx_lines else ""
     try:
@@ -60,7 +68,7 @@ def suggest_followups(
                     ),
                 },
             ],
-            temperature=0.3,
+            temperature=0.0,
             max_tokens=250,
             purpose="suggest_followups",
         )

@@ -1,4 +1,4 @@
-# MOP Analytics Assistant — LLM-grounded text-to-SQL
+# Maryland Opportunity Analytics Assistant — LLM-grounded text-to-SQL
 
 A natural-language assistant over a fixed catalog of US public-policy datasets
 (Census ACS demographics, state/local government finance, federal
@@ -27,19 +27,19 @@ grounded explanation, CLARIFY asks one question back, OUT_OF_SCOPE is declined.
 ## LLM provider (required)
 
 DeepSeek (OpenAI-compatible) is the current local provider. Set
-`DEEPSEEK_API_KEY` in `.env`. Without a key the
-app still boots and the contract is intact, but every analytical question fails
-safe to a clarification prompt. The client also supports recorded fixtures
+`DEEPSEEK_API_KEY` in `.env`. Without a working provider the
+app still boots for diagnostics, but analytical questions report that the
+analysis service is unavailable. The client also supports recorded fixtures
 (`LLM_MODE=fixture`) and an injectable stub for fully offline tests.
 
-The analytical contract and validators are provider-neutral. Switching to
-Gemini still requires a client adapter, but does not require rewriting the
-grounding, SQL semantics, or answer-verification policy.
+The analytical contract and validators are provider-neutral. Gemini can use
+its OpenAI-compatible endpoint through environment configuration, but every
+provider or model change must pass the full release gates before deployment.
 
 Model-written prose is never streamed before verification. If two verification
 attempts cannot establish that the prose matches the evidence, the assistant
 does not guess or silently refuse a valid query: it displays only the already
-validated result rows and labels that response as an evidence-only fallback.
+validated result rows directly, without adding an unverified interpretation.
 
 ## Backend layout
 
@@ -73,6 +73,7 @@ Backend `http://127.0.0.1:8000` · Frontend `http://127.0.0.1:5173`
 pytest -q                          # per-stage suites (live tests skip w/o key)
 python -m app.evals.run_evals --suite both  # golden + held-out live gate
 python -m app.evals.repeatability           # identical-query evidence gate
+python -m app.evals.conversation_eval        # multi-turn gate across every family
 python -m app.semantic.audit --format markdown
 cd frontend && npm run typecheck && npm run build
 ```
@@ -85,13 +86,14 @@ intent ≥ 90%, routing ≥ 90%, generation ≥ 85%, faithfulness ≥ 90%.
 ```bash
 cp deploy/.env.production.example .env   # set JWT_SECRET, DEEPSEEK_API_KEY, hosts
 docker compose build && docker compose up -d
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/health/deep
 ```
 
 The image runs FastAPI and serves the built React app from `frontend/dist`.
 Committed runtime assets are the curated Parquet tables, schema metadata, map
 boundaries, and raw uploads; generated state stays in the `mop_agent_runtime`
-volume.
+volume. `deploy/redeploy.sh` creates a protected backup before each deployment
+and restores the prior image if deep health checks fail.
 
 ## Behaviour examples
 

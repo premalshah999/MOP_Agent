@@ -62,6 +62,28 @@ export interface QueryContract {
   missing_slots?: string[];
   assumptions?: string[];
   validation_message?: string | null;
+  resolution?: string | null;
+  operation?: string | null;
+  flow_direction?: string | null;
+  context_memory?: AnalyticalContextMemory | null;
+}
+
+export interface AnalyticalContextMemory {
+  standalone_question?: string;
+  tables?: string[];
+  metrics?: string[];
+  geography_level?: string;
+  operation?: string;
+  flow_direction?: string;
+  period?: string | number | Record<string, unknown>;
+  requested_period?: string;
+  requested_years?: number[];
+  sort_direction?: string;
+  top_k?: number;
+  filters?: Array<{ table: string; column: string; values: string[] }>;
+  entities?: string[];
+  comparison_entities?: string[];
+  focus_state?: string;
 }
 
 export interface PipelineStage {
@@ -102,6 +124,7 @@ export interface ResultPackage {
   contract?: QueryContract;
   pipeline?: PipelineTrace;
   quality?: PipelineQuality;
+  context_memory?: AnalyticalContextMemory | null;
 }
 
 export interface HealthSummary {

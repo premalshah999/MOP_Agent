@@ -72,10 +72,10 @@ def _focus_states(question: str, max_n: int = 2) -> list[str]:
 def _money_chips(question: str) -> list[str]:
     state = _focus_state(question) or "Maryland"
     return [
-        f"How much in federal contracts did {state} receive in FY2023?",
-        f"How much in federal grants did {state} receive in FY2023?",
-        f"How much in direct payments did {state} receive in FY2023?",
-        f"Total federal spending in {state} in FY2023 (contracts + grants + payments)",
+        f"How much in federal contracts did {state} receive in FY2024?",
+        f"How much in federal grants did {state} receive in FY2024?",
+        f"How much in direct payments did {state} receive in FY2024?",
+        f"Total federal spending in {state} in FY2024 (contracts + grants + payments)",
         f"Top 5 federal agencies funding {state}",
     ]
 
@@ -84,7 +84,7 @@ def _ranking_chips(question: str) -> list[str]:
     """User asked 'best/top/highest X states' without specifying X."""
     return [
         "Top 5 states by median household income (2023)",
-        "Top 5 states by federal grants received (FY2023)",
+        "Top 5 states by federal grants received (FY2024)",
         "Top 5 states by financial literacy index (NFCS 2021)",
         "Top 5 states by government debt ratio (FY2023)",
         "Top 5 states with the lowest poverty rate (2023)",
@@ -106,7 +106,7 @@ def _compare_chips(question: str) -> list[str]:
     return [
         f"Compare {a} and {b} on median household income (2023)",
         f"Compare {a} and {b} on poverty rate (2023)",
-        f"Compare {a} and {b} on federal grants received (FY2023)",
+        f"Compare {a} and {b} on federal grants received (FY2024)",
         f"Compare {a} and {b} on government debt ratio (FY2023)",
         f"Compare {a} and {b} on financial literacy index (2021)",
     ]

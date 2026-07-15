@@ -82,6 +82,34 @@ def _frontend_built() -> bool:
     return (FRONTEND_DIST / "index.html").exists()
 
 
+def _validate_production_config() -> None:
+    if os.getenv("APP_ENV", "development").strip().lower() != "production":
+        return
+    problems: list[str] = []
+    secret = os.getenv("JWT_SECRET", "").strip()
+    weak_secrets = {
+        "local-dev-secret",
+        "change-me-before-public-use",
+        "change-me-to-a-random-string",
+        "replace-with-a-long-random-secret",
+    }
+    if len(secret) < 32 or secret in weak_secrets:
+        problems.append("JWT_SECRET must be a non-placeholder secret of at least 32 characters")
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+    fallback_key = os.getenv("OPENAI_API_KEY", "").strip()
+    provider_key = deepseek_key or fallback_key
+    if not provider_key or provider_key.startswith(("replace-", "change-me")):
+        problems.append("a configured LLM provider key is required")
+    origins = os.getenv("ALLOWED_ORIGINS", "").strip()
+    hosts = os.getenv("TRUSTED_HOSTS", "").strip()
+    if not origins or "your-domain.example" in origins or origins == "*":
+        problems.append("ALLOWED_ORIGINS must name the deployed origin")
+    if not hosts or "your-domain.example" in hosts or hosts == "*":
+        problems.append("TRUSTED_HOSTS must name the deployed host")
+    if problems:
+        raise RuntimeError("Invalid production configuration: " + "; ".join(problems))
+
+
 def _json(status_code: int, payload: dict[str, Any], request_id: str | None = None) -> JSONResponse:
     headers = {"Cache-Control": "no-store"}
     if request_id:
@@ -128,6 +156,7 @@ async def lifespan(app: FastAPI):
     # retry with backoff instead of killing the worker (first worker wins,
     # the rest settle within a few seconds).
     import time as _time
+    _validate_production_config()
     for attempt in range(30):
         try:
             init_storage()
@@ -282,6 +311,7 @@ def register(body: RegisterRequest, request: Request):
 
 
 @app.post("/api/auth/login")
+@limiter.limit("10/minute")
 def login(body: LoginRequest, request: Request):
     user = authenticate_user(body)
     return _json(200, {"token": create_token(user), "user": user}, request.state.request_id)
@@ -419,6 +449,8 @@ def ask_stream(body: AskRequest, request: Request, user: dict[str, Any] = Depend
         item: dict[str, Any] = {"role": formatted["role"], "content": formatted["content"]}
         if formatted.get("contract"):
             item["contract"] = formatted["contract"]
+        if formatted.get("suggestedFollowups"):
+            item["suggested_followups"] = formatted["suggestedFollowups"]
         stored_history.append(item)
     stored_history = stored_history[-12:]
     # Capture context before persisting the current turn.  Otherwise the
@@ -526,6 +558,8 @@ def ask(body: AskRequest, request: Request, user: dict[str, Any] = Depends(get_c
         item = {"role": formatted["role"], "content": formatted["content"]}
         if formatted.get("contract"):
             item["contract"] = formatted["contract"]
+        if formatted.get("suggestedFollowups"):
+            item["suggested_followups"] = formatted["suggestedFollowups"]
         stored_history.append(item)
     stored_history = stored_history[-12:]
     user_message = create_message(thread["id"], "user", body.question)

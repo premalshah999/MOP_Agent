@@ -32,7 +32,7 @@ export function SharedThread({ token }: SharedThreadProps) {
     <div className="min-h-screen bg-[var(--bg)]">
       <header className="border-b border-[var(--line)] bg-[var(--bg)]/94 backdrop-blur">
         <div className="mx-auto flex h-12 w-full max-w-4xl items-center justify-between px-4 lg:px-6">
-          <span className="text-[12px] font-semibold tracking-tight text-[var(--ink)]">MOP Agent · Shared thread</span>
+          <span className="text-[12px] font-semibold tracking-tight text-[var(--ink)]">Maryland Opportunity · Shared conversation</span>
           <span className="text-[11px] text-[var(--muted)]">read-only</span>
         </div>
       </header>
@@ -56,7 +56,7 @@ export function SharedThread({ token }: SharedThreadProps) {
               ))}
             </div>
             <footer className="mt-10 border-t border-[var(--line-soft)] pt-4 text-center text-[11px] text-[var(--muted-2)]">
-              Snapshot of an MOP Agent conversation. Not interactive.
+              Shared from Maryland Opportunity. Read-only.
             </footer>
           </>
         )}

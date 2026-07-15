@@ -47,6 +47,8 @@ interface ChatAreaProps {
   onUpdateTitle: (threadId: string, title: string) => void;
   onSelectDataset: (id: string) => void;
   onEnsureThread: () => Promise<string | null>;
+  prefillQuestion?: string | null;
+  onPrefillConsumed?: () => void;
 }
 
 export function ChatArea({
@@ -59,6 +61,8 @@ export function ChatArea({
   onUpdateTitle,
   onSelectDataset: _onSelectDataset,
   onEnsureThread,
+  prefillQuestion,
+  onPrefillConsumed,
 }: ChatAreaProps) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -99,6 +103,13 @@ export function ChatArea({
   }, [messages, isLoading]);
 
   useEffect(() => { setInput(''); setDetail(null); }, [thread?.id]);
+
+  useEffect(() => {
+    if (!prefillQuestion) return;
+    setInput(prefillQuestion);
+    onPrefillConsumed?.();
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [prefillQuestion, onPrefillConsumed]);
 
   // Health polling
   useEffect(() => {
@@ -431,7 +442,7 @@ function Composer({ input, isLoading, placeholder, textareaRef, onChangeInput, o
               onClick={onToggleReasoning}
               disabled={isLoading}
               aria-pressed={!!reasoning}
-              title={reasoning ? 'Extended analysis on — slower, digs deeper' : 'Extended analysis off'}
+              title={reasoning ? 'Extended analysis on — adds evidence checks and comparative analysis' : 'Extended analysis off'}
               className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium transition ${
                 reasoning
                   ? 'bg-[var(--accent-soft)] text-[var(--accent)]'

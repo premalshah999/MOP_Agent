@@ -1470,7 +1470,7 @@
       }
     },
     "spending_state_agency": {
-      "description": "Federal spending broken down by both state AND federal agency. Allows questions like 'how much did the Department of Defense spend in Maryland'. 15 agencies \u00d7 50 states \u00d7 2 year-periods.",
+      "description": "Federal spending broken down by both state AND federal agency. Allows questions like 'how much did the Department of Defense spend in Maryland'. 21 agency categories \u00d7 51 state/DC geographies \u00d7 2 year-periods.",
       "source": "USAspending.gov + agency payroll aggregates",
       "grain": "One row per agency per state per year-period",
       "geography": "state",
@@ -1496,7 +1496,13 @@
         "Department of Transportation",
         "Department of Veterans Affairs",
         "Department of the Interior",
-        "Department of the Treasury"
+        "Department of the Treasury",
+        "Environmental Protection Agency",
+        "National Aeronautics and Space Administration",
+        "National Science Foundation",
+        "Small Business Administration",
+        "Social Security Administration",
+        "Others"
       ],
       "columns": {
         "agency": {

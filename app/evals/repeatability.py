@@ -7,6 +7,7 @@ same query silently changed tables, years, filters, or computation.
 
 from __future__ import annotations
 
+import argparse
 import json
 from typing import Any
 
@@ -68,11 +69,16 @@ def main() -> int:
         load_dotenv()
     except Exception:
         pass
-    failures = run()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repeats", type=int, default=2)
+    args = parser.parse_args()
+    if not 2 <= args.repeats <= 20:
+        parser.error("--repeats must be between 2 and 20")
+    failures = run(args.repeats)
     if failures:
         print(json.dumps({"passed": False, "failures": failures}, indent=2))
         return 1
-    print(json.dumps({"passed": True, "questions": len(QUESTIONS), "repeats": 2}))
+    print(json.dumps({"passed": True, "questions": len(QUESTIONS), "repeats": args.repeats}))
     return 0
 
 

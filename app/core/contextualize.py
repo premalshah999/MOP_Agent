@@ -16,30 +16,64 @@ from typing import Any
 from app.llm import client
 
 _SYSTEM = """You rewrite the user's latest message into ONE standalone analytical
-question, using the conversation only to fill in missing context.
+question, using the conversation and structured analytical memory only to fill
+in missing context.
 
 Rules:
 - If the latest message is a clarification answer or a follow-up, MERGE it with
-  the earlier question: carry over the entity/geography (state, county,
-  district), the metric/measure, filters, and time period.
+  the earlier question. Preserve every still-relevant entity/geography (state,
+  county, district, agency), metric/measure, filter, time period, flow
+  direction, ranking size, and comparison target.
   e.g. earlier "federal spending in miami-dade" + answer "federal contracts"
        -> "federal contracts in Miami-Dade county"
   e.g. earlier "top counties in Maryland by grants" + "what about Virginia?"
        -> "top counties in Virginia by grants"
+- Treat substitutions ("what about Virginia?"), additions ("and poverty?"),
+  references ("both", "the second one"), transforms ("per capita", "rank it
+  nationally", "same years"), and drill-downs ("which counties contribute
+  most?") as follow-ups. Apply the requested change and retain the rest.
+- A newly named value normally replaces the prior value for the same slot; it
+  does not erase unrelated slots. Explicit comparison wording adds a value.
 - If the latest message is already a complete, self-contained question (a new
   topic), return it unchanged.
+- Prefer the most recent analytical context when older contexts conflict.
 - Never invent entities or metrics that were not stated by the user.
 - Output the question only — no preamble.
 
 Return ONLY JSON: {"standalone_question": "<rewritten question>"}"""
 
 
+def _is_clarification(turn: dict[str, Any]) -> bool:
+    contract = turn.get("contract")
+    if not isinstance(contract, dict):
+        return False
+    return (
+        str(contract.get("contract_type") or "").upper() == "CLARIFY"
+        or contract.get("resolution") == "needs_clarification"
+    )
+
+
 def _recent(history: list[dict[str, Any]]) -> str:
     # Generated analytical prose is not memory: if it was wrong, feeding it
     # back makes the next turn inherit the error.  Structured assistant
-    # contracts are carried separately by _structured_memory().
-    turns = [h for h in history if h.get("role") == "user"][-6:]
-    return "\n".join(f"{h['role']}: {str(h.get('content', ''))[:400]}" for h in turns)
+    # contracts are carried separately by structured_memory().
+    lines: list[str] = []
+    for turn in history[-12:]:
+        role = turn.get("role")
+        if role == "user":
+            lines.append(f"user: {str(turn.get('content', ''))[:500]}")
+            continue
+        # Generated analytical prose is intentionally excluded. Clarification
+        # prompts and structured clickable options are safe conversational
+        # references ("the second one") and need to remain available.
+        options = turn.get("suggested_followups") or turn.get("suggestedFollowups")
+        if role == "assistant" and _is_clarification(turn):
+            lines.append(f"assistant clarification: {str(turn.get('content', ''))[:500]}")
+        if role == "assistant" and isinstance(options, list) and options:
+            clean = [str(item)[:180] for item in options[:5] if str(item).strip()]
+            if clean:
+                lines.append("assistant options: " + " | ".join(clean))
+    return "\n".join(lines[-8:])
 
 
 def prior_history(
@@ -60,32 +94,47 @@ def prior_history(
     return cleaned
 
 
-def _last_contract(history: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Most recent assistant turn's structured contract — far more reliable than
-    re-parsing the answer prose. Carries the last analytical focus
-    (table / metric / state / year)."""
-    for h in reversed(history):
-        if h.get("role") == "assistant":
-            c = h.get("contract")
-            if isinstance(c, dict):
-                return c
-            return None
-    return None
+def _analytical_memories(history: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
+    memories: list[dict[str, Any]] = []
+    for turn in reversed(history):
+        if turn.get("role") != "assistant" or not isinstance(turn.get("contract"), dict):
+            continue
+        contract = turn["contract"]
+        memory = contract.get("context_memory")
+        if isinstance(memory, dict) and memory:
+            memories.append(memory)
+        elif contract.get("supported"):
+            # Backward compatibility for conversations created before rich
+            # memory was added.
+            legacy = {
+                "tables": contract.get("tables")
+                or ([contract.get("family")] if contract.get("family") else []),
+                "metrics": [contract.get("metric")] if contract.get("metric") else [],
+                "geography_level": contract.get("geography_level"),
+                "operation": contract.get("operation"),
+                "period": contract.get("year"),
+                "focus_state": contract.get("focus_state"),
+                "sort_direction": contract.get("sort_direction"),
+                "top_k": contract.get("top_k"),
+            }
+            memories.append({k: v for k, v in legacy.items() if v not in (None, "", [])})
+        if len(memories) >= limit:
+            break
+    return memories
 
 
-def _structured_memory(history: list[dict[str, Any]]) -> str:
-    c = _last_contract(history)
-    if not c:
+def structured_memory(history: list[dict[str, Any]]) -> str:
+    """Compact, prose-free memory for contextualization and reasoning."""
+    memories = _analytical_memories(history)
+    if not memories:
         return ""
-    fields = [
-        ("table(s)", c.get("tables") or ([c.get("family")] if c.get("family") else [])),
-        ("metric", c.get("metric")),
-        ("focus_state", c.get("focus_state")),
-        ("year", c.get("year")),
-        ("geography_level", c.get("geography_level")),
-    ]
-    lines = [f"  {k} = {v}" for k, v in fields if v]
-    return ("PRIOR ANALYTICAL FOCUS (carry over unless overridden):\n" + "\n".join(lines)) if lines else ""
+    blocks: list[str] = []
+    for index, memory in enumerate(memories, start=1):
+        lines = [f"  {key} = {value}" for key, value in memory.items() if value not in (None, "", [])]
+        if lines:
+            label = "most recent" if index == 1 else f"{index - 1} turn(s) earlier"
+            blocks.append(f"ANALYTICAL CONTEXT — {label}:\n" + "\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def contextualize(question: str, history: list[dict[str, Any]] | None) -> str:
@@ -96,7 +145,7 @@ def contextualize(question: str, history: list[dict[str, Any]] | None) -> str:
     convo = _recent(history)
     if not convo.strip():
         return question
-    memory = _structured_memory(history)
+    memory = structured_memory(history)
     try:
         raw = client.chat_json(
             [

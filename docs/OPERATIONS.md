@@ -22,7 +22,9 @@ Frontend: `http://127.0.0.1:5173`
 
 ```bash
 pytest -q
-python -m app.evals.run_evals
+python -m app.evals.run_evals --suite both
+python -m app.evals.repeatability --repeats 5
+python -m app.evals.conversation_eval --mode normal
 python -m app.semantic.audit --format markdown
 cd frontend
 npm run typecheck
@@ -36,7 +38,7 @@ cp deploy/.env.production.example .env
 # edit JWT_SECRET, ALLOWED_ORIGINS, and TRUSTED_HOSTS
 docker compose build
 docker compose up -d
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/health/deep
 ```
 
 The production image serves the FastAPI backend and the built React frontend from one container. Runtime SQLite/DuckDB state lives in the `mop_agent_runtime` Docker volume.
@@ -53,13 +55,18 @@ APP_DIR=/opt/mop-agent BRANCH=main bash deploy/redeploy.sh
 The script:
 
 - creates `.env` from `deploy/.env.production.example` when missing
+- blocks placeholder secrets, hosts, origins, or provider keys
+- creates a protected pre-deployment backup of the database, logs, environment, and Git state
+- verifies the current deep health before changing a running installation
 - pulls the latest `main` branch using fast-forward only
 - rebuilds and restarts the Docker Compose service
-- checks `/health` before reporting success
+- checks both `/health` and `/health/deep` before reporting success
+- restores the previous image if post-deployment health checks fail
 
 ## Key Env Knobs
 
 - `APP_VERSION`: version string returned by `/health`.
+- `APP_ENV`: must be `production` in Docker; enables startup validation.
 - `JWT_SECRET`: required signing secret for login tokens.
 - `SQLITE_DB_PATH`: SQLite auth/thread/message storage path.
 - `DUCKDB_PATH`: runtime DuckDB path.
@@ -67,8 +74,9 @@ The script:
 - `QUERY_TIMEOUT_SECONDS`: execution budget used by the SQL executor.
 - `ALLOWED_ORIGINS`: CORS allowlist.
 - `TRUSTED_HOSTS`: allowed Host headers for FastAPI.
-- `ASSISTANT_ROUTER_MODE`: `local` by default; `llm` enables optional OpenAI router.
-- `OPENAI_API_KEY`: optional, only needed when `ASSISTANT_ROUTER_MODE=llm`.
+- `ASSISTANT_ROUTER_BASE_URL` and `ASSISTANT_ROUTER_MODEL`: active provider endpoint and model.
+- `DEEPSEEK_API_KEY`: current DeepSeek credential.
+- `OPENAI_API_KEY`: fallback credential, or the Gemini key when using its OpenAI-compatible endpoint.
 
 ## Troubleshooting
 

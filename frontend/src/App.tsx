@@ -37,6 +37,7 @@ function Workspace() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [mainView, setMainView] = useState<'chat' | 'library' | 'admin' | 'about'>('chat');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [prefillQuestion, setPrefillQuestion] = useState<string | null>(null);
   const [datasetCatalog, setDatasetCatalog] = useState<DatasetCatalogEntry[]>([]);
   const store = useThreadStore('cross_dataset');
   const settings = useSettings();
@@ -191,7 +192,7 @@ function Workspace() {
               <button
                 type="button"
                 onClick={() => setMainView('about')}
-                title="About MOP Agent"
+                title="About Maryland Opportunity"
                 className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition ${
                   mainView === 'about'
                     ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
@@ -217,6 +218,8 @@ function Workspace() {
             onUpdateTitle={store.updateThreadTitle}
             onSelectDataset={(id) => void store.selectDataset(id)}
             onEnsureThread={handleEnsureThread}
+            prefillQuestion={prefillQuestion}
+            onPrefillConsumed={() => setPrefillQuestion(null)}
           />
         )}
         {mainView === 'library' && (
@@ -225,9 +228,12 @@ function Workspace() {
             datasetCatalog={datasetCatalog}
             selectedDatasetId={selectedDataset.id}
             onSelectDataset={(id) => void store.selectDataset(id)}
-            onUseInChat={(id) => {
-              void store.selectDataset(id);
-              setMainView('chat');
+            onUseInChat={(id, question) => {
+              void (async () => {
+                await store.selectDataset(id);
+                setPrefillQuestion(question ?? null);
+                setMainView('chat');
+              })();
             }}
           />
         )}

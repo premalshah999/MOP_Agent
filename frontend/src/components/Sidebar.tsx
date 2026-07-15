@@ -59,7 +59,7 @@ export function Sidebar({
         <div className="px-3 pb-2 pt-4">
           <div className="flex items-center justify-between px-2">
             <span className="font-display text-[17px] font-semibold tracking-tight text-[var(--ink)]">
-              MOP Agent
+              Maryland Opportunity
             </span>
             {onClose && (
               <button

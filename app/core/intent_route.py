@@ -145,6 +145,7 @@ def _safe_default() -> dict[str, Any]:
         "join_plan": "",
         "assumptions": [],
         "confidence": "low",
+        "service_unavailable": True,
     }
 
 
@@ -235,4 +236,5 @@ def classify_and_route(question: str, history: list[dict[str, Any]] | None = Non
             "Which exact measure should I calculate?"
             if missing_measure else str(raw.get("clarification_question") or "").strip()
         ),
+        "service_unavailable": False,
     }

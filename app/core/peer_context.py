@@ -6,7 +6,7 @@ if it can say "MD ranks 8th of 51" or "above the national median of $X" or
 runs 3 cheap side-queries (rank, median, prior-year) and returns a small JSON
 block the answer prompt can use as `PEER CONTEXT`.
 
-State-level only for now (covers ACS/gov/FINRA state tables, where most demo
+State-level only for now (covers ACS/gov/FINRA state tables, where most
 questions live). County-level peer context is a separate, harder problem
 (in-state vs cross-state peers) and is deferred.
 """
