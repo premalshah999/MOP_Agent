@@ -83,6 +83,76 @@ def _grounded_values(resolved: dict[str, Any], column: str) -> set[str]:
     return values
 
 
+def _logical_table_aliases(tree: exp.Expression, contract: AnalysisContract) -> dict[str, str]:
+    """Map SQL aliases/view names to logical catalog table names."""
+    view_to_table = {
+        dataset.view_name.casefold(): table
+        for table in contract.tables
+        if (dataset := get_dataset(table)) is not None
+    }
+    aliases: dict[str, str] = {}
+    for node in tree.find_all(exp.Table):
+        logical = view_to_table.get(node.name.casefold())
+        if logical is None:
+            continue
+        aliases[node.alias_or_name.casefold()] = logical
+        aliases[node.name.casefold()] = logical
+    return aliases
+
+
+def _single_effective_year(contract: AnalysisContract, table: str) -> str | int | None:
+    """Return the one period a non-trend table must use, when defined."""
+    dataset = get_dataset(table)
+    if dataset is None or not dataset.year_column or contract.operation == "trend":
+        return None
+    available = {_norm(value) for value in dataset.available_years}
+    if contract.requested_period and _norm(contract.requested_period) in available:
+        return contract.requested_period
+    if contract.explicit_year is not None:
+        return contract.explicit_year
+    if len(set(contract.requested_years)) == 1:
+        return contract.requested_years[0]
+    return dataset.default_year
+
+
+def _incompatible_year_joins(
+    tree: exp.Expression, contract: AnalysisContract
+) -> list[str]:
+    """Find joins that equate year columns whose required periods differ."""
+    aliases = _logical_table_aliases(tree, contract)
+    problems: list[str] = []
+    for predicate in tree.find_all(exp.EQ):
+        columns = list(predicate.find_all(exp.Column))
+        if len(columns) != 2:
+            continue
+        left, right = columns
+        left_table = aliases.get(left.table.casefold()) if left.table else None
+        right_table = aliases.get(right.table.casefold()) if right.table else None
+        if not left_table or not right_table or left_table == right_table:
+            continue
+        left_dataset = get_dataset(left_table)
+        right_dataset = get_dataset(right_table)
+        if left_dataset is None or right_dataset is None:
+            continue
+        if not left_dataset.year_column or not right_dataset.year_column:
+            continue
+        if left.name.casefold() != left_dataset.year_column.casefold():
+            continue
+        if right.name.casefold() != right_dataset.year_column.casefold():
+            continue
+        left_year = _single_effective_year(contract, left_table)
+        right_year = _single_effective_year(contract, right_table)
+        if left_year is None or right_year is None or _norm(left_year) == _norm(right_year):
+            continue
+        problems.append(
+            f"do not join {left_table}.{left_dataset.year_column} to "
+            f"{right_table}.{right_dataset.year_column}: their required catalog "
+            f"periods differ ({left_year} vs {right_year}); filter each table to "
+            "its own period and join only on the shared geography"
+        )
+    return problems
+
+
 def semantic_sql_problems(
     sql: str,
     question: str,
@@ -187,6 +257,7 @@ def semantic_sql_problems(
         joins = list(tree.find_all(exp.Join))
         if any(join.args.get("on") is None and join.args.get("using") is None for join in joins):
             problems.append("cross-dataset queries require an explicit join key; cartesian joins are not allowed")
+        problems.extend(_incompatible_year_joins(tree, contract))
 
     # Stable ordering prevents the same tied ranking from changing between runs.
     if enforce_shape and contract.operation == "ranking":

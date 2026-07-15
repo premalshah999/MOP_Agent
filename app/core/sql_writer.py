@@ -79,6 +79,10 @@ Hard rules:
 - Use the RESOLVED FILTER VALUES exactly as given (exact casing/spelling).
 - Quote any column containing a space/comma/ampersand with double quotes.
 - Normalize state casing with LOWER() in filters and joins.
+- For cross-dataset queries, join on the shared geography. Join year columns
+  ONLY when the analysis contract requires the same period in both tables.
+  When catalog defaults differ (for example FINRA 2021 and ACS 2023), filter
+  each table to its own required period and NEVER equate their year columns.
 - Return a focused result: include the label/dimension column(s) and the
   measure(s); ORDER BY the measure and LIMIT when the user asks for "top N".
 - Rankings must use a stable tie-breaker after the measure (normally the label
@@ -170,7 +174,9 @@ def generate_and_execute(
             feedback = (
                 "That query returned 0 rows. Re-check the RESOLVED FILTER VALUES "
                 "(exact casing), the year handling in the CRITICAL WARNINGS, and "
-                "join casing. Return corrected JSON." + probe
+                "join casing. If cross-dataset tables use different required "
+                "periods, filter each table separately and do not join their year "
+                "columns. Return corrected JSON." + probe
             )
             messages += [
                 {"role": "assistant", "content": f'{{"sql": {sql!r}}}'},

@@ -55,6 +55,34 @@ def test_multiple_entities_and_typo_are_preserved(monkeypatch):
     assert [value for value, _ in matches] == ["VIRGINIA", "MARYLAND"]
 
 
+def test_exact_state_does_not_admit_broader_fuzzy_sibling(monkeypatch):
+    monkeypatch.setattr(
+        value_resolver,
+        "distinct_values",
+        lambda table, column, limit=2000: ("virginia", "west virginia"),
+    )
+    matches = value_resolver.resolve_filter_values(
+        "acs_state", "state", "What was Virginia's poverty rate in 2023?"
+    )
+    assert matches == [("virginia", 1.0)]
+
+
+def test_long_state_name_does_not_also_resolve_embedded_state(monkeypatch):
+    monkeypatch.setattr(
+        value_resolver,
+        "distinct_values",
+        lambda table, column, limit=2000: ("virginia", "west virginia"),
+    )
+    only_west = value_resolver.resolve_filter_values(
+        "acs_state", "state", "What was West Virginia's poverty rate?"
+    )
+    both = value_resolver.resolve_filter_values(
+        "acs_state", "state", "Compare Virginia and West Virginia"
+    )
+    assert only_west == [("west virginia", 1.0)]
+    assert [value for value, _ in both] == ["west virginia", "virginia"]
+
+
 def test_current_question_is_removed_only_from_trailing_history():
     history = [
         {"role": "user", "content": "Earlier question"},
@@ -144,6 +172,33 @@ def test_valid_correlation_contract_passes():
     )
     assert "AS correlation" in normalized
     assert "grant_poverty_correlation" not in normalized
+
+
+def test_cross_dataset_join_rejects_incompatible_default_year_equality():
+    question = "Compare Maryland and Virginia on financial literacy, poverty rate, and debt ratio."
+    contract = build_analysis_contract(
+        question,
+        {
+            "tables": ["finra_state", "acs_state", "gov_state"],
+            "columns": ["financial_literacy", "Below poverty", "Debt_Ratio"],
+            "geography_level": "state",
+            "operation": "comparison",
+        },
+    )
+    invalid = '''
+        SELECT f.state, f.financial_literacy, a."Below poverty", g.Debt_Ratio
+        FROM mart_finra_state f
+        JOIN mart_acs_state a
+          ON LOWER(f.state) = LOWER(a.state) AND f.Year = a.Year
+        JOIN mart_gov_state g ON LOWER(f.state) = LOWER(g.state)
+        WHERE LOWER(f.state) IN ('maryland', 'virginia')
+          AND f.Year = 2021 AND a.Year = 2023
+    '''
+    valid = invalid.replace(" AND f.Year = a.Year", "")
+    assert any("required catalog periods differ" in problem for problem in semantic_sql_problems(
+        invalid, question, contract, {}
+    ))
+    assert semantic_sql_problems(valid, question, contract, {}) == []
 
 
 def test_multi_year_aggregate_uses_catalog_period_row():

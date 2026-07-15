@@ -130,7 +130,18 @@ def resolve_filter_values(
         return []
     q_norm = _norm(question)
     expansions = _alias_expansions(column, question)
-    matches: list[tuple[str, float]] = []
+    exact_spans: dict[str, list[tuple[int, int]]] = {}
+    for value in values:
+        cand = _norm(value)
+        if not cand:
+            continue
+        candidate_spans = [
+            match.span() for match in re.finditer(rf"\b{re.escape(cand)}\b", q_norm)
+        ]
+        if candidate_spans:
+            exact_spans[value] = candidate_spans
+    strong_matches: list[tuple[str, float]] = []
+    fuzzy_matches: list[tuple[str, float]] = []
     for value in values:
         cand = _norm(value)
         score = 0.0
@@ -139,6 +150,9 @@ def resolve_filter_values(
         for expansion in expansions:
             if expansion == cand or _exact_phrase(cand, expansion):
                 score = max(score, 0.99)
+        if score > 0.0:
+            strong_matches.append((value, score))
+            continue
         if score == 0.0:
             # Typo recovery is allowed only for a distinctive candidate.  A
             # candidate whose only content is "state"/"county" is not an entity.
@@ -146,7 +160,47 @@ def resolve_filter_values(
             if content:
                 score = _window_score(q_norm, cand)
         if score >= min_score:
-            matches.append((value, score))
+            fuzzy_matches.append((value, score))
+
+    # Prefer the most specific exact phrase at an overlapping location.  A
+    # request for "West Virginia" contains the shorter string "Virginia", but
+    # it does not name both states unless "Virginia" also occurs separately.
+    exact_items = list(exact_spans.items())
+    filtered_strong: list[tuple[str, float]] = []
+    for value, score in strong_matches:
+        exact_value_spans = exact_spans.get(value)
+        if exact_value_spans and all(
+            any(
+                other_value != value
+                and other_start <= start
+                and end <= other_end
+                and (other_start, other_end) != (start, end)
+                for other_value, other_spans in exact_items
+                for other_start, other_end in other_spans
+            )
+            for start, end in exact_value_spans
+        ):
+            continue
+        filtered_strong.append((value, score))
+    strong_matches = filtered_strong
+
+    # A typo-sized window around an exact shorter entity must not introduce a
+    # broader sibling.  For example, "Virginia's poverty rate" previously
+    # admitted "West Virginia" because the surrounding words happened to
+    # reach the fuzzy threshold.  Preserve genuine typo recovery ("Marylnd")
+    # while rejecting fuzzy candidates that merely contain an already exact
+    # entity phrase.
+    strong_norms = [_norm(value) for value, _ in strong_matches]
+    for value, score in fuzzy_matches:
+        cand = _norm(value)
+        if any(
+            strong != cand and re.search(rf"\b{re.escape(strong)}\b", cand)
+            for strong in strong_norms
+        ):
+            continue
+        strong_matches.append((value, score))
+
+    matches = strong_matches
     matches.sort(key=lambda item: (item[1], len(item[0])), reverse=True)
     return matches
 
