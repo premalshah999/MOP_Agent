@@ -270,6 +270,19 @@ export interface DatasetTableDownload {
   xlsx?: string;
 }
 
+export interface DatasetVariableCatalogEntry {
+  name: string;
+  label: string;
+  role: 'measure' | 'dimension';
+  description: string;
+  dataType?: string;
+  unit?: string;
+  aggregation?: string | null;
+  synonyms?: string[];
+  sampleValues?: Array<string | number>;
+  exampleQuestion?: string;
+}
+
 export interface DatasetTableCatalogEntry {
   tableName: string;
   label: string;
@@ -277,6 +290,14 @@ export interface DatasetTableCatalogEntry {
   summary: string;
   rows: number;
   columns: string[];
+  source?: string;
+  geography?: string;
+  yearColumn?: string | null;
+  defaultYear?: string | number | null;
+  availableYears?: Array<string | number>;
+  periodLabel?: string;
+  variables: DatasetVariableCatalogEntry[];
+  notes?: string[];
   sourceFile?: string;
   runtimePath?: string;
   downloads: DatasetTableDownload;

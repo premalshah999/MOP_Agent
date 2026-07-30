@@ -14,13 +14,14 @@ from typing import Any, Callable
 from app.core import meta_answer
 from app.core.answer_writer import write_answer
 from app.core.analysis_contract import AnalysisContract, build_analysis_contract
-from app.core.clarifier import generate_clarification_chips
+from app.core.clarifier import generate_clarification
 from app.core.formatting import (
     format_key_numbers,
     validate_key_numbers_against_row_sets,
 )
 from app.core.glossary import detect_terms
 from app.core.peer_context import compute_peer_context, render_peer_context
+from app.core.period_guard import canonical_period_notes, mixed_period_note, period_claim_issues
 from app.core.verified_queries import match as match_verified_query
 from app.duckdb.connection import execute_select
 from app.sql.validator import SqlValidationError, validate_sql
@@ -188,6 +189,7 @@ def _envelope(
     data_truncated: bool = False,
     key_number_row_sets: list[list[dict[str, Any]]] | None = None,
     context_memory: dict[str, Any] | None = None,
+    peer_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rows = rows or []
     tables = tables or []
@@ -267,6 +269,7 @@ def _envelope(
             "final_answer": {"answer": answer, "confidence": confidence},
             "analysis_contract": analysis_contract or None,
             "context_memory": context_memory or None,
+            "statistics": {"peer_context": peer_context} if peer_context else {},
         },
         "contract": {
             "contract_type": intent,
@@ -596,20 +599,13 @@ def answer_question(
             confidence=meta["confidence"],
             stages=stages,
             intent=intent["intent"],
+            context_memory=meta.get("context_memory"),
             user_id=user_id,
             request_id=request_id,
         )
-        # CLARIFY intent — attach the concrete clickable chips so users don't
-        # have to retype the question. (The earlier analytical-needs_clarification
-        # branch does the same; this matches behavior for the LLM-classified
-        # CLARIFY path that bypasses routing.)
-        if intent["intent"] == "CLARIFY":
-            try:
-                clarification_chips = generate_clarification_chips(q)
-            except Exception:
-                clarification_chips = []
-            if clarification_chips:
-                env["suggested_followups"] = clarification_chips
+        clarification_chips = list(meta.get("suggestions") or [])
+        if clarification_chips:
+            env["suggested_followups"] = clarification_chips
         return env
 
     routing = {k: ir[k] for k in (
@@ -620,26 +616,28 @@ def answer_question(
     _push("stage2_routing", "completed", **routing)
     if not routing["tables"] or routing["needs_clarification"]:
         ask = routing["clarification"] or "Which dataset and measure should I use?"
-        # Attach 3-5 concrete clickable alternatives so the user doesn't have
-        # to retype the question from scratch. Falls back to LLM-grounded
-        # suggestions for novel ambiguity shapes.
-        clarification_chips = []
         try:
-            clarification_chips = generate_clarification_chips(q)
+            guidance = generate_clarification(q, ask)
         except Exception:
-            clarification_chips = []
+            guidance = {
+                "answer": ask,
+                "suggestions": [],
+                "context_memory": {},
+            }
         env = _envelope(
             question=question,
-            answer=ask,
+            answer=str(guidance.get("answer") or ask),
             resolution="needs_clarification",
             confidence="medium",
             stages=stages,
             tables=routing["tables"],
             geography_level=routing["geography_level"],
             intent="ANALYTICAL",
+            context_memory=guidance.get("context_memory"),
             user_id=user_id,
             request_id=request_id,
         )
+        clarification_chips = list(guidance.get("suggestions") or [])
         if clarification_chips:
             env["suggested_followups"] = clarification_chips
         return env
@@ -761,6 +759,7 @@ def answer_question(
     # Peer / comparative context: cheap side-queries to give a single-state
     # answer real meaning (rank, vs national median, YoY). Never load-bearing
     # — failures silently produce None. Passed as a dedicated prompt section.
+    peer: dict[str, Any] | None = None
     peer_text = ""
     if gen["rows"] and routing["tables"]:
         resolved0 = grounding["resolved"].get(routing["tables"][0], {})
@@ -917,6 +916,27 @@ def answer_question(
         _push("faithfulness_judge", "skipped")
         confidence = "low"
 
+    period_issues = period_claim_issues(
+        final.get("answer", ""),
+        list(final.get("caveats") or []),
+        routing["tables"],
+        routing["columns"],
+    )
+    if period_issues:
+        final = render_verified_rows(
+            gen["rows"], truncated=bool(gen.get("truncated"))
+        )
+        caveats = list(final["caveats"]) + canonical_period_notes(routing["tables"])
+        confidence = "high"
+        quality_warnings.extend(f"period_claim_guard: {issue}" for issue in period_issues)
+        _push("period_claim_guard", "replaced", issues=period_issues)
+
+    period_note = mixed_period_note(routing["tables"], analysis.effective_period)
+    if period_note:
+        final["answer"] = (final.get("answer") or "").rstrip() + f"\n\n*Period note: {period_note}*"
+        if period_note not in caveats:
+            caveats.append(period_note)
+
     if gen.get("truncated"):
         caveats.append(
             f"The displayed data is capped at {len(gen['rows'])} rows; it is not the complete result set."
@@ -965,6 +985,7 @@ def answer_question(
         user_id=user_id,
         request_id=request_id,
         context_memory=context_memory,
+        peer_context=peer,
     )
     if envelope.get("resolution") == "answered":
         sf = suggest_followups(question, final["answer"], envelope.get("contract"))

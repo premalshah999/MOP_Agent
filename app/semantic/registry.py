@@ -61,6 +61,22 @@ def metadata_doc() -> dict[str, Any]:
     return _raw()[1]
 
 
+def table_metadata(table_name: str) -> dict[str, Any]:
+    """Return a defensive copy of the curated, user-facing table metadata."""
+    raw = metadata_doc().get("tables", {}).get(table_name, {})
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def column_metadata(table_name: str) -> dict[str, dict[str, Any]]:
+    """Effective column documentation, including inherited sibling docs.
+
+    This is the public adapter used by the dataset library. Keeping inheritance
+    here means the frontend, prompt catalog, and SQL layer all describe a
+    variable from the same source of truth.
+    """
+    return {name: dict(value) for name, value in _effective_meta_cols(table_name).items()}
+
+
 def geographic_keys() -> dict[str, Any]:
     return metadata_doc().get("geographic_keys", {})
 
@@ -107,6 +123,30 @@ _CURATED_METRIC_ALIASES = {
     "subaward_amount": ["subaward dollars", "subcontract dollars"],
     "subaward_amount_year": ["subaward dollars", "subcontract dollars"],
 }
+
+_CURATED_METRIC_LABELS = {
+    "below poverty": "Poverty rate",
+    "education >= bachelor's": "Bachelor's degree attainment",
+    "education >= graduate": "Graduate degree attainment",
+    "financial_literacy": "Financial literacy index",
+    "financial_constraint": "Financial constraint index",
+    "alternative_financing": "Alternative financing index",
+    "satisfied": "Financial satisfaction share",
+    "satisfaction": "Financial satisfaction index",
+    "risk_averse": "Risk aversion index",
+    "contracts": "Federal contracts",
+    "grants": "Federal grants",
+    "subaward_amount": "Subaward amount",
+    "subaward_amount_year": "Subaward amount",
+}
+
+
+def _metric_label(column: str) -> str:
+    curated = _CURATED_METRIC_LABELS.get(column.casefold())
+    if curated:
+        return curated
+    text = " ".join(column.replace("_", " ").replace(",", " ").replace("&", "and").split())
+    return text[:1].upper() + text[1:]
 
 
 def _is_measure(column: str) -> bool:
@@ -387,7 +427,7 @@ def _metrics(columns: list[str], meta_cols: dict[str, Any]) -> dict[str, MetricD
         concept, variant, aliases = _metric_semantics(col, meta_col)
         metrics[col] = MetricDefinition(
             id=col,
-            label=col.replace("_", " ").strip(),
+            label=_metric_label(col),
             description=str(meta_col.get("description", "")) or col,
             sql=sql_name,
             unit=str(meta_col.get("unit", "value")),

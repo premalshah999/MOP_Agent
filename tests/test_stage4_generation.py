@@ -13,6 +13,8 @@ import re
 
 import pytest
 
+from app.core.peer_context import render_peer_context
+from app.semantic.registry import critical_warnings_for
 from tests.conftest import llm_available
 from tests.ground_truth import (
     cases_by_intent,
@@ -81,8 +83,15 @@ def test_analytical_generation(case) -> None:
 
     if case.faithfulness:
         judge = pytest.importorskip("app.evals.faithfulness", reason="judge not implemented")
+        statistics = (result.get("resultPackage") or {}).get("statistics") or {}
+        peer = statistics.get("peer_context") or {}
         verdict = judge.judge_faithfulness(
-            case.question, result.get("answer", ""), result.get("data") or [], result.get("sql") or ""
+            case.question,
+            result.get("answer", ""),
+            result.get("data") or [],
+            result.get("sql") or "",
+            peer_context=render_peer_context(peer),
+            data_notes=critical_warnings_for((result.get("contract") or {}).get("tables") or []),
         )
         assert verdict.get("faithful") is True, f"{case.id}: unfaithful — {verdict.get('reason')}"
 
