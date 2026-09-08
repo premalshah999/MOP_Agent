@@ -2,16 +2,30 @@ from __future__ import annotations
 
 import re
 
-from app.semantic.registry import all_allowed_views
-
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+from app.semantic.registry import all_allowed_views
 
 FORBIDDEN_KEYWORDS = {
-    "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "COPY", "EXPORT", "ATTACH", "DETACH",
-    "INSTALL", "LOAD", "CALL", "PRAGMA", "READ_CSV", "READ_PARQUET", "READ_JSON",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "DROP",
+    "ALTER",
+    "CREATE",
+    "COPY",
+    "EXPORT",
+    "ATTACH",
+    "DETACH",
+    "INSTALL",
+    "LOAD",
+    "CALL",
+    "PRAGMA",
+    "READ_CSV",
+    "READ_PARQUET",
+    "READ_JSON",
 }
 _TABLE_REF_RE = re.compile(r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
 
@@ -29,7 +43,11 @@ def _parser_table_refs(sql: str) -> tuple[set[str], set[str]]:
         raise SqlValidationError("Exactly one SQL statement is allowed.")
 
     statement = statements[0]
-    if not isinstance(statement, exp.Select):
+    # UNION / INTERSECT roots are Query expressions rather than Select
+    # expressions in sqlglot. They are still one read-only SELECT statement
+    # and are required for valid multi-metric tables such as several
+    # correlations returned as labeled rows.
+    if not isinstance(statement, exp.Query):
         raise SqlValidationError("Only SELECT/WITH statements are allowed.")
 
     cte_names = {cte.alias_or_name for cte in statement.find_all(exp.CTE)}
@@ -59,6 +77,8 @@ def validate_sql(sql: str) -> None:
     allowed_ctes = cte_names or {"base", "ranked"}
     disallowed = sorted(ref for ref in refs if ref not in allowed_views and ref not in allowed_ctes)
     if disallowed:
-        raise SqlValidationError(f"SQL references non-whitelisted tables/views: {', '.join(disallowed)}.")
+        raise SqlValidationError(
+            f"SQL references non-whitelisted tables/views: {', '.join(disallowed)}."
+        )
     if ".." in stripped or "information_schema" in upper or "sqlite_master" in upper:
         raise SqlValidationError("SQL may not access system metadata or path-like objects.")

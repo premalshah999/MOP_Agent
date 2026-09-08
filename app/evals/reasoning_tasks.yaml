@@ -21,8 +21,8 @@
   note: explore + classify; expect both top positive + the negative ones surfaced
 
 - id: r05
-  question: compare Maryland and Virginia on federal funding per capita
-  note: per-capita measure, two states; expect both values + delta
+  question: compare Maryland and Virginia on federal grants per 1,000 residents
+  note: exact published state measure, two states; expect both values + delta
 
 - id: r06
   question: is Baltimore City an outlier among Maryland counties for federal grants

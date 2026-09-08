@@ -1,6 +1,8 @@
 .git
 .github
 .pytest_cache
+.mypy_cache
+.ruff_cache
 __pycache__/
 *.pyc
 .DS_Store
@@ -13,6 +15,14 @@ output/
 
 frontend/node_modules/
 frontend/dist/
+
+# Development-only material is intentionally absent from the runtime image.
+app/evals/
+tests/
+docs/
+deploy/
+requirements-dev.txt
+pyproject.toml
 
 *.sqlite3
 *.db

@@ -2,10 +2,17 @@ import type {
   ApiAskRequest,
   ApiAskResponse,
   AuthResponse,
+  ChartBlock,
+  ChatbotMapIntent,
   ChatThread,
   DatasetCatalogEntry,
+  EvidenceBlock,
   HealthSummary,
-  HistoryMessage,
+  KeyNumber,
+  PipelineQuality,
+  PipelineTrace,
+  QueryContract,
+  ResultPackage,
 } from '@/types/chat';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
@@ -102,20 +109,19 @@ export interface ApiMessage {
   data?: Record<string, unknown>[];
   rowCount?: number;
   chart?: Record<string, unknown>;
-  charts?: import('@/types/chat').ChartBlock[];
-  evidence?: import('@/types/chat').EvidenceBlock;
-  resolution?: import('@/types/chat').ApiAskResponse['resolution'];
-  mapIntent?: import('@/types/chat').ChatbotMapIntent | null;
-  resultPackage?: import('@/types/chat').ResultPackage;
-  contract?: import('@/types/chat').QueryContract;
-  pipelineTrace?: import('@/types/chat').PipelineTrace;
-  quality?: import('@/types/chat').PipelineQuality;
+  charts?: ChartBlock[];
+  evidence?: EvidenceBlock;
+  resolution?: ApiAskResponse['resolution'];
+  mapIntent?: ChatbotMapIntent | null;
+  resultPackage?: ResultPackage;
+  contract?: QueryContract;
+  pipelineTrace?: PipelineTrace;
+  quality?: PipelineQuality;
   error?: string;
-  keyNumbers?: import('@/types/chat').KeyNumber[];
+  keyNumbers?: KeyNumber[];
   caveats?: string[];
   confidence?: string;
   glossary?: Record<string, string>;
-  verifiedQuery?: { id: string; score?: number } | null;
   suggestedFollowups?: string[];
 }
 
@@ -134,8 +140,6 @@ export async function apiUpdateProfile(updates: { name: string }): Promise<void>
   if (data.token) setToken(data.token);
 }
 
-export const apiDeleteAllThreads = apiClearAllThreads;
-
 export async function apiListThreads(): Promise<ApiThread[]> {
   const res = await fetch(buildApiUrl('/api/threads'), {
     headers: authHeaders(),
@@ -153,18 +157,6 @@ export async function apiCreateThread(datasetId: string, title?: string): Promis
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ dataset_id: datasetId, title: title || 'New thread' }),
-  });
-  if (!res.ok) {
-    handle401(res);
-    throw new Error(await parseErrorBody(res));
-  }
-  const body = await res.json();
-  return body.thread as ApiThread;
-}
-
-export async function apiGetThread(threadId: string): Promise<ApiThread> {
-  const res = await fetch(buildApiUrl(`/api/threads/${threadId}`), {
-    headers: authHeaders(),
   });
   if (!res.ok) {
     handle401(res);
@@ -228,33 +220,6 @@ export async function getHealthSummary(): Promise<HealthSummary> {
   const res = await fetch(buildApiUrl('/health'));
   if (!res.ok) throw new Error(await parseErrorBody(res));
   return (await res.json()) as HealthSummary;
-}
-
-export async function checkHealth(): Promise<boolean> {
-  const body = await getHealthSummary();
-  return body.status === 'ok';
-}
-
-export interface AskPayload {
-  question: string;
-  thread_id?: string;
-  history?: HistoryMessage[];
-  mode?: 'normal' | 'reasoning';
-}
-
-export async function askAgent(payload: AskPayload): Promise<ApiAskResponse> {
-  const res = await fetch(buildApiUrl('/api/ask'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify(payload),
-  });
-  if (res.status === 401) {
-    clearToken();
-    window.location.reload();
-    throw new Error('Session expired. Please sign in again.');
-  }
-  if (!res.ok) throw new Error(await parseErrorBody(res));
-  return (await res.json()) as ApiAskResponse;
 }
 
 // --- Share thread (read-only public link via token) ---
@@ -353,7 +318,7 @@ export interface StreamEvent {
 }
 
 export async function askAgentStream(
-  payload: AskPayload,
+  payload: ApiAskRequest,
   onEvent: (e: StreamEvent) => void,
 ): Promise<ApiAskResponse> {
   // Single safe retry: only retry if NO events arrived (pure connection
@@ -375,7 +340,7 @@ export async function askAgentStream(
 }
 
 async function _streamOnce(
-  payload: AskPayload,
+  payload: ApiAskRequest,
   onEvent: (e: StreamEvent) => void,
 ): Promise<ApiAskResponse> {
   const res = await fetch(buildApiUrl('/api/ask/stream'), {
@@ -442,39 +407,9 @@ async function _streamOnce(
   return final;
 }
 
-export function buildHistory(messages: { role: string; content: string }[]): HistoryMessage[] {
-  return messages
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({ role: m.role as HistoryMessage['role'], content: m.content }));
-}
-
 export async function getDatasetCatalog(): Promise<DatasetCatalogEntry[]> {
   const res = await fetch(buildApiUrl('/api/datasets'));
   if (!res.ok) throw new Error(await parseErrorBody(res));
   const body = await res.json();
   return (body.datasets ?? []) as DatasetCatalogEntry[];
-}
-
-export interface MapValuesParams {
-  dataset: string;
-  level: string;
-  variable: string;
-  year?: string;
-  state?: string;
-  agency?: string;
-}
-
-export async function getMapValues(params: MapValuesParams): Promise<Record<string, unknown>[]> {
-  const search = new URLSearchParams();
-  search.set('dataset', params.dataset);
-  search.set('level', params.level);
-  search.set('variable', params.variable);
-  if (params.year) search.set('year', params.year);
-  if (params.state) search.set('state', params.state);
-  if (params.agency) search.set('agency', params.agency);
-
-  const res = await fetch(buildApiUrl(`/api/values?${search.toString()}`));
-  if (!res.ok) throw new Error(await parseErrorBody(res));
-  const body = await res.json();
-  return (body.rows ?? []) as Record<string, unknown>[];
 }

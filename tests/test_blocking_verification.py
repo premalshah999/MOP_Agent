@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.core import orchestrator
+from app.core import pipeline
 
 
 def _route():
@@ -26,22 +26,23 @@ def _route():
 
 
 def _wire_pipeline(monkeypatch, verdicts):
-    monkeypatch.setattr(orchestrator, "contextualize", lambda question, history: question)
-    monkeypatch.setattr(orchestrator, "classify_and_route", lambda question, history: _route())
+    monkeypatch.setattr(pipeline, "contextualize", lambda question, history: question)
+    monkeypatch.setattr(pipeline, "classify_and_route", lambda question, history: _route())
     monkeypatch.setattr(
-        orchestrator,
+        pipeline,
         "build_grounding",
         lambda *args, **kwargs: {
             "text": "grounding",
-            "resolved": {"contract_state": {"state": {"value": "MARYLAND", "values": ["MARYLAND"]}}},
+            "resolved": {
+                "contract_state": {"state": {"value": "MARYLAND", "values": ["MARYLAND"]}}
+            },
         },
     )
-    monkeypatch.setattr(orchestrator, "match_verified_query", lambda question: None)
     monkeypatch.setattr(
-        orchestrator,
+        pipeline,
         "generate_and_execute",
         lambda *args, **kwargs: {
-            "sql": 'SELECT state, "Grants" FROM mart_contract_state WHERE state=\'MARYLAND\' AND year=\'2024\'',
+            "sql": "SELECT state, \"Grants\" FROM mart_contract_state WHERE state='MARYLAND' AND year='2024'",
             "rows": [{"state": "MARYLAND", "Grants": 100.0}],
             "error": None,
             "attempts": [],
@@ -49,16 +50,26 @@ def _wire_pipeline(monkeypatch, verdicts):
     )
     answers = iter(
         [
-            {"answer": "Wrong draft: **$999**", "key_numbers": [], "caveats": [], "confidence": "high"},
-            {"answer": "Corrected: **$100**", "key_numbers": [], "caveats": [], "confidence": "high"},
+            {
+                "answer": "Wrong draft: **$999**",
+                "key_numbers": [],
+                "caveats": [],
+                "confidence": "high",
+            },
+            {
+                "answer": "Corrected: **$100**",
+                "key_numbers": [],
+                "caveats": [],
+                "confidence": "high",
+            },
         ]
     )
-    monkeypatch.setattr(orchestrator, "write_answer", lambda *args, **kwargs: next(answers))
-    monkeypatch.setattr(orchestrator, "judge_faithfulness", lambda *args, **kwargs: next(verdicts))
-    monkeypatch.setattr(orchestrator, "compute_peer_context", lambda **kwargs: None)
-    monkeypatch.setattr(orchestrator, "enrich_rows_for_map", lambda q, r, g, rows: rows)
+    monkeypatch.setattr(pipeline, "write_answer", lambda *args, **kwargs: next(answers))
+    monkeypatch.setattr(pipeline, "judge_faithfulness", lambda *args, **kwargs: next(verdicts))
+    monkeypatch.setattr(pipeline, "compute_peer_context", lambda **kwargs: None)
+    monkeypatch.setattr(pipeline, "enrich_rows_for_map", lambda q, r, g, rows: rows)
     monkeypatch.setattr(
-        orchestrator,
+        pipeline,
         "build_visuals",
         lambda *args, **kwargs: {
             "chart": None,
@@ -66,7 +77,7 @@ def _wire_pipeline(monkeypatch, verdicts):
             "map_intent": {"enabled": False, "mapType": "none"},
         },
     )
-    monkeypatch.setattr(orchestrator, "suggest_followups", lambda *args, **kwargs: [])
+    monkeypatch.setattr(pipeline, "suggest_followups", lambda *args, **kwargs: [])
 
 
 def test_failed_draft_is_repaired_before_any_preview(monkeypatch):
@@ -78,7 +89,7 @@ def test_failed_draft_is_repaired_before_any_preview(monkeypatch):
     )
     _wire_pipeline(monkeypatch, verdicts)
     events = []
-    result = orchestrator.answer_question(
+    result = pipeline.answer_question(
         "How many grant dollars did Maryland receive?",
         on_event=lambda name, data: events.append((name, data)),
     )
@@ -88,7 +99,7 @@ def test_failed_draft_is_repaired_before_any_preview(monkeypatch):
     assert [preview["answer"] for preview in previews] == ["Corrected: **$100**"]
 
 
-def test_twice_failed_answer_uses_verified_evidence_fallback(monkeypatch):
+def test_twice_failed_answer_uses_validated_evidence_fallback(monkeypatch):
     verdicts = iter(
         [
             {"faithful": False, "available": True, "reason": "unsupported draft"},
@@ -97,17 +108,14 @@ def test_twice_failed_answer_uses_verified_evidence_fallback(monkeypatch):
     )
     _wire_pipeline(monkeypatch, verdicts)
     events = []
-    result = orchestrator.answer_question(
+    result = pipeline.answer_question(
         "How many grant dollars did Maryland receive?",
         on_event=lambda name, data: events.append((name, data)),
     )
     previews = [payload for name, payload in events if name == "answer_preview"]
     assert result["resolution"] == "answered"
-    assert result["answer"] == "Verified grants for MARYLAND: **$100**."
+    assert result["answer"] == "Validated grants for MARYLAND: **$100**."
     assert result["key_numbers"][0]["value"] == "$100"
     assert all("Wrong draft" not in preview["answer"] for preview in previews)
     assert result["contract"]["supported"] is True
-    assert any(
-        stage["name"] == "evidence_fallback"
-        for stage in result["pipelineTrace"]["stages"]
-    )
+    assert any(stage["name"] == "evidence_fallback" for stage in result["pipelineTrace"]["stages"])

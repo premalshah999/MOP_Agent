@@ -1,0 +1,1 @@
+"""Core analytical pipeline components."""

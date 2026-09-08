@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 
-from app.core.analysis_contract import build_analysis_contract
+from app.core.analysis_plan import build_analysis_contract, semantic_plan_from_routing
 from app.core.formatting import (
     validate_key_numbers_against_row_sets,
     validate_key_numbers_against_rows,
 )
 from app.core.peer_context import compute_peer_context, render_peer_context
-from app.evals.faithfulness import judge_faithfulness
 from app.llm import client
+from app.quality.faithfulness import judge_faithfulness
 
 
 def test_incomplete_answer_fails_blocking_judge() -> None:
@@ -46,21 +46,26 @@ def test_peer_context_preserves_ratio_precision_and_rank_direction() -> None:
         }
     )
     assert "Maryland highest-first rank" in text
+    assert "median across represented state-level geographies" in text
+    assert "national median" not in text
     assert "0.7873" in text
     assert "was 0.8012" in text
 
 
 def test_peer_context_is_not_attached_to_multi_entity_rows() -> None:
-    assert compute_peer_context(
-        table="acs_state",
-        focus_state="Maryland",
-        year=2023,
-        routing_columns=["Below poverty"],
-        rows=[
-            {"state": "Maryland", "Below poverty": 9.1},
-            {"state": "Virginia", "Below poverty": 9.9},
-        ],
-    ) is None
+    assert (
+        compute_peer_context(
+            table="acs_state",
+            focus_state="Maryland",
+            year=2023,
+            routing_columns=["Below poverty"],
+            rows=[
+                {"state": "Maryland", "Below poverty": 9.1},
+                {"state": "Virginia", "Below poverty": 9.9},
+            ],
+        )
+        is None
+    )
 
 
 def test_unverified_rank_key_number_is_dropped() -> None:
@@ -70,6 +75,33 @@ def test_unverified_rank_key_number_is_dropped() -> None:
     )
     assert kept == []
     assert dropped == ["National rank"]
+
+
+def test_named_rank_is_verified_against_ordered_rows() -> None:
+    item = {"label": "Texas rank", "value": 3, "unit": ""}
+    kept, dropped = validate_key_numbers_against_rows(
+        [item],
+        [
+            {"state": "Virginia", "value": 100},
+            {"state": "California", "value": 90},
+            {"state": "Texas", "value": 80},
+        ],
+    )
+    assert kept == [item]
+    assert dropped == []
+
+
+def test_named_rank_is_rejected_when_row_order_disagrees() -> None:
+    kept, dropped = validate_key_numbers_against_rows(
+        [{"label": "Texas rank", "value": 2, "unit": ""}],
+        [
+            {"state": "Virginia", "value": 100},
+            {"state": "California", "value": 90},
+            {"state": "Texas", "value": 80},
+        ],
+    )
+    assert kept == []
+    assert dropped == ["Texas rank"]
 
 
 def test_endpoint_trend_delta_is_verified() -> None:
@@ -94,6 +126,38 @@ def test_how_much_is_always_an_aggregate_contract() -> None:
         },
     )
     assert contract.operation == "aggregate"
+
+
+def test_filtered_output_dimension_canonicalizes_breakdown_to_comparison() -> None:
+    plan = semantic_plan_from_routing(
+        {
+            "operation": "breakdown",
+            "filter_columns": ["state"],
+            "semantic_plan": {
+                "operation": "breakdown",
+                "statistic": "value",
+                "result_scope": "grouped",
+                "output_dimensions": ["state"],
+            },
+        }
+    )
+    assert plan.operation == "comparison"
+
+
+def test_different_filter_and_output_dimensions_remain_breakdown() -> None:
+    plan = semantic_plan_from_routing(
+        {
+            "operation": "breakdown",
+            "filter_columns": ["state"],
+            "semantic_plan": {
+                "operation": "breakdown",
+                "statistic": "value",
+                "result_scope": "grouped",
+                "output_dimensions": ["agency_name"],
+            },
+        }
+    )
+    assert plan.operation == "breakdown"
 
 
 def test_reasoning_key_number_can_use_an_earlier_independent_query() -> None:
@@ -158,4 +222,40 @@ def test_flow_scope_guard_accepts_explicit_intra_state_disclosure(monkeypatch) -
         )
     finally:
         client.clear_stub()
+    assert verdict["faithful"] is True
+
+
+def test_combined_currency_comparison_is_checked_before_llm_judge() -> None:
+    verdict = judge_faithfulness(
+        "Which five states receive the most subaward inflow?",
+        "California leads with $79.8B, more than Virginia ($55.9B) and Florida ($27.1B) combined.",
+        [
+            {"state": "California", "inflow": 79.8e9},
+            {"state": "Virginia", "inflow": 55.9e9},
+            {"state": "Florida", "inflow": 27.1e9},
+        ],
+    )
+
+    assert verdict["faithful"] is False
+    assert "combined-total comparison" in verdict["reason"]
+
+
+def test_correct_currency_gap_reaches_llm_judge() -> None:
+    client.set_stub(
+        lambda messages, json_mode, purpose: json.dumps(
+            {"faithful": True, "complete": True, "reason": "Arithmetic is supported."}
+        )
+    )
+    try:
+        verdict = judge_faithfulness(
+            "Compare Maryland and Virginia grants.",
+            "Maryland received $30.6B versus Virginia's $26.7B, a gap of $3.9B.",
+            [
+                {"state": "Maryland", "grants": 30.6e9},
+                {"state": "Virginia", "grants": 26.7e9},
+            ],
+        )
+    finally:
+        client.clear_stub()
+
     assert verdict["faithful"] is True

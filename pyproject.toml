@@ -1,0 +1,11 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.pytest.ini_options]
+# The suite has no async fixtures. Disable globally installed pytest-asyncio
+# rather than carrying a plugin-specific configuration file and warning.
+addopts = "-p no:asyncio"

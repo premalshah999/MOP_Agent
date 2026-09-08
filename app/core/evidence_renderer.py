@@ -13,11 +13,11 @@ from typing import Any
 
 from app.core.formatting import format_key_number
 
-
 _MONEY_COLUMN_RE = re.compile(
     r"contract|grant|payment|fund|amount|subaward|subcontract|inflow|outflow|spend|revenue|income",
     re.IGNORECASE,
 )
+
 
 def _cell(value: Any) -> str:
     if value is None:
@@ -63,26 +63,23 @@ def _scalar_result(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
         display_value += f" {formatted['unit']}"
     entity = f" for {', '.join(dimensions[:2])}" if dimensions else ""
     return {
-        "answer": f"Verified {label.lower()}{entity}: **{display_value}**.",
+        "answer": f"Validated {label.lower()}{entity}: **{display_value}**.",
         "key_numbers": [raw_key_number],
-        "caveats": [
-            "The value is copied directly from the validated query result."
-        ],
+        "caveats": ["The value is copied directly from the validated query result."],
         "confidence": "high",
         "valid": True,
     }
 
 
-def render_verified_rows(
+def render_validated_rows(
     rows: list[dict[str, Any]],
     *,
     truncated: bool = False,
     max_rows: int = 25,
-    fallback: bool = True,
 ) -> dict[str, Any]:
     if not rows:
         return {
-            "answer": "The verified query returned no rows.",
+            "answer": "The validated query returned no rows.",
             "key_numbers": [],
             "caveats": [],
             "confidence": "low",
@@ -90,19 +87,12 @@ def render_verified_rows(
         }
     scalar = _scalar_result(rows)
     if scalar is not None:
-        if not fallback:
-            scalar["caveats"] = [
-                "Analyst-verified query: the headline is copied directly from its validated result."
-            ]
         return scalar
     columns = list(rows[0])
     shown = rows[:max_rows]
     header = "| " + " | ".join(_cell(column) for column in columns) + " |"
     divider = "|" + "|".join("---" for _ in columns) + "|"
-    body = [
-        "| " + " | ".join(_cell(row.get(column)) for column in columns) + " |"
-        for row in shown
-    ]
+    body = ["| " + " | ".join(_cell(row.get(column)) for column in columns) + " |" for row in shown]
     omitted = len(rows) - len(shown)
     note = ""
     if omitted > 0 or truncated:
@@ -110,7 +100,7 @@ def render_verified_rows(
         suffix = " and the executor also capped the full result" if truncated else ""
         note = f"\n\n_Shown: {visible} of {len(rows)} returned rows{suffix}."
     answer = (
-        "Here are the verified query results, reported directly without additional interpretation.\n\n"
+        "Here are the validated query results, reported directly without additional interpretation.\n\n"
         + "\n".join([header, divider, *body])
         + note
     )

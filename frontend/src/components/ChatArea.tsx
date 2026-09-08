@@ -222,7 +222,6 @@ export function ChatArea({
         caveats: response.caveats ?? undefined,
         confidence: response.confidence ?? undefined,
         glossary: response.glossary ?? undefined,
-        verifiedQuery: response.verified_query ?? undefined,
       };
 
       onMessagesChange(threadId, [...updatedNext, assistantMsg]);
@@ -257,7 +256,7 @@ export function ChatArea({
       <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg)]">
         {/* Header — quiet: thread title + share. Connection state only shows
             when something is actually wrong. */}
-        <header className="shrink-0">
+        <header className="shrink-0 border-b border-[var(--line-soft)] bg-[var(--surface)]/70">
           <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-5 py-2.5">
             <div className="flex min-w-0 items-center gap-2.5">
               {onOpenSidebar && (
@@ -281,7 +280,7 @@ export function ChatArea({
                   type="button"
                   onClick={handleShare}
                   title="Get a read-only link to this chat"
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--ink)]"
+                  className="mop-outline-button inline-flex items-center gap-1.5 px-2.5 py-1.5"
                 >
                   {shareCopied ? <Check size={13} /> : <Share2 size={13} />}
                   {shareCopied ? 'Copied' : 'Share'}
@@ -292,7 +291,7 @@ export function ChatArea({
           {shareUrl && (
             <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-5 pb-2 text-[11px]">
               <span className="text-[var(--muted)]">Read-only link:</span>
-              <code className="flex-1 truncate rounded-lg border border-[var(--line-soft)] bg-[var(--surface)] px-2 py-1 text-[var(--ink-soft)]">{shareUrl}</code>
+              <code className="flex-1 truncate border border-[var(--line-soft)] bg-[var(--surface)] px-2 py-1 text-[var(--ink-soft)]">{shareUrl}</code>
               <button type="button" onClick={() => setShareUrl(null)} className="text-[var(--muted)] hover:text-[var(--ink)]">×</button>
             </div>
           )}
@@ -302,11 +301,17 @@ export function ChatArea({
           /* Empty state — serif greeting, centered composer, starter chips */
           <div className="flex flex-1 items-center justify-center overflow-y-auto px-4">
             <div className="w-full max-w-2xl pb-16">
-              <div className="flex items-center justify-center gap-3">
-                <Sparkle size={26} className="shrink-0 text-[var(--accent)]" fill="currentColor" />
-                <h1 className="font-display text-[32px] font-medium tracking-tight text-[var(--ink)] sm:text-[36px]">
-                  What would you like to know?
-                </h1>
+              <div className="text-center">
+                <div className="mop-kicker">Maryland Opportunity Project</div>
+                <div className="mt-3 flex items-center justify-center gap-3">
+                  <Sparkle size={22} className="shrink-0 text-[var(--brand-red)]" fill="currentColor" />
+                  <h1 className="font-display text-[34px] font-medium leading-tight tracking-tight text-[var(--ink)] sm:text-[42px]">
+                    Ask the data.
+                  </h1>
+                </div>
+                <p className="mx-auto mt-3 max-w-lg text-[13.5px] leading-6 text-[var(--muted)]">
+                  Explore public-policy evidence across Maryland and the United States.
+                </p>
               </div>
 
               {/* Composer */}
@@ -332,7 +337,7 @@ export function ChatArea({
                       type="button"
                       onClick={() => void send(q)}
                       disabled={isLoading}
-                      className="rounded-full border border-[var(--line)] bg-[var(--surface)] px-3.5 py-1.5 text-[12.5px] text-[var(--muted)] transition hover:border-[var(--muted-2)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-50"
+                      className="border border-[var(--line)] bg-[var(--surface)] px-3.5 py-2 text-[12px] text-[var(--muted)] transition hover:border-[var(--brand-red)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {q}
                     </button>
@@ -405,7 +410,7 @@ export function ChatArea({
   );
 }
 
-/* ── Composer — Claude-style rounded card with actions inside ── */
+/* ── Composer — quiet editorial input with MOP controls ── */
 interface ComposerProps {
   input: string;
   isLoading: boolean;
@@ -422,7 +427,7 @@ function Composer({ input, isLoading, placeholder, textareaRef, onChangeInput, o
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); onSend(); }}
-      className="transition-within rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-3.5 pb-2.5 pt-1 shadow-[0_2px_12px_rgba(31,30,29,0.05)]"
+      className="transition-within border border-[var(--line)] bg-[var(--surface)] px-3.5 pb-2.5 pt-1 shadow-[0_3px_14px_rgba(15,23,42,0.045)]"
     >
       <textarea
         ref={textareaRef}
@@ -443,10 +448,10 @@ function Composer({ input, isLoading, placeholder, textareaRef, onChangeInput, o
               disabled={isLoading}
               aria-pressed={!!reasoning}
               title={reasoning ? 'Extended analysis on — adds evidence checks and comparative analysis' : 'Extended analysis off'}
-              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium transition ${
+              className={`inline-flex items-center gap-1.5 border-b px-1 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] transition ${
                 reasoning
-                  ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
-                  : 'text-[var(--muted-2)] hover:bg-[var(--surface-2)] hover:text-[var(--muted)]'
+                  ? 'border-[var(--brand-red)] text-[var(--brand-red-dark)]'
+                  : 'border-transparent text-[var(--muted-2)] hover:text-[var(--ink)]'
               } disabled:opacity-50`}
             >
               <Lightbulb size={13} />
@@ -458,7 +463,7 @@ function Composer({ input, isLoading, placeholder, textareaRef, onChangeInput, o
           type="submit"
           disabled={!input.trim() || isLoading}
           aria-label={isLoading ? 'Sending...' : 'Send message'}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--accent)] text-white transition hover:bg-[var(--accent-hover)] disabled:bg-[var(--surface-2)] disabled:text-[var(--muted-2)]"
+          className="grid h-8 w-8 shrink-0 place-items-center bg-[var(--ink)] text-white transition hover:bg-[var(--brand-red)] disabled:bg-[var(--surface-2)] disabled:text-[var(--muted-2)]"
         >
           {isLoading ? <Loader2 size={15} className="animate-spin" /> : <ArrowUp size={15} strokeWidth={2.4} />}
         </button>

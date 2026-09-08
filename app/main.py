@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from contextlib import asynccontextmanager
@@ -10,16 +11,24 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.api.auth import LoginRequest, RegisterRequest, authenticate_user, create_token, get_current_user, register_user, update_profile
-from app.api.datasets import dataset_catalog, download_path
 from app.api.admin import is_admin, recent_feedback, recent_questions, usage_summary
+from app.api.auth import (
+    LoginRequest,
+    RegisterRequest,
+    authenticate_user,
+    create_token,
+    get_current_user,
+    register_user,
+    update_profile,
+)
+from app.api.datasets import dataset_catalog, download_path
 from app.api.feedback import FeedbackRequest, record_feedback
 from app.api.map_values import fetch_values
 from app.api.threads import (
@@ -36,12 +45,12 @@ from app.api.threads import (
     lookup_share,
     update_thread,
 )
-from app.core.orchestrator import PIPELINE_VERSION, answer_question
+from app.core.pipeline import PIPELINE_VERSION, answer_question
 from app.duckdb.connection import initialize_duckdb, list_registered_views
+from app.llm import client as llm_client
 from app.paths import DATA_DIR, FRONTEND_DIST, MANIFEST_PATH
 from app.semantic.registry import load_registry
 from app.storage.sqlite import init_storage
-
 
 load_dotenv()
 
@@ -51,6 +60,7 @@ _SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
 if _SENTRY_DSN:
     try:
         import sentry_sdk
+
         sentry_sdk.init(
             dsn=_SENTRY_DSN,
             traces_sample_rate=float(os.getenv("SENTRY_TRACES_RATE", "0.05")),
@@ -95,11 +105,13 @@ def _validate_production_config() -> None:
     }
     if len(secret) < 32 or secret in weak_secrets:
         problems.append("JWT_SECRET must be a non-placeholder secret of at least 32 characters")
-    deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    fallback_key = os.getenv("OPENAI_API_KEY", "").strip()
-    provider_key = deepseek_key or fallback_key
-    if not provider_key or provider_key.startswith(("replace-", "change-me")):
-        problems.append("a configured LLM provider key is required")
+    try:
+        provider = llm_client.provider_config()
+    except llm_client.LLMError as exc:
+        problems.append(str(exc))
+    else:
+        if not provider.key or provider.key.startswith(("replace-", "change-me")):
+            problems.append(f"a valid {provider.name} provider key is required")
     origins = os.getenv("ALLOWED_ORIGINS", "").strip()
     hosts = os.getenv("TRUSTED_HOSTS", "").strip()
     if not origins or "your-domain.example" in origins or origins == "*":
@@ -133,6 +145,8 @@ def _health_payload() -> dict[str, Any]:
         },
         "pipeline": {
             "version": PIPELINE_VERSION,
+            "provider": llm_client.active_provider(),
+            "provider_warnings": llm_client.provider_warnings(),
             "architecture": [
                 "stage1_intent",
                 "stage2_routing",
@@ -156,6 +170,7 @@ async def lifespan(app: FastAPI):
     # retry with backoff instead of killing the worker (first worker wins,
     # the rest settle within a few seconds).
     import time as _time
+
     _validate_production_config()
     for attempt in range(30):
         try:
@@ -172,14 +187,28 @@ async def lifespan(app: FastAPI):
 
 
 def _client_ip(request: Request) -> str:
-    """Real client IP behind nginx (which forwards X-Forwarded-For)."""
+    """Return the client address supplied by the trusted edge proxy."""
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip
     xff = request.headers.get("x-forwarded-for", "")
     if xff:
         return xff.split(",")[0].strip()
     return request.client.host if request.client else "anon"
 
 
-limiter = Limiter(key_func=_client_ip)
+def _rate_limit_key(request: Request) -> str:
+    """Isolate authenticated users' limits, including behind shared NATs."""
+    if not request.url.path.startswith("/api/auth/"):
+        authorization = request.headers.get("authorization", "")
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token.strip():
+            digest = hashlib.sha256(token.strip().encode("utf-8")).hexdigest()
+            return f"user:{digest}"
+    return f"ip:{_client_ip(request)}"
+
+
+limiter = Limiter(key_func=_rate_limit_key)
 
 app = FastAPI(title="MOP Controlled Analytics Assistant", lifespan=lifespan)
 app.state.limiter = limiter
@@ -198,9 +227,25 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
         request_id,
     )
 
-origins = [item.strip() for item in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if item.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins or ["*"], allow_methods=["*"], allow_headers=["*"])
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=[item.strip() for item in os.getenv("TRUSTED_HOSTS", "127.0.0.1,localhost,testserver").split(",") if item.strip()])
+
+origins = [
+    item.strip()
+    for item in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(
+        ","
+    )
+    if item.strip()
+]
+app.add_middleware(
+    CORSMiddleware, allow_origins=origins or ["*"], allow_methods=["*"], allow_headers=["*"]
+)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=[
+        item.strip()
+        for item in os.getenv("TRUSTED_HOSTS", "127.0.0.1,localhost,testserver").split(",")
+        if item.strip()
+    ],
+)
 
 
 @app.middleware("http")
@@ -213,7 +258,11 @@ async def request_context(request: Request, call_next):
     except Exception as exc:
         debug_errors = os.getenv("DEBUG_ERRORS", "").lower() in {"1", "true", "yes"}
         detail = str(exc) if debug_errors else "Unexpected server error."
-        response = _json(500, {"error": "Internal server error", "detail": detail, "request_id": request_id}, request_id)
+        response = _json(
+            500,
+            {"error": "Internal server error", "detail": detail, "request_id": request_id},
+            request_id,
+        )
     response.headers["X-Request-ID"] = request_id
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -223,7 +272,9 @@ async def request_context(request: Request, call_next):
     # — browsers ignore it on HTTP. Switch max-age higher (e.g. 63072000) once
     # TLS is in place and you've verified no HTTP regressions.
     response.headers.setdefault("Strict-Transport-Security", "max-age=300; includeSubDomains")
-    response.headers.setdefault("X-Response-Time-Ms", str(int((time.perf_counter() - started) * 1000)))
+    response.headers.setdefault(
+        "X-Response-Time-Ms", str(int((time.perf_counter() - started) * 1000))
+    )
     return response
 
 
@@ -244,6 +295,7 @@ def _probe_llm() -> tuple[bool, str]:
     analytical question. Caller decides whether to 200 or 503 on this."""
     try:
         from app.llm import client as _llm
+
         out = _llm.chat_json(
             [
                 {"role": "system", "content": "Return JSON only."},
@@ -261,6 +313,7 @@ def _probe_llm() -> tuple[bool, str]:
 def _probe_duckdb() -> tuple[bool, str]:
     try:
         from app.duckdb.connection import execute_select
+
         execute_select("SELECT 1 AS v", max_rows=1)
         return (True, "ok")
     except Exception as exc:
@@ -270,6 +323,7 @@ def _probe_duckdb() -> tuple[bool, str]:
 def _probe_sqlite() -> tuple[bool, str]:
     try:
         from app.storage.sqlite import connect
+
         with connect() as conn:
             conn.execute("SELECT 1").fetchone()
         return (True, "ok")
@@ -327,10 +381,16 @@ class UpdateProfileRequest(BaseModel):
 
 
 @app.patch("/api/auth/me")
-def update_me(body: UpdateProfileRequest, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+def update_me(
+    body: UpdateProfileRequest, request: Request, user: dict[str, Any] = Depends(get_current_user)
+):
     updated = update_profile(user["id"], name=body.name)
     # Re-issue the token so the embedded name matches the new profile.
-    return _json(200, {"user": {**updated, "is_admin": is_admin(updated)}, "token": create_token(updated)}, request.state.request_id)
+    return _json(
+        200,
+        {"user": {**updated, "is_admin": is_admin(updated)}, "token": create_token(updated)},
+        request.state.request_id,
+    )
 
 
 @app.get("/api/admin/usage")
@@ -339,36 +399,57 @@ def admin_usage(request: Request, user: dict[str, Any] = Depends(get_current_use
 
 
 @app.get("/api/admin/questions")
-def admin_questions(request: Request, user: dict[str, Any] = Depends(get_current_user), limit: int = 50):
+def admin_questions(
+    request: Request, user: dict[str, Any] = Depends(get_current_user), limit: int = 50
+):
     return _json(200, {"items": recent_questions(user, limit=limit)}, request.state.request_id)
 
 
 @app.get("/api/admin/feedback")
-def admin_feedback(request: Request, user: dict[str, Any] = Depends(get_current_user), limit: int = 50):
+def admin_feedback(
+    request: Request, user: dict[str, Any] = Depends(get_current_user), limit: int = 50
+):
     return _json(200, {"items": recent_feedback(user, limit=limit)}, request.state.request_id)
 
 
 @app.get("/api/threads")
 def api_list_threads(request: Request, user: dict[str, Any] = Depends(get_current_user)):
-    return _json(200, {"threads": [format_thread(thread) for thread in list_threads(user["id"])]}, request.state.request_id)
+    return _json(
+        200,
+        {"threads": [format_thread(thread) for thread in list_threads(user["id"])]},
+        request.state.request_id,
+    )
 
 
 @app.post("/api/threads")
-def api_create_thread(body: CreateThreadRequest, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+def api_create_thread(
+    body: CreateThreadRequest, request: Request, user: dict[str, Any] = Depends(get_current_user)
+):
     thread = create_thread(user["id"], body.dataset_id, body.title)
     return _json(201, {"thread": format_thread(thread, messages=[])}, request.state.request_id)
 
 
 @app.get("/api/threads/{thread_id}")
-def api_get_thread(thread_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+def api_get_thread(
+    thread_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)
+):
     thread = get_thread(thread_id, user["id"])
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
-    return _json(200, {"thread": format_thread(thread, messages=list_messages(thread_id))}, request.state.request_id)
+    return _json(
+        200,
+        {"thread": format_thread(thread, messages=list_messages(thread_id))},
+        request.state.request_id,
+    )
 
 
 @app.put("/api/threads/{thread_id}")
-def api_update_thread(thread_id: str, body: UpdateThreadRequest, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+def api_update_thread(
+    thread_id: str,
+    body: UpdateThreadRequest,
+    request: Request,
+    user: dict[str, Any] = Depends(get_current_user),
+):
     thread = update_thread(thread_id, user["id"], title=body.title, dataset_id=body.dataset_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -376,7 +457,9 @@ def api_update_thread(thread_id: str, body: UpdateThreadRequest, request: Reques
 
 
 @app.delete("/api/threads/{thread_id}")
-def api_delete_thread(thread_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+def api_delete_thread(
+    thread_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)
+):
     if not delete_thread(thread_id, user["id"]):
         raise HTTPException(status_code=404, detail="Thread not found")
     return _json(200, {"ok": True}, request.state.request_id)
@@ -388,7 +471,9 @@ def api_delete_all_threads(request: Request, user: dict[str, Any] = Depends(get_
 
 
 @app.post("/api/threads/{thread_id}/share")
-def api_share_thread(thread_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+def api_share_thread(
+    thread_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)
+):
     result = create_share(thread_id, user["id"])
     if not result:
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -412,15 +497,23 @@ def api_shared_thread(token: str, request: Request):
 
 
 @app.get("/api/threads/{thread_id}/messages")
-def api_thread_messages(thread_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+def api_thread_messages(
+    thread_id: str, request: Request, user: dict[str, Any] = Depends(get_current_user)
+):
     if not get_thread(thread_id, user["id"]):
         raise HTTPException(status_code=404, detail="Thread not found")
-    return _json(200, {"messages": [format_message(message) for message in list_messages(thread_id)]}, request.state.request_id)
+    return _json(
+        200,
+        {"messages": [format_message(message) for message in list_messages(thread_id)]},
+        request.state.request_id,
+    )
 
 
 @app.post("/api/ask/stream")
 @limiter.limit("30/minute;200/hour")
-def ask_stream(body: AskRequest, request: Request, user: dict[str, Any] = Depends(get_current_user)):
+def ask_stream(
+    body: AskRequest, request: Request, user: dict[str, Any] = Depends(get_current_user)
+):
     """SSE stream of pipeline events.
 
     Emits `stage` / `tool` / `tool_start` events as the pipeline progresses, then
@@ -486,7 +579,6 @@ def ask_stream(body: AskRequest, request: Request, user: dict[str, Any] = Depend
                 "caveats": result.get("caveats"),
                 "confidence": result.get("confidence"),
                 "glossary": result.get("glossary"),
-                "verifiedQuery": result.get("verified_query"),
                 "suggestedFollowups": result.get("suggested_followups"),
                 "resolution": result.get("resolution"),
                 "mapIntent": result.get("mapIntent"),
@@ -495,7 +587,9 @@ def ask_stream(body: AskRequest, request: Request, user: dict[str, Any] = Depend
                 "pipelineTrace": result.get("pipelineTrace"),
                 "quality": result.get("quality"),
             }
-            assistant_message = create_message(thread["id"], "assistant", result["answer"], assistant_payload)
+            assistant_message = create_message(
+                thread["id"], "assistant", result["answer"], assistant_payload
+            )
             final_result.update(
                 {
                     **result,
@@ -580,7 +674,6 @@ def ask(body: AskRequest, request: Request, user: dict[str, Any] = Depends(get_c
         "caveats": result.get("caveats"),
         "confidence": result.get("confidence"),
         "glossary": result.get("glossary"),
-        "verifiedQuery": result.get("verified_query"),
         "suggestedFollowups": result.get("suggested_followups"),
         "resolution": result.get("resolution"),
         "mapIntent": result.get("mapIntent"),
@@ -589,7 +682,9 @@ def ask(body: AskRequest, request: Request, user: dict[str, Any] = Depends(get_c
         "pipelineTrace": result.get("pipelineTrace"),
         "quality": result.get("quality"),
     }
-    assistant_message = create_message(thread["id"], "assistant", result["answer"], assistant_payload)
+    assistant_message = create_message(
+        thread["id"], "assistant", result["answer"], assistant_payload
+    )
     payload = {
         **result,
         "thread_id": thread["id"],
@@ -621,7 +716,14 @@ def api_download_dataset(table_name: str, format: str = "parquet"):
 
 
 @app.get("/api/values")
-def api_values(dataset: str, level: str, variable: str, request: Request, year: str | None = None, state: str | None = None):
+def api_values(
+    dataset: str,
+    level: str,
+    variable: str,
+    request: Request,
+    year: str | None = None,
+    state: str | None = None,
+):
     rows = fetch_values(dataset, level, variable, year=year, state=state)
     return _json(200, {"rows": rows, "row_count": len(rows)}, request.state.request_id)
 
@@ -631,4 +733,10 @@ if BOUNDARIES_DIR.exists():
     app.mount("/geo", StaticFiles(directory=str(BOUNDARIES_DIR), html=False), name="geo")
 
 if _frontend_built():
+
+    @app.get("/share/{share_token}", include_in_schema=False)
+    def shared_thread_page(share_token: str):
+        """Serve the SPA shell for direct visits to public shared threads."""
+        return FileResponse(FRONTEND_DIST / "index.html")
+
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")

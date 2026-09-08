@@ -8,7 +8,6 @@ from typing import Any
 
 from app.paths import RUNTIME_DIR
 
-
 DB_PATH = Path(os.getenv("SQLITE_DB_PATH", str(RUNTIME_DIR / "mop.sqlite3"))).expanduser().resolve()
 
 

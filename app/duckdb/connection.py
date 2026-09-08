@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from threading import Lock
@@ -8,9 +9,8 @@ from typing import Any
 
 import duckdb
 
-from app.paths import MANIFEST_PATH, RUNTIME_DIR, ROOT_DIR
+from app.paths import MANIFEST_PATH, ROOT_DIR, RUNTIME_DIR
 from app.semantic.registry import mart_view_name
-
 
 DB_PATH = Path(os.getenv("DUCKDB_PATH", str(RUNTIME_DIR / "mop.duckdb"))).expanduser().resolve()
 _INIT_LOCK = Lock()
@@ -36,13 +36,20 @@ def initialize_duckdb() -> dict[str, Any]:
                 existing = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
                 schemas_match = all(
                     mart_view_name(table) in existing
-                    and [row[0] for row in conn.execute(f'DESCRIBE "{mart_view_name(table)}"').fetchall()]
+                    and [
+                        row[0]
+                        for row in conn.execute(f'DESCRIBE "{mart_view_name(table)}"').fetchall()
+                    ]
                     == list(info.get("columns", []))
                     for table, info in manifest.items()
                 )
             if schemas_match:
                 _INITIALIZED = True
-                return {"initialized": True, "db_path": str(DB_PATH), "registered_view_count": len(manifest)}
+                return {
+                    "initialized": True,
+                    "db_path": str(DB_PATH),
+                    "registered_view_count": len(manifest),
+                }
         except Exception:
             pass  # db file missing or writer holds the lock — take the write path
         with _connect(read_only=False) as conn:
@@ -59,7 +66,11 @@ def initialize_duckdb() -> dict[str, Any]:
                     f"SELECT {projection} FROM read_parquet('{escaped_path}')"
                 )
         _INITIALIZED = True
-        return {"initialized": True, "db_path": str(DB_PATH), "registered_view_count": len(manifest)}
+        return {
+            "initialized": True,
+            "db_path": str(DB_PATH),
+            "registered_view_count": len(manifest),
+        }
 
 
 def list_registered_views() -> list[str]:
@@ -72,6 +83,15 @@ def execute_select(sql: str, *, max_rows: int = 250) -> list[dict[str, Any]]:
     initialize_duckdb()
     wrapped = f"SELECT * FROM ({sql.rstrip(';')}) AS limited_result LIMIT {max_rows}"
     with _connect(read_only=True) as conn:
-        df = conn.execute(wrapped).df()
-    cleaned = df.astype(object).where(df.notna(), None)
-    return cleaned.to_dict(orient="records")
+        cursor = conn.execute(wrapped)
+        columns = [description[0] for description in cursor.description]
+        values = cursor.fetchall()
+
+    def clean(value: Any) -> Any:
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+
+    return [
+        {column: clean(value) for column, value in zip(columns, row, strict=True)} for row in values
+    ]

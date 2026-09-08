@@ -5,6 +5,23 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    // MapLibre and Vega remain lazy and load only when a user opens a map or
+    // chart. Split always-used UI libraries for better browser caching while
+    // allowing those two intentional feature bundles to exceed Vite's generic
+    // 500 kB warning threshold.
+    chunkSizeWarningLimit: 1_100,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-icons': ['lucide-react'],
+          'vendor-markdown': ['react-markdown', 'remark-gfm'],
+          'vendor-motion': ['motion'],
+          'vendor-react': ['react', 'react-dom'],
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

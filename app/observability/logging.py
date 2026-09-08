@@ -8,8 +8,8 @@ from typing import Any
 
 from app.paths import RUNTIME_DIR
 
-
 LOG_PATH = RUNTIME_DIR / "query_log.jsonl"
+LLM_LOG_PATH = RUNTIME_DIR / "llm_calls.jsonl"
 
 
 def _max_bytes() -> int:
@@ -43,7 +43,7 @@ def _maybe_rotate(path: Path) -> None:
     pattern = f"{path.stem}-*{path.suffix}"
     archives = sorted(path.parent.glob(pattern))
     excess = len(archives) - _keep_archives()
-    for old in archives[:max(0, excess)]:
+    for old in archives[: max(0, excess)]:
         try:
             old.unlink()
         except OSError:
@@ -59,3 +59,26 @@ def log_pipeline_event(event: dict[str, Any]) -> None:
     }
     with LOG_PATH.open("a") as f:
         f.write(json.dumps(payload, default=str, sort_keys=True) + "\n")
+
+
+def log_llm_event(event: dict[str, Any]) -> None:
+    """Record model/prompt drift metadata without storing prompt or response text.
+
+    This telemetry must never become an availability dependency. It is a
+    shadow signal for comparing provider versions, prompt fingerprints,
+    latency, token use, and output hashes across otherwise identical calls.
+    """
+
+    try:
+        LLM_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _maybe_rotate(LLM_LOG_PATH)
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **event,
+        }
+        with LLM_LOG_PATH.open("a") as f:
+            f.write(json.dumps(payload, default=str, sort_keys=True) + "\n")
+    except OSError:
+        # Observability is deliberately non-blocking: losing one drift sample
+        # must not prevent an otherwise valid analytical answer.
+        return

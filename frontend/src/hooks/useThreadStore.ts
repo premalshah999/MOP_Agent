@@ -45,7 +45,6 @@ function toMessage(api: ApiMessage): ChatMessage {
     caveats: api.caveats,
     confidence: api.confidence,
     glossary: api.glossary,
-    verifiedQuery: api.verifiedQuery ?? undefined,
     suggestedFollowups: api.suggestedFollowups,
   };
 }

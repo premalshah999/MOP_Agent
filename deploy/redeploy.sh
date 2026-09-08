@@ -20,12 +20,21 @@ if [[ ! -f .env ]]; then
 fi
 
 JWT_VALUE="$(sed -n 's/^JWT_SECRET=//p' .env | tail -n 1)"
+LLM_PROVIDER_VALUE="$(sed -n 's/^LLM_PROVIDER=//p' .env | tail -n 1)"
 DEEPSEEK_VALUE="$(sed -n 's/^DEEPSEEK_API_KEY=//p' .env | tail -n 1)"
+GEMINI_VALUE="$(sed -n 's/^GEMINI_API_KEY=//p' .env | tail -n 1)"
 OPENAI_VALUE="$(sed -n 's/^OPENAI_API_KEY=//p' .env | tail -n 1)"
 LLM_INVALID=false
-if [[ -n "$DEEPSEEK_VALUE" ]]; then
-  [[ "$DEEPSEEK_VALUE" == replace-* ]] && LLM_INVALID=true
-elif [[ -z "$OPENAI_VALUE" || "$OPENAI_VALUE" == replace-* ]]; then
+case "${LLM_PROVIDER_VALUE:-auto}" in
+  deepseek) ACTIVE_LLM_KEY="$DEEPSEEK_VALUE" ;;
+  gemini) ACTIVE_LLM_KEY="$GEMINI_VALUE" ;;
+  openai) ACTIVE_LLM_KEY="$OPENAI_VALUE" ;;
+  auto)
+    ACTIVE_LLM_KEY="${DEEPSEEK_VALUE:-${GEMINI_VALUE:-$OPENAI_VALUE}}"
+    ;;
+  *) ACTIVE_LLM_KEY=""; LLM_INVALID=true ;;
+esac
+if [[ -z "$ACTIVE_LLM_KEY" || "$ACTIVE_LLM_KEY" == replace-* || "$ACTIVE_LLM_KEY" == change-me* ]]; then
   LLM_INVALID=true
 fi
 if [[ ${#JWT_VALUE} -lt 32 ]] \

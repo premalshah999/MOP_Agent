@@ -31,13 +31,15 @@ def _period_label(dataset: Any) -> str:
     return ", ".join(years)
 
 
-def _example_question(dataset: Any, label: str, role: str) -> str:
+def _example_question(dataset: Any, label: str, role: str, unit: str = "") -> str:
     if role != "measure":
         return f"What can I analyze by {label.lower()} in the {dataset.display_name} data?"
     year = dataset.default_year
     period = f" in {year}" if year not in (None, "") else ""
     if dataset.id.startswith(("contract_", "spending_")):
-        return f"Which states received the most {label.lower()}{period}?"
+        if unit.casefold() == "usd" or "usd" in unit.casefold():
+            return f"Which states received the most {label.lower()}{period}?"
+        return f"Which states have the highest {label.lower()}{period}?"
     if dataset.id.startswith("gov_"):
         return f"Which states have the highest {label.lower()}?"
     if dataset.id.startswith("finra_"):
@@ -75,7 +77,12 @@ def _variables(dataset: Any) -> list[dict[str, Any]]:
                 "aggregation": metric.aggregation if metric else None,
                 "synonyms": synonyms,
                 "sampleValues": list(meta.get("sample_values") or [])[:6],
-                "exampleQuestion": _example_question(dataset, label, role),
+                "exampleQuestion": _example_question(
+                    dataset,
+                    label,
+                    role,
+                    str(metric.unit if metric else (meta.get("unit") or "")),
+                ),
             }
         )
     return variables
@@ -109,6 +116,7 @@ def dataset_catalog() -> list[dict[str, Any]]:
                 "rows": info.get("rows", 0),
                 "columns": info.get("columns", []),
                 "source": metadata.get("source"),
+                "sourceUrl": metadata.get("source_url"),
                 "geography": dataset.geography,
                 "yearColumn": dataset.year_column,
                 "defaultYear": dataset.default_year,
@@ -120,7 +128,9 @@ def dataset_catalog() -> list[dict[str, Any]]:
                 "runtimePath": info.get("path"),
                 "downloads": {
                     "parquet": f"/api/datasets/download/{dataset.table_name}?format=parquet",
-                    "xlsx": f"/api/datasets/download/{dataset.table_name}?format=xlsx" if info.get("source_file") else None,
+                    "xlsx": f"/api/datasets/download/{dataset.table_name}?format=xlsx"
+                    if info.get("source_file")
+                    else None,
                 },
             }
         )
@@ -134,10 +144,12 @@ def download_path(table_name: str, format_: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Unknown table")
     if format_ == "parquet":
         path = ROOT_DIR / info["path"]
+        media_type = "application/vnd.apache.parquet"
     elif format_ == "xlsx" and info.get("source_file"):
         path = ROOT_DIR / "data" / "uploads" / info["source_file"]
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     else:
         raise HTTPException(status_code=404, detail="Requested format is unavailable")
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=path.name)
+    return FileResponse(path, filename=path.name, media_type=media_type)

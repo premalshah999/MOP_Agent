@@ -8,24 +8,63 @@ visual instead of presenting a plausible-looking but incorrect picture.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
 from app.semantic.registry import get_dataset
 
-
 _NON_MEASURE = {
-    "state", "state_name", "county", "county_name", "cd_118", "fips",
-    "state_fips", "county_fips", "year", "Year", "act_dt_fis_yr",
-    "agency", "agency_name", "rcpt_state_name", "subawardee_state_name",
-    "rcpt_cd_name", "subawardee_cd_name", "rcpt_cty_name",
-    "subawardee_cty_name", "rcpt_state", "subawardee_state", "label",
-    "rank", "source", "destination", "origin", "Unnamed: 0",
+    "state",
+    "state_name",
+    "county",
+    "county_name",
+    "cd_118",
+    "fips",
+    "state_fips",
+    "county_fips",
+    "year",
+    "Year",
+    "act_dt_fis_yr",
+    "agency",
+    "agency_name",
+    "rcpt_state_name",
+    "subawardee_state_name",
+    "rcpt_cd_name",
+    "subawardee_cd_name",
+    "rcpt_cty_name",
+    "subawardee_cty_name",
+    "rcpt_state",
+    "subawardee_state",
+    "label",
+    "rank",
+    "rnk",
+    "rank_asc",
+    "rank_desc",
+    "position",
+    "sample_size",
+    "matched_count",
+    "eligible_count",
+    "total_districts",
+    "total_counties",
+    "total_states",
+    "source",
+    "destination",
+    "origin",
+    "Unnamed: 0",
 }
 _GEO_LABEL_PRIORITY = (
-    "county", "cd_118", "rcpt_cd_name", "subawardee_cd_name",
-    "rcpt_cty_name", "subawardee_cty_name", "rcpt_state_name",
-    "subawardee_state_name", "state", "agency", "label",
+    "county",
+    "cd_118",
+    "rcpt_cd_name",
+    "subawardee_cd_name",
+    "rcpt_cty_name",
+    "subawardee_cty_name",
+    "rcpt_state_name",
+    "subawardee_state_name",
+    "state",
+    "agency",
+    "label",
 )
 _YEAR_KEYS = ("Year", "year", "act_dt_fis_yr")
 _MONEY_HINT = re.compile(
@@ -34,30 +73,71 @@ _MONEY_HINT = re.compile(
     r"receiv|award|inflow|outflow|disburs|dollar",
     re.I,
 )
-_DISTRIBUTION_Q = re.compile(
-    r"distribut|histogram|spread|how .*vary|variation|range of", re.I
-)
+_DISTRIBUTION_Q = re.compile(r"distribut|histogram|spread|how .*vary|variation|range of", re.I)
 _COMPARE_Q = re.compile(r"\bcompare\b|\bvs\b|\bversus\b|\bbetween\b", re.I)
-_RELATIONSHIP_Q = re.compile(
-    r"correlat|relationship|association|\bversus\b|\bvs\.?\b", re.I
-)
-_BOTTOM_Q = re.compile(
-    r"\b(bottom|lowest|smallest|least|fewest|ascending)\b", re.I
-)
+_RELATIONSHIP_Q = re.compile(r"correlat|relationship|association|\bversus\b|\bvs\.?\b", re.I)
+_BOTTOM_Q = re.compile(r"\b(bottom|lowest|smallest|least|fewest|ascending)\b", re.I)
 
 _US_STATES = (
-    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
-    "connecticut", "delaware", "district of columbia", "florida", "georgia",
-    "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky",
-    "louisiana", "maine", "maryland", "massachusetts", "michigan", "minnesota",
-    "mississippi", "missouri", "montana", "nebraska", "nevada", "new hampshire",
-    "new jersey", "new mexico", "new york", "north carolina", "north dakota",
-    "ohio", "oklahoma", "oregon", "pennsylvania", "rhode island",
-    "south carolina", "south dakota", "tennessee", "texas", "utah", "vermont",
-    "virginia", "washington", "west virginia", "wisconsin", "wyoming",
-    "puerto rico", "guam", "american samoa", "virgin islands",
-    "u.s. virgin islands", "united states virgin islands",
-    "northern mariana islands", "commonwealth of northern mariana islands",
+    "alabama",
+    "alaska",
+    "arizona",
+    "arkansas",
+    "california",
+    "colorado",
+    "connecticut",
+    "delaware",
+    "district of columbia",
+    "florida",
+    "georgia",
+    "hawaii",
+    "idaho",
+    "illinois",
+    "indiana",
+    "iowa",
+    "kansas",
+    "kentucky",
+    "louisiana",
+    "maine",
+    "maryland",
+    "massachusetts",
+    "michigan",
+    "minnesota",
+    "mississippi",
+    "missouri",
+    "montana",
+    "nebraska",
+    "nevada",
+    "new hampshire",
+    "new jersey",
+    "new mexico",
+    "new york",
+    "north carolina",
+    "north dakota",
+    "ohio",
+    "oklahoma",
+    "oregon",
+    "pennsylvania",
+    "rhode island",
+    "south carolina",
+    "south dakota",
+    "tennessee",
+    "texas",
+    "utah",
+    "vermont",
+    "virginia",
+    "washington",
+    "west virginia",
+    "wisconsin",
+    "wyoming",
+    "puerto rico",
+    "guam",
+    "american samoa",
+    "virgin islands",
+    "u.s. virgin islands",
+    "united states virgin islands",
+    "northern mariana islands",
+    "commonwealth of northern mariana islands",
     "commonwealth of the northern mariana islands",
 )
 _STATE_DISPLAY_NAMES = {name.casefold(): name.title() for name in _US_STATES}
@@ -78,7 +158,11 @@ def _state_in_question(question: str) -> str | None:
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
 
 
 def _numeric_columns(rows: list[dict[str, Any]]) -> list[str]:
@@ -126,6 +210,34 @@ def _ordered_measures(
     """Order returned numeric fields by the catalog-routed metrics, then text."""
     remaining = list(numeric)
     ordered: list[str] = []
+    formula = routing.get("formula") or {}
+    operator = str(formula.get("operator") or "none")
+    if operator not in {"none", "identity"}:
+        output_tokens = _tokens(str(formula.get("output_label") or ""))
+        derived_hints = {
+            "divide": {"rate", "ratio", "share", "percent", "per", "capita", "resident"},
+            "subtract": {"difference", "gap", "delta", "net"},
+            "add": {"combined", "sum", "total"},
+            "multiply": {"derived", "estimated", "count"},
+            "net_flow": {"net", "flow"},
+        }.get(operator, set())
+        matches = sorted(
+            remaining,
+            key=lambda column: (
+                len(output_tokens & _tokens(column)) + 10 * len(derived_hints & _tokens(column))
+            ),
+            reverse=True,
+        )
+        if (
+            matches
+            and (
+                len(output_tokens & _tokens(matches[0]))
+                + 10 * len(derived_hints & _tokens(matches[0]))
+            )
+            > 0
+        ):
+            ordered.append(matches[0])
+            remaining.remove(matches[0])
     for expected in routing.get("columns") or []:
         expected_tokens = _tokens(str(expected))
         matches = sorted(
@@ -171,7 +283,9 @@ def _metric_profile(
             continue
         for column, metric in dataset.metrics.items():
             candidates = {column, metric.label, *metric.synonyms}
-            if any(normalized == candidate.casefold().replace("_", " ") for candidate in candidates):
+            if any(
+                normalized == candidate.casefold().replace("_", " ") for candidate in candidates
+            ):
                 best = (100, metric)
                 break
             overlap = len(_tokens(measure) & _tokens(column))
@@ -184,10 +298,42 @@ def _metric_profile(
 
     label = best[1].label if best else measure.replace("_", " ")
     unit = str(best[1].unit) if best else "value"
+    formula = routing.get("formula") or {}
+    operator = str(formula.get("operator") or "none")
+    output_label = str(formula.get("output_label") or "").strip()
+    derived_tokens = {
+        "divide": {"rate", "ratio", "share", "percent", "per", "capita", "resident"},
+        "subtract": {"difference", "gap", "delta", "net"},
+        "add": {"combined", "sum", "total"},
+        "multiply": {"derived", "estimated", "count"},
+        "net_flow": {"net", "flow"},
+    }.get(operator, set())
+    output_overlap = _tokens(measure) & _tokens(output_label)
+    is_derived = operator not in {"none", "identity"} and bool(
+        (_tokens(measure) & derived_tokens) or len(output_overlap) >= 2
+    )
+    if is_derived:
+        label = output_label or label
+        result_unit = str(routing.get("result_unit") or "unspecified")
+        unit = {
+            "usd": "USD",
+            "persons": "persons",
+            "percent": "percent",
+            "ratio": "ratio",
+            "count": "count",
+            "correlation": "correlation",
+            "index": "index",
+        }.get(result_unit, unit)
+        if operator == "divide":
+            numerator = str((formula.get("operands") or [""])[0])
+            if _MONEY_HINT.search(numerator):
+                unit = "USD"
     lowered = normalized
     numeric_values = values or []
     catalog_metric_id = str(best[1].id).lower() if best else ""
-    if "subaward" in lowered or "subaward" in catalog_metric_id:
+    if is_derived:
+        pass
+    elif "subaward" in lowered or "subaward" in catalog_metric_id:
         # state_flow's physical field is named subaward_amount_year even
         # though the table has no year dimension. Never expose that storage
         # artifact as a metric label.
@@ -288,6 +434,71 @@ def build_charts(
     routing: dict[str, Any],
     rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    if len(rows) == 1 and str(routing.get("operation") or "").casefold() == "correlation":
+        row = rows[0]
+        coefficient_key = next(
+            (
+                key
+                for key, value in row.items()
+                if _is_number(value) and "correlation" in str(key).casefold()
+            ),
+            None,
+        )
+        if coefficient_key is not None:
+            coefficient = float(row[coefficient_key])
+            sample_key = next(
+                (
+                    key
+                    for key, value in row.items()
+                    if _is_number(value)
+                    and re.search(r"sample|count|matched|\bn\b", str(key), re.I)
+                ),
+                None,
+            )
+            spec = _spec_base()
+            spec.update(
+                {
+                    "data": {"values": [{"coefficient": coefficient}]},
+                    "height": 90,
+                    "layer": [
+                        {
+                            "mark": {"type": "rule", "color": "#8c8b83", "strokeWidth": 1},
+                            "encoding": {"x": {"datum": 0}},
+                        },
+                        {
+                            "mark": {
+                                "type": "point",
+                                "filled": True,
+                                "size": 180,
+                                "color": _PRIMARY,
+                                "tooltip": True,
+                            },
+                            "encoding": {
+                                "x": {
+                                    "field": "coefficient",
+                                    "type": "quantitative",
+                                    "scale": {"domain": [-1, 1]},
+                                    "axis": {"title": "Correlation (r)", "format": ".2f"},
+                                },
+                                "tooltip": [
+                                    {
+                                        "field": "coefficient",
+                                        "type": "quantitative",
+                                        "title": "Correlation (r)",
+                                        "format": ".3f",
+                                    }
+                                ],
+                            },
+                        },
+                    ],
+                }
+            )
+            subtitle = (
+                f"Paired observations: {int(float(row[sample_key]))}"
+                if sample_key is not None
+                else "Range: -1 to 1"
+            )
+            return [{"title": "Correlation coefficient", "subtitle": subtitle, "spec": spec}]
     if len(rows) < 2:
         return []
     numeric = _numeric_columns(rows)
@@ -317,26 +528,49 @@ def build_charts(
                 if _is_number(row.get(measure))
             ]
             spec = _spec_base()
-            spec.update({
-                "data": {"values": data},
-                "height": min(420, 23 * len(agencies) + 50),
-                "mark": {"type": "rect", "tooltip": True, "cornerRadius": 2, "stroke": "#ffffff", "strokeWidth": 1},
-                "encoding": {
-                    "y": {"field": "agency", "type": "nominal", "axis": {"title": None, "labelLimit": 220}},
-                    "x": {"field": "state", "type": "nominal", "axis": {"title": None, "labelAngle": -45, "labelLimit": 80}},
-                    "color": {
-                        "field": "value", "type": "quantitative",
-                        "scale": {"scheme": "orangered"},
-                        "legend": _quant_legend(profile),
+            spec.update(
+                {
+                    "data": {"values": data},
+                    "height": min(420, 23 * len(agencies) + 50),
+                    "mark": {
+                        "type": "rect",
+                        "tooltip": True,
+                        "cornerRadius": 2,
+                        "stroke": "#ffffff",
+                        "strokeWidth": 1,
                     },
-                    "tooltip": [
-                        {"field": "agency", "type": "nominal", "title": "Agency"},
-                        {"field": "state", "type": "nominal", "title": "State"},
-                        _value_tooltip("value", profile),
-                    ],
-                },
-            })
-            return [{"title": f"{profile['label']} by agency and state", "subtitle": f"{len(agencies)} agencies across {len(states)} states", "spec": spec}]
+                    "encoding": {
+                        "y": {
+                            "field": "agency",
+                            "type": "nominal",
+                            "axis": {"title": None, "labelLimit": 220},
+                        },
+                        "x": {
+                            "field": "state",
+                            "type": "nominal",
+                            "axis": {"title": None, "labelAngle": -45, "labelLimit": 80},
+                        },
+                        "color": {
+                            "field": "value",
+                            "type": "quantitative",
+                            "scale": {"scheme": "orangered"},
+                            "legend": _quant_legend(profile),
+                        },
+                        "tooltip": [
+                            {"field": "agency", "type": "nominal", "title": "Agency"},
+                            {"field": "state", "type": "nominal", "title": "State"},
+                            _value_tooltip("value", profile),
+                        ],
+                    },
+                }
+            )
+            return [
+                {
+                    "title": f"{profile['label']} by agency and state",
+                    "subtitle": f"{len(agencies)} agencies across {len(states)} states",
+                    "spec": spec,
+                }
+            ]
 
     # One or several time series. The previous implementation merged multiple
     # states into one zig-zagging line because it discarded the series label.
@@ -344,8 +578,7 @@ def build_charts(
         values = [float(row[measure]) for row in rows if _is_number(row.get(measure))]
         profile = _metric_profile(measure, routing, values)
         series_values = {
-            str(row.get(label_col)) for row in rows
-            if label_col and row.get(label_col) is not None
+            str(row.get(label_col)) for row in rows if label_col and row.get(label_col) is not None
         }
         use_series = bool(label_col and 2 <= len(series_values) <= 8)
         data = sorted(
@@ -353,7 +586,11 @@ def build_charts(
                 {
                     "year": str(row.get(year_col)),
                     "value": row.get(measure),
-                    **({"series": _pretty_label(row.get(label_col))} if use_series and label_col else {}),
+                    **(
+                        {"series": _pretty_label(row.get(label_col))}
+                        if use_series and label_col
+                        else {}
+                    ),
                 }
                 for row in rows
                 if _is_number(row.get(measure))
@@ -362,33 +599,70 @@ def build_charts(
         )
         if len(data) >= 2:
             encoding: dict[str, Any] = {
-                "x": {"field": "year", "type": "ordinal", "axis": {"title": None, "labelAngle": 0, "grid": True}},
-                "y": {"field": "value", "type": "quantitative", "axis": _quant_axis(profile, title=profile["label"])},
+                "x": {
+                    "field": "year",
+                    "type": "ordinal",
+                    "axis": {"title": None, "labelAngle": 0, "grid": True},
+                },
+                "y": {
+                    "field": "value",
+                    "type": "quantitative",
+                    "axis": _quant_axis(profile, title=profile["label"]),
+                },
                 "tooltip": [
-                    *([{"field": "series", "type": "nominal", "title": label_col.replace("_", " ").title()}] if use_series and label_col else []),
+                    *(
+                        [
+                            {
+                                "field": "series",
+                                "type": "nominal",
+                                "title": label_col.replace("_", " ").title(),
+                            }
+                        ]
+                        if use_series and label_col
+                        else []
+                    ),
                     {"field": "year", "type": "ordinal", "title": "Year"},
                     _value_tooltip("value", profile),
                 ],
             }
             if use_series:
                 encoding["color"] = {
-                    "field": "series", "type": "nominal", "title": None,
+                    "field": "series",
+                    "type": "nominal",
+                    "title": None,
                     "scale": {"range": _SERIES_COLORS},
                 }
             layers: list[dict[str, Any]] = []
             if not use_series:
                 layers.append({"mark": {"type": "area", "opacity": 0.10, "color": _PRIMARY}})
-            layers.extend([
-                {"mark": {"type": "line", "strokeWidth": 2.4, **({} if use_series else {"color": _PRIMARY})}},
-                {"mark": {"type": "point", "filled": True, "size": 54, **({} if use_series else {"color": _PRIMARY})}},
-            ])
+            layers.extend(
+                [
+                    {
+                        "mark": {
+                            "type": "line",
+                            "strokeWidth": 2.4,
+                            **({} if use_series else {"color": _PRIMARY}),
+                        }
+                    },
+                    {
+                        "mark": {
+                            "type": "point",
+                            "filled": True,
+                            "size": 54,
+                            **({} if use_series else {"color": _PRIMARY}),
+                        }
+                    },
+                ]
+            )
             spec = _spec_base()
-            spec.update({
-                "data": {"values": data},
-                "height": 260,
-                "encoding": encoding,
-                "layer": layers,
-            })
+            spec.update(
+                {
+                    "data": {"values": data},
+                    "height": 260,
+                    "encoding": encoding,
+                    "layer": layers,
+                }
+            )
             subtitle = f"{len(series_values)} series" if use_series else f"{len(data)} periods"
             return [{"title": f"{profile['label']} over time", "subtitle": subtitle, "spec": spec}]
 
@@ -396,12 +670,21 @@ def build_charts(
         return []
     label_title = label_col.replace("_", " ").title()
 
-    # Two-measure geographic results are best read as a scatterplot. This is
-    # especially important for cross-table questions (poverty vs debt, literacy
-    # vs leverage), where choosing only the first numeric column hides half the
-    # answer and grouped bars would mix incompatible units.
-    if len(measures) >= 2 and len(rows) >= 3 and (
-        _RELATIONSHIP_Q.search(question) or len(routing.get("tables") or []) > 1
+    # Relationship/correlation results are best read as scatterplots. Merely
+    # using multiple tables is not sufficient: a cross-table ranking by a
+    # derived rate still needs a ranked bar chart of that rate.
+    if (
+        len(measures) >= 2
+        and len(rows) >= 3
+        and (
+            _RELATIONSHIP_Q.search(question)
+            or str(routing.get("operation") or "") == "correlation"
+            or (
+                len(routing.get("tables") or []) > 1
+                and str((routing.get("formula") or {}).get("operator") or "none")
+                in {"none", "identity"}
+            )
+        )
     ):
         x_measure, y_measure = measures[:2]
         x_values = [float(row[x_measure]) for row in rows if _is_number(row.get(x_measure))]
@@ -419,21 +702,47 @@ def build_charts(
         ]
         if len(data) >= 3:
             spec = _spec_base()
-            spec.update({
-                "data": {"values": data},
-                "height": 300,
-                "mark": {"type": "circle", "size": 105, "color": _PRIMARY, "opacity": 0.82, "tooltip": True, "stroke": "#ffffff", "strokeWidth": 1},
-                "encoding": {
-                    "x": {"field": "x", "type": "quantitative", "axis": _quant_axis(x_profile, title=x_profile["label"]), "scale": {"nice": True, "zero": False}},
-                    "y": {"field": "y", "type": "quantitative", "axis": _quant_axis(y_profile, title=y_profile["label"]), "scale": {"nice": True, "zero": False}},
-                    "tooltip": [
-                        {"field": "label", "type": "nominal", "title": label_title},
-                        _value_tooltip("x", x_profile),
-                        _value_tooltip("y", y_profile),
-                    ],
-                },
-            })
-            return [{"title": f"{y_profile['label']} vs {x_profile['label']}", "subtitle": f"Each point is one {label_title.lower()}", "spec": spec}]
+            spec.update(
+                {
+                    "data": {"values": data},
+                    "height": 300,
+                    "mark": {
+                        "type": "circle",
+                        "size": 105,
+                        "color": _PRIMARY,
+                        "opacity": 0.82,
+                        "tooltip": True,
+                        "stroke": "#ffffff",
+                        "strokeWidth": 1,
+                    },
+                    "encoding": {
+                        "x": {
+                            "field": "x",
+                            "type": "quantitative",
+                            "axis": _quant_axis(x_profile, title=x_profile["label"]),
+                            "scale": {"nice": True, "zero": False},
+                        },
+                        "y": {
+                            "field": "y",
+                            "type": "quantitative",
+                            "axis": _quant_axis(y_profile, title=y_profile["label"]),
+                            "scale": {"nice": True, "zero": False},
+                        },
+                        "tooltip": [
+                            {"field": "label", "type": "nominal", "title": label_title},
+                            _value_tooltip("x", x_profile),
+                            _value_tooltip("y", y_profile),
+                        ],
+                    },
+                }
+            )
+            return [
+                {
+                    "title": f"{y_profile['label']} vs {x_profile['label']}",
+                    "subtitle": f"Each point is one {label_title.lower()}",
+                    "spec": spec,
+                }
+            ]
 
     # A comparison with several same-unit measures gets grouped bars so every
     # explicitly requested metric is visible instead of silently selecting one.
@@ -443,35 +752,64 @@ def build_charts(
             _metric_profile(
                 selected_measure,
                 routing,
-                [float(row[selected_measure]) for row in rows if _is_number(row.get(selected_measure))],
+                [
+                    float(row[selected_measure])
+                    for row in rows
+                    if _is_number(row.get(selected_measure))
+                ],
             )
             for selected_measure in selected
         ]
         if _same_unit_family(profiles):
             long_data = [
-                {"label": _pretty_label(row.get(label_col)), "metric": profile["label"], "value": row.get(selected_measure)}
+                {
+                    "label": _pretty_label(row.get(label_col)),
+                    "metric": profile["label"],
+                    "value": row.get(selected_measure),
+                }
                 for row in rows
                 for selected_measure, profile in zip(selected, profiles)
                 if _is_number(row.get(selected_measure))
             ]
             spec = _spec_base()
-            spec.update({
-                "data": {"values": long_data},
-                "height": {"step": 30 * len(selected)},
-                "mark": {"type": "bar", "cornerRadiusEnd": 3, "tooltip": True},
-                "encoding": {
-                    "y": {"field": "label", "type": "nominal", "axis": {"title": None, "labelLimit": 190}},
-                    "yOffset": {"field": "metric"},
-                    "x": {"field": "value", "type": "quantitative", "axis": _quant_axis(profiles[0])},
-                    "color": {"field": "metric", "type": "nominal", "title": None, "scale": {"range": _SERIES_COLORS}},
-                    "tooltip": [
-                        {"field": "label", "type": "nominal", "title": label_title},
-                        {"field": "metric", "type": "nominal", "title": "Metric"},
-                        _value_tooltip("value", profiles[0]),
-                    ],
-                },
-            })
-            return [{"title": f"{label_title} comparison", "subtitle": f"{len(selected)} requested measures", "spec": spec}]
+            spec.update(
+                {
+                    "data": {"values": long_data},
+                    "height": {"step": 30 * len(selected)},
+                    "mark": {"type": "bar", "cornerRadiusEnd": 3, "tooltip": True},
+                    "encoding": {
+                        "y": {
+                            "field": "label",
+                            "type": "nominal",
+                            "axis": {"title": None, "labelLimit": 190},
+                        },
+                        "yOffset": {"field": "metric"},
+                        "x": {
+                            "field": "value",
+                            "type": "quantitative",
+                            "axis": _quant_axis(profiles[0]),
+                        },
+                        "color": {
+                            "field": "metric",
+                            "type": "nominal",
+                            "title": None,
+                            "scale": {"range": _SERIES_COLORS},
+                        },
+                        "tooltip": [
+                            {"field": "label", "type": "nominal", "title": label_title},
+                            {"field": "metric", "type": "nominal", "title": "Metric"},
+                            _value_tooltip("value", profiles[0]),
+                        ],
+                    },
+                }
+            )
+            return [
+                {
+                    "title": f"{label_title} comparison",
+                    "subtitle": f"{len(selected)} requested measures",
+                    "spec": spec,
+                }
+            ]
 
     all_data: list[dict[str, Any]] = [
         {"label": _pretty_label(row.get(label_col)), "value": row.get(measure)}
@@ -488,22 +826,46 @@ def build_charts(
     # the first 20 rows were included in it.
     if _DISTRIBUTION_Q.search(question):
         spec = _spec_base()
-        spec.update({
-            "data": {"values": [{"value": item["value"]} for item in all_data]},
-            "height": 260,
-            "mark": {"type": "bar", "tooltip": True, "color": _PRIMARY, "cornerRadius": 2},
-            "encoding": {
-                "x": {"field": "value", "type": "quantitative", "bin": {"maxbins": 18}, "axis": _quant_axis(profile, grid=False, title=profile["label"])},
-                "y": {"aggregate": "count", "type": "quantitative", "axis": {"title": "Observations", "grid": True}},
-                "tooltip": [
-                    {"field": "value", "bin": True, "type": "quantitative", "title": profile["label"]},
-                    {"aggregate": "count", "type": "quantitative", "title": "Observations"},
-                ],
-            },
-        })
-        return [{"title": f"Distribution of {profile['label']}", "subtitle": f"All {len(all_data)} returned observations", "spec": spec}]
+        spec.update(
+            {
+                "data": {"values": [{"value": item["value"]} for item in all_data]},
+                "height": 260,
+                "mark": {"type": "bar", "tooltip": True, "color": _PRIMARY, "cornerRadius": 2},
+                "encoding": {
+                    "x": {
+                        "field": "value",
+                        "type": "quantitative",
+                        "bin": {"maxbins": 18},
+                        "axis": _quant_axis(profile, grid=False, title=profile["label"]),
+                    },
+                    "y": {
+                        "aggregate": "count",
+                        "type": "quantitative",
+                        "axis": {"title": "Observations", "grid": True},
+                    },
+                    "tooltip": [
+                        {
+                            "field": "value",
+                            "bin": True,
+                            "type": "quantitative",
+                            "title": profile["label"],
+                        },
+                        {"aggregate": "count", "type": "quantitative", "title": "Observations"},
+                    ],
+                },
+            }
+        )
+        return [
+            {
+                "title": f"Distribution of {profile['label']}",
+                "subtitle": f"All {len(all_data)} returned observations",
+                "spec": spec,
+            }
+        ]
 
-    ascending = str(routing.get("sort_direction") or "").lower() == "asc" or bool(_BOTTOM_Q.search(question))
+    ascending = str(routing.get("sort_direction") or "").lower() == "asc" or bool(
+        _BOTTOM_Q.search(question)
+    )
     all_data.sort(key=lambda item: float(item["value"]), reverse=not ascending)
     data = all_data[:_MAX_RANKING_MARKS]
     order = "ascending" if ascending else "descending"
@@ -512,73 +874,154 @@ def build_charts(
         subtitle = f"Showing {len(data)} of {len(all_data)} returned rows"
 
     # Diverging values need a zero-centered visual distinction.
-    if len(data) >= 3 and min(float(item["value"]) for item in data) < 0 < max(float(item["value"]) for item in data):
+    if len(data) >= 3 and min(float(item["value"]) for item in data) < 0 < max(
+        float(item["value"]) for item in data
+    ):
         spec = _spec_base()
-        spec.update({
-            "data": {"values": data},
-            "height": {"step": 30},
-            "mark": {"type": "bar", "cornerRadiusEnd": 3, "tooltip": True},
-            "encoding": {
-                "y": {"field": "label", "type": "nominal", "sort": {"field": "value", "order": order}, "axis": {"title": None, "labelLimit": 190}},
-                "x": {"field": "value", "type": "quantitative", "axis": _quant_axis(profile)},
-                "color": {"condition": {"test": "datum.value < 0", "value": _ACCENT_NEG}, "value": _PRIMARY},
-                "tooltip": _tooltip(label_title, profile),
-            },
-        })
+        spec.update(
+            {
+                "data": {"values": data},
+                "height": {"step": 30},
+                "mark": {"type": "bar", "cornerRadiusEnd": 3, "tooltip": True},
+                "encoding": {
+                    "y": {
+                        "field": "label",
+                        "type": "nominal",
+                        "sort": {"field": "value", "order": order},
+                        "axis": {"title": None, "labelLimit": 190},
+                    },
+                    "x": {"field": "value", "type": "quantitative", "axis": _quant_axis(profile)},
+                    "color": {
+                        "condition": {"test": "datum.value < 0", "value": _ACCENT_NEG},
+                        "value": _PRIMARY,
+                    },
+                    "tooltip": _tooltip(label_title, profile),
+                },
+            }
+        )
         note = "Negative values are blue; positive values are terracotta."
-        return [{"title": f"{profile['label']} by {label_title}", "subtitle": " · ".join(part for part in (subtitle, note) if part), "spec": spec}]
+        return [
+            {
+                "title": f"{profile['label']} by {label_title}",
+                "subtitle": " · ".join(part for part in (subtitle, note) if part),
+                "spec": spec,
+            }
+        ]
 
     if _COMPARE_Q.search(question) and 2 <= len(data) <= 3:
         spec = _spec_base()
-        spec.update({
-            "data": {"values": data},
-            "height": {"step": 46},
-            "mark": {"type": "circle", "size": 230, "color": _PRIMARY, "opacity": 0.95, "tooltip": True},
-            "encoding": {
-                "y": {"field": "label", "type": "nominal", "sort": {"field": "value", "order": order}, "axis": {"title": None, "labelLimit": 210}},
-                "x": {"field": "value", "type": "quantitative", "axis": _quant_axis(profile), "scale": {"nice": True, "padding": 18}},
-                "tooltip": _tooltip(label_title, profile),
-            },
-        })
+        spec.update(
+            {
+                "data": {"values": data},
+                "height": {"step": 46},
+                "mark": {
+                    "type": "circle",
+                    "size": 230,
+                    "color": _PRIMARY,
+                    "opacity": 0.95,
+                    "tooltip": True,
+                },
+                "encoding": {
+                    "y": {
+                        "field": "label",
+                        "type": "nominal",
+                        "sort": {"field": "value", "order": order},
+                        "axis": {"title": None, "labelLimit": 210},
+                    },
+                    "x": {
+                        "field": "value",
+                        "type": "quantitative",
+                        "axis": _quant_axis(profile),
+                        "scale": {"nice": True, "padding": 18},
+                    },
+                    "tooltip": _tooltip(label_title, profile),
+                },
+            }
+        )
         return [{"title": f"{profile['label']} compared", "subtitle": subtitle, "spec": spec}]
 
     if _COMPARE_Q.search(question) and 2 <= len(data) <= 8:
         spec = _spec_base()
-        spec.update({
-            "data": {"values": data},
-            "height": {"step": 38},
-            "mark": {"type": "bar", "tooltip": True, "color": _PRIMARY, "cornerRadiusEnd": 3},
-            "encoding": {
-                "y": {"field": "label", "type": "nominal", "sort": {"field": "value", "order": order}, "axis": {"title": None, "labelLimit": 180}},
-                "x": {"field": "value", "type": "quantitative", "axis": _quant_axis(profile)},
-                "tooltip": _tooltip(label_title, profile),
-            },
-        })
+        spec.update(
+            {
+                "data": {"values": data},
+                "height": {"step": 38},
+                "mark": {"type": "bar", "tooltip": True, "color": _PRIMARY, "cornerRadiusEnd": 3},
+                "encoding": {
+                    "y": {
+                        "field": "label",
+                        "type": "nominal",
+                        "sort": {"field": "value", "order": order},
+                        "axis": {"title": None, "labelLimit": 180},
+                    },
+                    "x": {"field": "value", "type": "quantitative", "axis": _quant_axis(profile)},
+                    "tooltip": _tooltip(label_title, profile),
+                },
+            }
+        )
         return [{"title": f"{profile['label']} compared", "subtitle": subtitle, "spec": spec}]
 
     # Layered ranking bars with direct labels and a hover highlight.
     spec = _spec_base()
-    spec.update({
-        "data": {"values": data},
-        "height": {"step": 32},
-        "encoding": {
-            "y": {"field": "label", "type": "nominal", "sort": None, "axis": {"title": None, "labelLimit": 190}},
-            "x": {"field": "value", "type": "quantitative", "axis": _quant_axis(profile), "scale": {"nice": True}},
-            "tooltip": _tooltip(label_title, profile),
-        },
-        "layer": [
-            {
-                "params": [{"name": "hover", "select": {"type": "point", "on": "pointerover", "clear": "pointerout"}}],
-                "mark": {"type": "bar", "cornerRadiusEnd": 5, "height": {"band": 0.62}, "color": _PRIMARY, "tooltip": True},
-                "encoding": {"opacity": {"condition": {"param": "hover", "empty": True, "value": 1}, "value": _HOVER_DIM}},
+    spec.update(
+        {
+            "data": {"values": data},
+            "height": {"step": 32},
+            "encoding": {
+                "y": {
+                    "field": "label",
+                    "type": "nominal",
+                    "sort": None,
+                    "axis": {"title": None, "labelLimit": 190},
+                },
+                "x": {
+                    "field": "value",
+                    "type": "quantitative",
+                    "axis": _quant_axis(profile),
+                    "scale": {"nice": True},
+                },
+                "tooltip": _tooltip(label_title, profile),
             },
-            {
-                "mark": {"type": "text", "align": "left", "dx": 6, "fontSize": 11, "color": "#6e6d64", "fontWeight": 500},
-                "encoding": {"text": {"field": "vlabel", "type": "nominal"}, "x": {"field": "value", "type": "quantitative"}},
-                "transform": [{"calculate": _value_label_expr(profile), "as": "vlabel"}],
-            },
-        ],
-    })
+            "layer": [
+                {
+                    "params": [
+                        {
+                            "name": "hover",
+                            "select": {"type": "point", "on": "pointerover", "clear": "pointerout"},
+                        }
+                    ],
+                    "mark": {
+                        "type": "bar",
+                        "cornerRadiusEnd": 5,
+                        "height": {"band": 0.62},
+                        "color": _PRIMARY,
+                        "tooltip": True,
+                    },
+                    "encoding": {
+                        "opacity": {
+                            "condition": {"param": "hover", "empty": True, "value": 1},
+                            "value": _HOVER_DIM,
+                        }
+                    },
+                },
+                {
+                    "mark": {
+                        "type": "text",
+                        "align": "left",
+                        "dx": 6,
+                        "fontSize": 11,
+                        "color": "#6e6d64",
+                        "fontWeight": 500,
+                    },
+                    "encoding": {
+                        "text": {"field": "vlabel", "type": "nominal"},
+                        "x": {"field": "value", "type": "quantitative"},
+                    },
+                    "transform": [{"calculate": _value_label_expr(profile), "as": "vlabel"}],
+                },
+            ],
+        }
+    )
     return [{"title": f"{profile['label']} by {label_title}", "subtitle": subtitle, "spec": spec}]
 
 
@@ -591,9 +1034,21 @@ def _infer_level(routing: dict[str, Any], rows: list[dict[str, Any]]) -> str | N
     keys = rows[0].keys()
     if any(key in keys for key in ("cd_118", "rcpt_cd_name", "subawardee_cd_name")):
         return "congress"
-    if any(key in keys for key in ("county", "county_name", "rcpt_cty_name", "subawardee_cty_name")):
+    if any(
+        key in keys for key in ("county", "county_name", "rcpt_cty_name", "subawardee_cty_name")
+    ):
         return "county"
-    if any(key in keys for key in ("state", "state_name", "rcpt_state_name", "subawardee_state_name", "rcpt_state", "subawardee_state")):
+    if any(
+        key in keys
+        for key in (
+            "state",
+            "state_name",
+            "rcpt_state_name",
+            "subawardee_state_name",
+            "rcpt_state",
+            "subawardee_state",
+        )
+    ):
         return "state"
     return None
 
@@ -603,6 +1058,17 @@ def _first_text(row: dict[str, Any], keys: tuple[str, ...]) -> str | None:
         value = row.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    return None
+
+
+def _first_identifier(row: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = row.get(key)
+        if value is None or isinstance(value, bool):
+            continue
+        text = str(value).strip()
+        if text:
+            return text[:-2] if text.endswith(".0") and text[:-2].isdigit() else text
     return None
 
 
@@ -641,17 +1107,54 @@ def _geo_identity(row: dict[str, Any], level: str, side: str) -> str | None:
     destination: tuple[str, ...]
     direct: tuple[str, ...]
     if level == "state":
-        source = ("source", "origin", "source_state", "rcpt_state_name", "rcpt_state")
-        destination = ("destination", "destination_state", "subawardee_state_name", "subawardee_state")
+        source = (
+            "source",
+            "origin",
+            "source_state",
+            "rcpt_state_name",
+            "rcpt_state",
+            "rcpt_st_cd",
+        )
+        destination = (
+            "destination",
+            "destination_state",
+            "subawardee_state_name",
+            "subawardee_state",
+            "subawardee_st_cd",
+        )
         direct = ("state", "state_name", "label")
+        identifier_keys = (
+            ("source_state_fips", "rcpt_state_fips", "rcpt_st_fips")
+            if side == "source"
+            else ("destination_state_fips", "subawardee_state_fips", "subawardee_st_fips")
+            if side == "destination"
+            else ("state_fips", "statefp")
+        )
     elif level == "county":
         source = ("source_county", "origin_county", "rcpt_cty_name")
         destination = ("destination_county", "subawardee_cty_name")
         direct = ("county", "county_name", "label")
+        identifier_keys = (
+            ("source_county_fips", "rcpt_cty_fips", "rcpt_cty")
+            if side == "source"
+            else ("destination_county_fips", "subawardee_cty_fips", "subawardee_cty")
+            if side == "destination"
+            else ("county_fips", "fips", "geoid")
+        )
     else:
-        source = ("source_district", "origin_district", "rcpt_cd_name")
-        destination = ("destination_district", "subawardee_cd_name")
+        source = (
+            "source_district",
+            "origin_district",
+            "rcpt_cd_name",
+            "prime_awardee_stcd118",
+        )
+        destination = ("destination_district", "subawardee_cd_name", "subawardee_stcd118")
         direct = ("cd_118", "district", "label")
+        identifier_keys = ()
+    identifier = _first_identifier(row, identifier_keys)
+    if identifier:
+        width = 5 if level == "county" else 2
+        return f"fips:{identifier.zfill(width)}"
     ordered = source if side == "source" else destination if side == "destination" else direct
     identity = _first_text(row, ordered) or _fallback_geo_text(row, level, side)
     if level != "county" or not identity:
@@ -668,12 +1171,77 @@ def _geo_state(row: dict[str, Any], side: str) -> str | None:
     return _first_text(row, ordered) or _fallback_geo_text(row, "state", side)
 
 
+def _has_county_fips(row: dict[str, Any], side: str) -> bool:
+    keys = (
+        ("source_county_fips", "rcpt_cty_fips", "rcpt_cty")
+        if side == "source"
+        else ("destination_county_fips", "subawardee_cty_fips", "subawardee_cty")
+        if side == "destination"
+        else ("county_fips", "fips", "geoid")
+    )
+    return _first_identifier(row, keys) is not None
+
+
 def _focus_state(question: str, resolved: dict[str, Any]) -> str | None:
+    candidates: list[str] = []
     for table_resolution in resolved.values():
-        state = table_resolution.get("state") if isinstance(table_resolution, dict) else None
-        if isinstance(state, dict) and state.get("value"):
-            return str(state["value"]).title()
+        if not isinstance(table_resolution, dict):
+            continue
+        for column, state in table_resolution.items():
+            if "state" not in str(column).casefold() or not isinstance(state, dict):
+                continue
+            value = state.get("value")
+            if value and str(value).casefold() not in {item.casefold() for item in candidates}:
+                candidates.append(str(value))
+    if len(candidates) == 1:
+        return candidates[0].title()
     return _state_in_question(question)
+
+
+def _source_label(tables: list[str]) -> str | None:
+    labels: list[str] = []
+    for table in tables:
+        dataset = get_dataset(table)
+        label = dataset.display_name if dataset else table.replace("_", " ").title()
+        if label not in labels:
+            labels.append(label)
+    if not labels:
+        return None
+    if len(labels) <= 2:
+        return " + ".join(labels)
+    return f"{len(labels)} joined datasets"
+
+
+def _period_label(routing: dict[str, Any], tables: list[str]) -> str | None:
+    period = routing.get("effective_period")
+    if isinstance(period, dict):
+        entries = [
+            (str(table), value) for table, value in period.items() if value not in (None, "")
+        ]
+        distinct = list(dict.fromkeys(str(value) for _, value in entries))
+        if len(distinct) == 1:
+            return distinct[0]
+        if entries:
+            return " · ".join(f"{table}: {value}" for table, value in entries)
+    elif period not in (None, ""):
+        return str(period)
+
+    requested = routing.get("requested_period")
+    if requested not in (None, ""):
+        return str(requested)
+    requested_years = routing.get("requested_years") or []
+    if requested_years:
+        return ", ".join(str(value) for value in requested_years)
+
+    definitions = [get_dataset(table) for table in tables]
+    definitions = [definition for definition in definitions if definition is not None]
+    if definitions and all(definition.year_column is None for definition in definitions):
+        return (
+            "All available records"
+            if any(table.endswith("_flow") for table in tables)
+            else "Dataset snapshot"
+        )
+    return None
 
 
 def build_map_intent(
@@ -694,7 +1262,21 @@ def build_map_intent(
     is_flow = any(table.endswith("_flow") for table in tables)
     flow_direction = str(routing.get("flow_direction") or "none").lower()
     focus_state = _focus_state(question, resolved)
-    if is_flow and flow_direction == "inflow":
+    semantic_plan = routing.get("semantic_plan")
+    output_dimensions = {
+        str(value).casefold()
+        for value in (
+            semantic_plan.get("output_dimensions") if isinstance(semantic_plan, dict) else []
+        )
+    }
+    if is_flow and any(value.startswith("subawardee_") for value in output_dimensions):
+        geo_side = "destination"
+    elif is_flow and any(
+        value.startswith("rcpt_") or value.startswith("prime_awardee_")
+        for value in output_dimensions
+    ):
+        geo_side = "source"
+    elif is_flow and flow_direction == "inflow":
         geo_side = "source" if focus_state else "destination"
     elif is_flow and flow_direction == "outflow":
         geo_side = "destination" if focus_state else "source"
@@ -704,8 +1286,13 @@ def build_map_intent(
     # National county rows require an explicit state for a unique boundary
     # join (there are many Washington/Franklin/etc. counties). A state-focused
     # result is enriched with that known state before this function is called.
-    if level == "county" and not focus_state and any(
-        _geo_state(row, geo_side) is None for row in rows
+    if (
+        level == "county"
+        and not focus_state
+        and any(
+            _geo_state(row, geo_side) is None and not _has_county_fips(row, geo_side)
+            for row in rows
+        )
     ):
         return {**disabled, "reason": "County rows do not include a state boundary key."}
 
@@ -724,6 +1311,8 @@ def build_map_intent(
     values = [float(row[measure]) for row in rows if _is_number(row.get(measure))]
     profile = _metric_profile(measure, routing, values)
     count = len(identities)
+    missing_value_count = sum(not _is_number(row.get(measure)) for row in rows)
+    period_label = _period_label(routing, tables)
 
     if is_flow:
         map_type = "flow-state-focused" if focus_state else "flow-map"
@@ -738,7 +1327,11 @@ def build_map_intent(
     else:
         map_type = "atlas-single-metric"
 
-    sort_direction = "asc" if str(routing.get("sort_direction") or "").lower() == "asc" or _BOTTOM_Q.search(question) else "desc"
+    sort_direction = (
+        "asc"
+        if str(routing.get("sort_direction") or "").lower() == "asc" or _BOTTOM_Q.search(question)
+        else "desc"
+    )
     title_geography = f"{geo_side} {level}" if is_flow else level
     if is_flow and focus_state and flow_direction == "inflow":
         subtitle = f"Prime-recipient origins sending subawards to {focus_state}"
@@ -757,12 +1350,22 @@ def build_map_intent(
         "unit": profile["unit"],
         "sortDirection": sort_direction,
         "geoSide": geo_side,
+        "flowDirection": flow_direction if flow_direction in {"inflow", "outflow"} else "none",
         "title": f"{profile['label']} by {title_geography}",
         "subtitle": subtitle,
         "buttonLabel": "View map",
         "reason": f"Result has one {profile['label']} value per {level}.",
         "showLegend": True,
+        "sourceTables": tables,
+        "sourceLabel": _source_label(tables),
+        "periodLabel": period_label,
+        "returnedGeographyCount": count,
+        "mappedValueCount": len(values),
+        "missingValueCount": missing_value_count,
+        "partialResult": bool(routing.get("data_truncated")),
     }
+    if period_label and re.fullmatch(r"\d{4}", period_label):
+        intent["year"] = period_label
     if focus_state and map_type != "atlas-comparison":
         intent["state"] = focus_state
     if map_type == "atlas-comparison":
@@ -791,18 +1394,32 @@ def enrich_rows_for_map(
         return rows
     level = _infer_level(routing, rows)
     display_rows = [dict(row) for row in rows]
-    if level == "state":
-        for row in display_rows:
-            for key, value in row.items():
-                if not isinstance(value, str):
-                    continue
-                canonical = _STATE_DISPLAY_NAMES.get(value.strip().casefold())
-                if canonical:
-                    row[key] = canonical
+    state_keys = {
+        "state",
+        "state_name",
+        "rcpt_state",
+        "subawardee_state",
+        "rcpt_state_name",
+        "subawardee_state_name",
+    }
+    for row in display_rows:
+        for key, value in row.items():
+            normalized_key = key.casefold()
+            is_state_label = normalized_key in state_keys or normalized_key.endswith(
+                ("_state", "_state_name")
+            )
+            if not is_state_label or not isinstance(value, str):
+                continue
+            canonical = _STATE_DISPLAY_NAMES.get(value.strip().casefold())
+            if canonical:
+                row[key] = canonical
     if level != "county":
         return display_rows
     first = display_rows[0]
-    if any(key in first for key in ("state", "state_name", "rcpt_state", "subawardee_state", "rcpt_state_name", "subawardee_state_name")):
+    if any(
+        key.casefold() in state_keys or key.casefold().endswith(("_state", "_state_name"))
+        for key in first
+    ):
         return display_rows
     state = _focus_state(question, resolved)
     return [{**row, "state": state} for row in display_rows] if state else display_rows

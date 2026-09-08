@@ -1,24 +1,25 @@
-# Maryland Opportunity Analytics Assistant — LLM-grounded text-to-SQL
+# Maryland Opportunity Analytics Assistant
 
 A natural-language assistant over a fixed catalog of US public-policy datasets
 (Census ACS demographics, state/local government finance, federal
 contracts/grants/spending incl. by agency, FINRA financial-health indices, and
 federal subaward flows) at state, county, and congressional-district level.
 
-The pipeline is an **LLM-grounded text-to-SQL** system. Every analytical answer
-is grounded in the curated catalog (`data/schema/metadata.json`) and in live
-DuckDB value lookups, then verified:
+The application is an LLM-grounded text-to-SQL assistant. Every analytical
+answer uses the curated catalog (`data/schema/metadata.json`) and live DuckDB
+value lookups, then passes structural, semantic, and evidence checks:
 
 ```text
 Chat API
-  -> Stage 1  intent        (ANALYTICAL | CLARIFY | UNANSWERABLE | META | OUT_OF_SCOPE)
-  -> Stage 2  routing        (pick the exact catalog table(s) — the critical gate)
-  -> analysis contract       (operation, metric, entity, period, direction, limit)
-  -> Stage 3  retrieval      (schema + critical warnings + live resolved filter values)
-  -> Stage 4  SQL generation (DuckDB SQL + self-repair loop)
+  -> conversation context     (resolve follow-ups without losing the current question)
+  -> semantic planner         (intent, datasets, variables, operation, geography, period)
+  -> plan verifier            (recover false absences and reject impossible plans)
+  -> typed analysis plan      (metric, entity, period, direction, limit, result shape)
+  -> grounding                (schema, warnings, and resolved live filter values)
+  -> SQL generation           (DuckDB SQL + self-repair loop)
             -> structural + semantic validators -> DuckDB executor
-  -> Stage 4  grounded answer (strictly from returned rows)
-  -> blocking verification    (repair/recheck; otherwise render validated rows only)
+  -> grounded response        (strictly from returned rows)
+  -> blocking faithfulness    (repair/recheck; otherwise render validated rows only)
 ```
 
 Non-analytical messages never touch the database: META/UNANSWERABLE get a
@@ -26,15 +27,17 @@ grounded explanation, CLARIFY asks one question back, OUT_OF_SCOPE is declined.
 
 ## LLM provider (required)
 
-DeepSeek (OpenAI-compatible) is the current local provider. Set
-`DEEPSEEK_API_KEY` in `.env`. Without a working provider the
-app still boots for diagnostics, but analytical questions report that the
-analysis service is unavailable. The client also supports recorded fixtures
-(`LLM_MODE=fixture`) and an injectable stub for fully offline tests.
+Set `LLM_PROVIDER` to `deepseek`, `gemini`, or `openai`, then set that
+provider's dedicated key and model variables. The production environment is
+currently expected to select DeepSeek explicitly; Gemini remains an available
+cutover switch. Without a working provider the app still boots for diagnostics,
+but analytical questions report that the analysis service is unavailable. The
+client also supports recorded fixtures (`LLM_MODE=fixture`) and an injectable
+stub for fully offline tests.
 
-The analytical contract and validators are provider-neutral. Gemini can use
-its OpenAI-compatible endpoint through environment configuration, but every
-provider or model change must pass the full release gates before deployment.
+The analytical contract and validators are provider-neutral. Every provider or
+model change must pass the full release gates before deployment. Reasoning mode
+also preserves Gemini thought signatures between tool calls.
 
 Model-written prose is never streamed before verification. If two verification
 attempts cannot establish that the prose matches the evidence, the assistant
@@ -45,21 +48,25 @@ validated result rows directly, without adding an unverified interpretation.
 
 ```text
 app/
-  core/        intent, router, typed analysis contract, grounding, sql_writer,
-               answer_writer, meta_answer, orchestrator
-  llm/         DeepSeek client (live + fixture + stub modes)
+  api/         auth, datasets, feedback, maps, and thread endpoints
+  core/        conversation, planner, plan verifier, analysis plan, grounding,
+               query engine, response writer, pipeline, reasoning, visuals
+  duckdb/      manifest-driven view registration and query execution
+  evals/       golden, held-out, conversation, reasoning, and repeatability gates
+  llm/         provider-neutral client (live + fixture + stub modes)
+  quality/     blocking answer-faithfulness checks
+  schemas/     validated response models
   semantic/    registry (metadata.json catalog), value_resolver (live DuckDB)
   sql/         structural + semantic validators (read-only, allow-listed)
-  duckdb/      manifest-driven view registration
-  evals/       golden + held-out references, repeatability, faithfulness
-  api/ storage/ observability/ schemas/ main.py
+  storage/     SQLite persistence
+  main.py      FastAPI composition and frontend serving
 ```
 
 ## Install & run
 
 ```bash
-pip install -r requirements.txt
-cp .env.example .env          # set DEEPSEEK_API_KEY
+pip install -r requirements-dev.txt
+cp .env.example .env          # select LLM_PROVIDER and set its API key
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 cd frontend && npm install && npm run dev
@@ -73,18 +80,23 @@ Backend `http://127.0.0.1:8000` · Frontend `http://127.0.0.1:5173`
 pytest -q                          # per-stage suites (live tests skip w/o key)
 python -m app.evals.run_evals --suite both  # golden + held-out live gate
 python -m app.evals.repeatability           # identical-query evidence gate
-python -m app.evals.conversation_eval        # multi-turn gate across every family
+python -m app.evals.conversation_eval --mode normal
+python -m app.evals.conversation_eval --mode reasoning
+python -m app.evals.reasoning_eval            # complex multi-step quality gate
 python -m app.semantic.audit --format markdown
-cd frontend && npm run typecheck && npm run build
+cd frontend && npm run check
 ```
 
-Per-stage gates (golden set, graded against an independent reference DuckDB):
-intent ≥ 90%, routing ≥ 90%, generation ≥ 85%, faithfulness ≥ 90%.
+Release gates require 100% intent, routing, generation, and evidence
+faithfulness across the golden + held-out corpus. The reasoning gate requires
+every task to score at least 9/10, and critical queries must remain semantically
+identical across five independent generations. This is a zero-silent-error
+standard: an unverified result must never be presented as a verified answer.
 
 ## Production build
 
 ```bash
-cp deploy/.env.production.example .env   # set JWT_SECRET, DEEPSEEK_API_KEY, hosts
+cp deploy/.env.production.example .env   # set JWT_SECRET, provider key, hosts
 docker compose build && docker compose up -d
 curl http://127.0.0.1:8000/health/deep
 ```
@@ -114,3 +126,12 @@ and restores the prior image if deep health checks fail.
 Correctness comes from the catalog and the grounding pack, not from one-off code
 branches. Improve `metadata.json`, the resolved-value layer, and the stage
 prompts first; keep the SQL validator strict and the faithfulness judge honest.
+The reviewed SQL examples in `app/evals/analyst_queries.yaml` are offline test
+material only and never bypass the production planner or query engine.
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Development and release checks](docs/DEVELOPMENT.md)
+- [Operations](docs/OPERATIONS.md)
+- [Gemini cutover](docs/GEMINI_CUTOVER.md)

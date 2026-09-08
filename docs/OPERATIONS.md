@@ -22,9 +22,12 @@ Frontend: `http://127.0.0.1:5173`
 
 ```bash
 pytest -q
+python -m app.evals.premium_eval --profile full
 python -m app.evals.run_evals --suite both
 python -m app.evals.repeatability --repeats 5
 python -m app.evals.conversation_eval --mode normal
+python -m app.evals.conversation_eval --mode reasoning
+python -m app.evals.reasoning_eval
 python -m app.semantic.audit --format markdown
 cd frontend
 npm run typecheck
@@ -74,9 +77,21 @@ The script:
 - `QUERY_TIMEOUT_SECONDS`: execution budget used by the SQL executor.
 - `ALLOWED_ORIGINS`: CORS allowlist.
 - `TRUSTED_HOSTS`: allowed Host headers for FastAPI.
-- `ASSISTANT_ROUTER_BASE_URL` and `ASSISTANT_ROUTER_MODEL`: active provider endpoint and model.
-- `DEEPSEEK_API_KEY`: current DeepSeek credential.
-- `OPENAI_API_KEY`: fallback credential, or the Gemini key when using its OpenAI-compatible endpoint.
+- `LLM_PROVIDER`: `deepseek`, `gemini`, `openai`, or legacy `auto`; use an explicit value in production.
+- `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL`: DeepSeek configuration. Use an
+  explicit V4 model; the legacy `deepseek-chat` and `deepseek-reasoner` aliases
+  are retired and generate a non-blocking health warning.
+- `DEEPSEEK_THINKING_MODE`: `enabled` or `disabled`. Keep disabled for an
+  initial model migration, then benchmark thinking mode through every live
+  gate before enabling it.
+- `DEEPSEEK_REASONING_EFFORT`: `low`, `high`, or `max` when thinking is enabled.
+- `DEEPSEEK_MIN_COMPLETION_TOKENS`: minimum output budget used in thinking mode.
+- `GEMINI_API_KEY` / `GEMINI_MODEL`: Gemini configuration through Google's native `generateContent` endpoint.
+- `GEMINI_REASONING_EFFORT`: Gemini thinking level (`low` is the initial evaluation setting).
+- `GEMINI_MIN_COMPLETION_TOKENS`: protects Gemini 3 structured responses from being truncated by thinking tokens.
+- `OPENAI_API_KEY` / `OPENAI_MODEL`: OpenAI configuration.
+- `LLM_BASE_URL` / `LLM_MODEL`: optional explicit-provider overrides; normally leave unset.
+- `ASSISTANT_ROUTER_BASE_URL` and `ASSISTANT_ROUTER_MODEL`: legacy overrides honored only in `auto` mode.
 
 ## Troubleshooting
 

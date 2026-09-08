@@ -4,8 +4,13 @@ services:
       context: .
     image: mop-agent:latest
     restart: unless-stopped
+    # A streamed answer can legitimately outlive Docker's 10-second default.
+    # Let uvicorn drain it before the container is force-killed during deploys.
+    stop_grace_period: 150s
     environment:
-      APP_ENV: production
+      # Local `.env` defaults to development; the production env file sets
+      # APP_ENV=production and activates strict secret/origin validation.
+      APP_ENV: ${APP_ENV:-development}
       APP_VERSION: ${APP_VERSION:-production}
       JWT_SECRET: ${JWT_SECRET:-change-me-before-public-use}
       JWT_EXPIRY_SECONDS: ${JWT_EXPIRY_SECONDS:-86400}
@@ -22,10 +27,25 @@ services:
       SENTRY_TRACES_RATE: ${SENTRY_TRACES_RATE:-0.05}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}
       TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1}
-      ASSISTANT_ROUTER_BASE_URL: ${ASSISTANT_ROUTER_BASE_URL:-https://api.deepseek.com}
-      ASSISTANT_ROUTER_MODEL: ${ASSISTANT_ROUTER_MODEL:-deepseek-chat}
+      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      ASSISTANT_ROUTER_BASE_URL: ${ASSISTANT_ROUTER_BASE_URL:-}
+      ASSISTANT_ROUTER_MODEL: ${ASSISTANT_ROUTER_MODEL:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      DEEPSEEK_THINKING_MODE: ${DEEPSEEK_THINKING_MODE:-disabled}
+      DEEPSEEK_REASONING_EFFORT: ${DEEPSEEK_REASONING_EFFORT:-high}
+      DEEPSEEK_MIN_COMPLETION_TOKENS: ${DEEPSEEK_MIN_COMPLETION_TOKENS:-4096}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_REASONING_EFFORT: ${GEMINI_REASONING_EFFORT:-minimal}
+      GEMINI_MIN_COMPLETION_TOKENS: ${GEMINI_MIN_COMPLETION_TOKENS:-512}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-12}
+      LLM_RETRIES: ${LLM_RETRIES:-2}
+      GRACEFUL_SHUTDOWN_TIMEOUT: ${GRACEFUL_SHUTDOWN_TIMEOUT:-135}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
     ports:
       - "127.0.0.1:${MOP_AGENT_PORT:-8000}:8000"
     volumes:

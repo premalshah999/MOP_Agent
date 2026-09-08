@@ -4,7 +4,13 @@ import secrets
 from typing import Any
 from uuid import uuid4
 
-from app.storage.sqlite import connect, payload_dumps, payload_loads, row_dict, rows_dict
+from app.storage.sqlite import (
+    connect,
+    payload_dumps,
+    payload_loads,
+    row_dict,
+    rows_dict,
+)
 
 
 def create_share(thread_id: str, user_id: int) -> dict[str, Any] | None:
@@ -13,10 +19,12 @@ def create_share(thread_id: str, user_id: int) -> dict[str, Any] | None:
     if not thread:
         return None
     with connect() as conn:
-        existing = row_dict(conn.execute(
-            "SELECT token FROM share_tokens WHERE thread_id = ? AND created_by = ? ORDER BY created_at DESC LIMIT 1",
-            (thread_id, user_id),
-        ).fetchone())
+        existing = row_dict(
+            conn.execute(
+                "SELECT token FROM share_tokens WHERE thread_id = ? AND created_by = ? ORDER BY created_at DESC LIMIT 1",
+                (thread_id, user_id),
+            ).fetchone()
+        )
         if existing:
             return {"token": existing["token"], "thread_id": thread_id}
         token = secrets.token_urlsafe(16)
@@ -31,25 +39,34 @@ def lookup_share(token: str) -> dict[str, Any] | None:
     """Fetch a shared thread (read-only) by token. No auth required by caller —
     caller has the token, that IS the auth."""
     with connect() as conn:
-        share = row_dict(conn.execute(
-            "SELECT thread_id FROM share_tokens WHERE token = ?", (token,),
-        ).fetchone())
+        share = row_dict(
+            conn.execute(
+                "SELECT thread_id FROM share_tokens WHERE token = ?",
+                (token,),
+            ).fetchone()
+        )
         if not share:
             return None
-        thread = row_dict(conn.execute(
-            "SELECT id, title, dataset_id, created_at, updated_at FROM threads WHERE id = ?",
-            (share["thread_id"],),
-        ).fetchone())
+        thread = row_dict(
+            conn.execute(
+                "SELECT id, title, dataset_id, created_at, updated_at FROM threads WHERE id = ?",
+                (share["thread_id"],),
+            ).fetchone()
+        )
         if not thread:
             return None
-        messages = rows_dict(conn.execute(
-            "SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC",
-            (thread["id"],),
-        ).fetchall())
+        messages = rows_dict(
+            conn.execute(
+                "SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC",
+                (thread["id"],),
+            ).fetchall()
+        )
         return {"thread": thread, "messages": messages}
 
 
-def create_thread(user_id: int, dataset_id: str = "contract_county", title: str = "New thread") -> dict[str, Any]:
+def create_thread(
+    user_id: int, dataset_id: str = "contract_county", title: str = "New thread"
+) -> dict[str, Any]:
     thread_id = uuid4().hex
     with connect() as conn:
         conn.execute(
@@ -57,22 +74,35 @@ def create_thread(user_id: int, dataset_id: str = "contract_county", title: str 
             (thread_id, user_id, title, dataset_id),
         )
         conn.commit()
-        thread = row_dict(conn.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)).fetchone())
+        thread = row_dict(
+            conn.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)).fetchone()
+        )
     assert thread is not None
     return thread
 
 
 def get_thread(thread_id: str, user_id: int) -> dict[str, Any] | None:
     with connect() as conn:
-        return row_dict(conn.execute("SELECT * FROM threads WHERE id = ? AND user_id = ?", (thread_id, user_id)).fetchone())
+        return row_dict(
+            conn.execute(
+                "SELECT * FROM threads WHERE id = ? AND user_id = ?", (thread_id, user_id)
+            ).fetchone()
+        )
 
 
 def list_threads(user_id: int) -> list[dict[str, Any]]:
     with connect() as conn:
-        return rows_dict(conn.execute("SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100", (user_id,)).fetchall())
+        return rows_dict(
+            conn.execute(
+                "SELECT * FROM threads WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100",
+                (user_id,),
+            ).fetchall()
+        )
 
 
-def update_thread(thread_id: str, user_id: int, *, title: str | None = None, dataset_id: str | None = None) -> dict[str, Any] | None:
+def update_thread(
+    thread_id: str, user_id: int, *, title: str | None = None, dataset_id: str | None = None
+) -> dict[str, Any] | None:
     thread = get_thread(thread_id, user_id)
     if not thread:
         return None
@@ -99,23 +129,35 @@ def delete_all_threads(user_id: int) -> int:
         return cur.rowcount
 
 
-def create_message(thread_id: str, role: str, content: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def create_message(
+    thread_id: str, role: str, content: str, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
     message_id = uuid4().hex
     with connect() as conn:
         conn.execute(
             "INSERT INTO messages (id, thread_id, role, content, payload_json) VALUES (?, ?, ?, ?, ?)",
             (message_id, thread_id, role, content, payload_dumps(payload)),
         )
-        conn.execute("UPDATE threads SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?", (thread_id,))
+        conn.execute(
+            "UPDATE threads SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+            (thread_id,),
+        )
         conn.commit()
-        row = row_dict(conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone())
+        row = row_dict(
+            conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+        )
     assert row is not None
     return row
 
 
 def list_messages(thread_id: str) -> list[dict[str, Any]]:
     with connect() as conn:
-        return rows_dict(conn.execute("SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC", (thread_id,)).fetchall())
+        return rows_dict(
+            conn.execute(
+                "SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC",
+                (thread_id,),
+            ).fetchall()
+        )
 
 
 def format_message(message: dict[str, Any]) -> dict[str, Any]:
@@ -130,7 +172,9 @@ def format_message(message: dict[str, Any]) -> dict[str, Any]:
     return formatted
 
 
-def format_thread(thread: dict[str, Any], *, messages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def format_thread(
+    thread: dict[str, Any], *, messages: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     payload = {
         "id": thread["id"],
         "title": thread["title"],

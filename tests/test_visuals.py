@@ -28,10 +28,42 @@ def test_state_display_rows_are_case_stable() -> None:
     assert lower == upper == [{"state": "Maryland", "Grants": 10}]
 
 
+def test_county_display_rows_canonicalize_their_state_context() -> None:
+    routing = {"tables": ["acs_county"], "geography_level": "county"}
+    lower = enrich_rows_for_map(
+        "Colorado counties",
+        routing,
+        {},
+        [{"county": "Denver", "state": "colorado", "Below poverty": 8.2}],
+    )
+    upper = enrich_rows_for_map(
+        "Colorado counties",
+        routing,
+        {},
+        [{"county": "Denver", "state": "COLORADO", "Below poverty": 8.2}],
+    )
+    assert lower == upper == [{"county": "Denver", "state": "Colorado", "Below poverty": 8.2}]
+
+
+def test_derived_result_state_aliases_are_case_stable() -> None:
+    routing = {"tables": ["contract_county"], "geography_level": "county"}
+    rows = enrich_rows_for_map(
+        "Maryland county extremes",
+        routing,
+        {},
+        [{"richest_state": "MARYLAND", "poorest_state": "maryland", "gap": 10}],
+    )
+    assert rows == [{"richest_state": "Maryland", "poorest_state": "Maryland", "gap": 10}]
+
+
 def test_ranking_emits_lollipop_and_state_map() -> None:
-    rows = [{"state": s, "Grants": v} for s, v in
-            [("maryland", 9), ("virginia", 7), ("texas", 5), ("ohio", 3)]]
-    v = build_visuals("top states by grants", {"tables": ["contract_state"], "geography_level": "state"}, {}, rows)
+    rows = [
+        {"state": s, "Grants": v}
+        for s, v in [("maryland", 9), ("virginia", 7), ("texas", 5), ("ohio", 3)]
+    ]
+    v = build_visuals(
+        "top states by grants", {"tables": ["contract_state"], "geography_level": "state"}, {}, rows
+    )
     assert v["charts"] and _valid_spec(v["charts"][0]["spec"])
     spec = v["charts"][0]["spec"]
     enc = spec["encoding"]
@@ -46,6 +78,48 @@ def test_ranking_emits_lollipop_and_state_map() -> None:
     assert v["map_intent"]["metric"] == "Grants"
 
 
+def test_cross_table_derived_ranking_charts_rate_not_components() -> None:
+    rows = [
+        {
+            "cd_118": district,
+            "inflow_usd": inflow,
+            "population": population,
+            "rate": rate,
+            "rnk": rank,
+            "total_districts": 434,
+        }
+        for rank, (district, inflow, population, rate) in enumerate(
+            [
+                ("AL-05", 2_454_501_638, 732_520, 3350.76),
+                ("VA-11", 2_261_145_531, 781_648, 2892.79),
+                ("NH-02", 1_280_064_742, 693_639, 1845.43),
+            ],
+            start=1,
+        )
+    ]
+    visual = build_visuals(
+        "Which districts receive the most subaward inflow per resident?",
+        {
+            "tables": ["congress_flow", "acs_congress", "contract_congress"],
+            "columns": ["subaward_amount", "Total population"],
+            "geography_level": "congress",
+            "operation": "ranking",
+            "result_unit": "ratio",
+            "formula": {
+                "operator": "divide",
+                "operands": ["subaward_amount", "Total population"],
+                "output_label": "subaward inflow per resident",
+            },
+        },
+        {},
+        rows,
+    )
+
+    assert visual["charts"][0]["title"] == "subaward inflow per resident by Cd 118"
+    chart_values = visual["charts"][0]["spec"]["data"]["values"]
+    assert [item["value"] for item in chart_values] == [3350.76, 2892.79, 1845.43]
+
+
 def test_mid_n_comparison_emits_horizontal_bars_and_comparison_map() -> None:
     # 4-8 entities -> horizontal bars (smaller N goes to dot plot, see test above).
     rows = [
@@ -54,19 +128,31 @@ def test_mid_n_comparison_emits_horizontal_bars_and_comparison_map() -> None:
         {"state": "texas", "Grants": 5},
         {"state": "ohio", "Grants": 3},
     ]
-    v = build_visuals("compare Maryland Virginia Texas Ohio on grants",
-                      {"tables": ["contract_state"], "geography_level": "state"}, {}, rows)
+    v = build_visuals(
+        "compare Maryland Virginia Texas Ohio on grants",
+        {"tables": ["contract_state"], "geography_level": "state"},
+        {},
+        rows,
+    )
     assert _valid_spec(v["chart"])
     assert v["chart"]["mark"]["type"] == "bar"
-    assert v["chart"]["encoding"]["y"]["field"] == "label" and v["chart"]["encoding"]["x"]["field"] == "value"
+    assert (
+        v["chart"]["encoding"]["y"]["field"] == "label"
+        and v["chart"]["encoding"]["x"]["field"] == "value"
+    )
     assert v["map_intent"]["mapType"] == "atlas-comparison"
 
 
 def test_trend_emits_area_line() -> None:
-    rows = [{"Year": y, "financial_literacy": v} for y, v in
-            [(2015, 0.5), (2018, 0.55), (2021, 0.6)]]
-    v = build_visuals("trend of financial literacy by year",
-                      {"tables": ["finra_state"], "geography_level": "state"}, {}, rows)
+    rows = [
+        {"Year": y, "financial_literacy": v} for y, v in [(2015, 0.5), (2018, 0.55), (2021, 0.6)]
+    ]
+    v = build_visuals(
+        "trend of financial literacy by year",
+        {"tables": ["finra_state"], "geography_level": "state"},
+        {},
+        rows,
+    )
     spec = v["chart"]
     assert "layer" in spec
     marks = {layer["mark"]["type"] for layer in spec["layer"]}
@@ -93,17 +179,27 @@ def test_multi_entity_trend_keeps_series_separate() -> None:
 
 def test_small_n_comparison_emits_dot_plot() -> None:
     rows = [{"state": "maryland", "Grants": 9}, {"state": "virginia", "Grants": 7}]
-    v = build_visuals("compare Maryland vs Virginia on grants",
-                      {"tables": ["contract_state"], "geography_level": "state"}, {}, rows)
+    v = build_visuals(
+        "compare Maryland vs Virginia on grants",
+        {"tables": ["contract_state"], "geography_level": "state"},
+        {},
+        rows,
+    )
     assert v["chart"]["mark"]["type"] == "circle"
     assert v["chart"]["encoding"]["y"]["field"] == "label"
 
 
 def test_diverging_bars_when_values_span_zero() -> None:
-    rows = [{"cd_118": f"MD-0{i}", "Free_Cash_Flow": v} for i, v in
-            enumerate([5, -3, 8, -2, 1], start=1)]
-    v = build_visuals("Maryland districts by free cash flow",
-                      {"tables": ["gov_congress"], "geography_level": "congress"}, {}, rows)
+    rows = [
+        {"cd_118": f"MD-0{i}", "Free_Cash_Flow": v}
+        for i, v in enumerate([5, -3, 8, -2, 1], start=1)
+    ]
+    v = build_visuals(
+        "Maryland districts by free cash flow",
+        {"tables": ["gov_congress"], "geography_level": "congress"},
+        {},
+        rows,
+    )
     enc = v["chart"]["encoding"]
     assert "color" in enc and "condition" in enc["color"]
     assert enc["color"]["condition"]["test"] == "datum.value < 0"
@@ -112,18 +208,29 @@ def test_diverging_bars_when_values_span_zero() -> None:
 def test_heatmap_for_agency_state_breakdown() -> None:
     agencies = ["Defense", "Energy", "Health", "Justice"]
     states = ["Maryland", "Virginia", "Texas", "California"]
-    rows = [{"agency": a, "state": s, "Grants": (i + j) * 1_000_000}
-            for i, a in enumerate(agencies) for j, s in enumerate(states)]
-    v = build_visuals("grants by agency and state",
-                      {"tables": ["spending_state_agency"], "geography_level": "state"}, {}, rows)
+    rows = [
+        {"agency": a, "state": s, "Grants": (i + j) * 1_000_000}
+        for i, a in enumerate(agencies)
+        for j, s in enumerate(states)
+    ]
+    v = build_visuals(
+        "grants by agency and state",
+        {"tables": ["spending_state_agency"], "geography_level": "state"},
+        {},
+        rows,
+    )
     assert v["chart"]["mark"]["type"] == "rect"
     assert v["chart"]["encoding"]["color"]["field"] == "value"
 
 
 def test_distribution_emits_histogram() -> None:
     rows = [{"state": f"s{i}", "Debt_Ratio": i / 10} for i in range(20)]
-    v = build_visuals("what is the distribution of debt ratio",
-                      {"tables": ["gov_state"], "geography_level": "state"}, {}, rows)
+    v = build_visuals(
+        "what is the distribution of debt ratio",
+        {"tables": ["gov_state"], "geography_level": "state"},
+        {},
+        rows,
+    )
     assert v["chart"]["encoding"]["x"].get("bin")
     assert len(v["chart"]["data"]["values"]) == 20
 
@@ -160,8 +267,10 @@ def test_large_ranking_stays_ranking_and_reports_visual_limit() -> None:
 
 
 def test_bottom_ranking_is_sorted_ascending_in_chart_and_map() -> None:
-    rows = [{"state": state, "Debt_Ratio": value} for state, value in
-            [("Maryland", 0.7), ("Virginia", 0.5), ("Texas", 0.6)]]
+    rows = [
+        {"state": state, "Debt_Ratio": value}
+        for state, value in [("Maryland", 0.7), ("Virginia", 0.5), ("Texas", 0.6)]
+    ]
     visual = build_visuals(
         "bottom 3 states by debt ratio",
         {
@@ -221,7 +330,10 @@ def test_same_unit_multi_metric_comparison_emits_grouped_bars() -> None:
 
 
 def test_catalog_units_flow_into_chart_and_map() -> None:
-    rows = [{"state": "Maryland", "Below poverty": 9.1}, {"state": "Virginia", "Below poverty": 9.9}]
+    rows = [
+        {"state": "Maryland", "Below poverty": 9.1},
+        {"state": "Virginia", "Below poverty": 9.9},
+    ]
     visual = build_visuals(
         "compare Maryland and Virginia poverty rates",
         {
@@ -362,11 +474,17 @@ def test_flow_map_tolerates_safe_model_chosen_geo_alias() -> None:
 
 
 def test_county_rows_with_focus_state_map() -> None:
-    rows = [{"county": c, "state": "maryland", "Total_Assets": v}
-            for c, v in [("montgomery", 9), ("howard", 7), ("frederick", 5)]]
+    rows = [
+        {"county": c, "state": "maryland", "Total_Assets": v}
+        for c, v in [("montgomery", 9), ("howard", 7), ("frederick", 5)]
+    ]
     resolved = {"gov_county": {"state": {"value": "maryland", "score": 1.0}}}
-    v = build_visuals("top counties in Maryland by assets",
-                      {"tables": ["gov_county"], "geography_level": "county"}, resolved, rows)
+    v = build_visuals(
+        "top counties in Maryland by assets",
+        {"tables": ["gov_county"], "geography_level": "county"},
+        resolved,
+        rows,
+    )
     assert v["map_intent"]["enabled"] and v["map_intent"]["level"] == "county"
     assert v["map_intent"]["mapType"] == "single-state-ranked-subregions"
     assert v["map_intent"]["state"] == "Maryland"
@@ -374,20 +492,150 @@ def test_county_rows_with_focus_state_map() -> None:
 
 def test_congress_level_detected() -> None:
     rows = [{"cd_118": d, "Free_Cash_Flow": v} for d, v in [("MD-05", 9), ("MD-08", 4)]]
-    v = build_visuals("Maryland districts by free cash flow",
-                      {"tables": ["gov_congress"], "geography_level": "congress"}, {}, rows)
+    v = build_visuals(
+        "Maryland districts by free cash flow",
+        {"tables": ["gov_congress"], "geography_level": "congress"},
+        {},
+        rows,
+    )
     assert v["map_intent"]["level"] == "congress"
 
 
+def test_focused_congress_outflow_maps_planned_destination_dimension() -> None:
+    rows = [
+        {"subawardee_cd_name": district, "subaward_amount": amount}
+        for district, amount in (("Maryland CD-08", 10), ("Virginia CD-11", 8))
+    ]
+    routing = {
+        "tables": ["congress_flow"],
+        "geography_level": "congress",
+        "flow_direction": "outflow",
+        "semantic_plan": {"output_dimensions": ["subawardee_cd_name"]},
+    }
+
+    visual = build_visuals(
+        "Which districts received the most funding originating in MD-08?",
+        routing,
+        {"congress_flow": {"rcpt_cd_name": {"value": "Maryland CD-08", "score": 0.99}}},
+        rows,
+    )
+
+    assert visual["map_intent"]["enabled"] is True
+    assert visual["map_intent"]["geoSide"] == "destination"
+
+
 def test_non_geo_disables_map_but_keeps_chart() -> None:
-    rows = [{"agency": "Department of Defense", "Contracts": 9},
-            {"agency": "Department of Energy", "Contracts": 5}]
-    v = build_visuals("contracts by agency", {"tables": ["spending_state_agency"], "geography_level": "none"}, {}, rows)
+    rows = [
+        {"agency": "Department of Defense", "Contracts": 9},
+        {"agency": "Department of Energy", "Contracts": 5},
+    ]
+    v = build_visuals(
+        "contracts by agency",
+        {"tables": ["spending_state_agency"], "geography_level": "none"},
+        {},
+        rows,
+    )
     assert v["chart"] is not None
     assert v["map_intent"]["enabled"] is False
 
 
+def test_single_correlation_result_gets_coefficient_chart() -> None:
+    visual = build_visuals(
+        "Do financial literacy and debt ratios correlate?",
+        {"tables": ["finra_state", "gov_state"], "operation": "correlation"},
+        {},
+        [{"correlation": 0.19, "sample_size": 50}],
+    )
+
+    assert visual["chart"] is not None
+    assert visual["charts"][0]["title"] == "Correlation coefficient"
+    assert visual["charts"][0]["subtitle"] == "Paired observations: 50"
+
+
 def test_single_row_and_empty_no_chart() -> None:
-    assert build_visuals("debt ratio for texas", {"tables": ["gov_state"]}, {}, [{"state": "texas", "Debt_Ratio": 0.5}])["chart"] is None
+    assert (
+        build_visuals(
+            "debt ratio for texas",
+            {"tables": ["gov_state"]},
+            {},
+            [{"state": "texas", "Debt_Ratio": 0.5}],
+        )["chart"]
+        is None
+    )
     assert build_visuals("x", {"tables": []}, {}, [])["chart"] is None
     assert build_visuals("x", {"tables": []}, {}, [])["map_intent"]["enabled"] is False
+
+
+def test_map_intent_carries_auditable_period_source_and_coverage() -> None:
+    visual = build_visuals(
+        "top states by grants in 2024",
+        {
+            "tables": ["contract_state"],
+            "columns": ["Grants"],
+            "geography_level": "state",
+            "effective_period": "2024",
+            "data_truncated": True,
+        },
+        {},
+        [
+            {"state": "Maryland", "Grants": 9},
+            {"state": "Virginia", "Grants": None},
+        ],
+    )
+
+    intent = visual["map_intent"]
+    assert intent["enabled"] is True
+    assert intent["year"] == "2024"
+    assert intent["periodLabel"] == "2024"
+    assert intent["sourceTables"] == ["contract_state"]
+    assert intent["sourceLabel"]
+    assert intent["returnedGeographyCount"] == 2
+    assert intent["mappedValueCount"] == 1
+    assert intent["missingValueCount"] == 1
+    assert intent["partialResult"] is True
+
+
+def test_flow_map_exports_direction_instead_of_requiring_ui_inference() -> None:
+    visual = build_visuals(
+        "Which states send subawards into Maryland?",
+        {
+            "tables": ["state_flow"],
+            "columns": ["subaward_amount_year"],
+            "geography_level": "state",
+            "flow_direction": "inflow",
+        },
+        {"state_flow": {"state": {"value": "Maryland"}}},
+        [{"rcpt_state_name": "Virginia", "subaward_amount_year": 10}],
+    )
+
+    intent = visual["map_intent"]
+    assert intent["flowDirection"] == "inflow"
+    assert intent["periodLabel"] == "All available records"
+
+
+def test_fips_only_rows_remain_mappable() -> None:
+    state = build_visuals(
+        "grants by state",
+        {"tables": ["contract_state"], "columns": ["Grants"], "geography_level": "state"},
+        {},
+        [{"state_fips": 24, "Grants": 10}, {"state_fips": 51, "Grants": 8}],
+    )
+    county = build_visuals(
+        "grants by county",
+        {"tables": ["contract_county"], "columns": ["Grants"], "geography_level": "county"},
+        {},
+        [{"county_fips": 24031, "Grants": 10}, {"county_fips": 24027, "Grants": 8}],
+    )
+
+    assert state["map_intent"]["enabled"] is True
+    assert county["map_intent"]["enabled"] is True
+
+
+def test_non_finite_values_do_not_create_a_map() -> None:
+    visual = build_visuals(
+        "debt ratio by state",
+        {"tables": ["gov_state"], "columns": ["Debt_Ratio"], "geography_level": "state"},
+        {},
+        [{"state": "Maryland", "Debt_Ratio": float("nan")}],
+    )
+    assert visual["map_intent"]["enabled"] is False

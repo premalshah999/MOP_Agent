@@ -86,11 +86,11 @@ export function VegaChart({ spec, ariaLabel = 'Data visualization' }: VegaChartP
               domain: false,
               ticks: false,
               labelPadding: 8,
-              gridColor: '#eae8de',
+              gridColor: '#f1f5f9',
               gridWidth: 1,
               gridDash: [2, 3],
-              labelColor: '#6e6d64',
-              titleColor: '#3d3c38',
+              labelColor: '#64748b',
+              titleColor: '#334155',
               labelFontSize: 11,
               titleFontSize: 11,
               titleFontWeight: 500,
@@ -99,18 +99,18 @@ export function VegaChart({ spec, ariaLabel = 'Data visualization' }: VegaChartP
             },
             view: { stroke: null },
             style: { 'guide-label': { font: 'Inter' }, 'guide-title': { font: 'Inter' } },
-            bar: { color: '#c6613f', cornerRadiusEnd: 5 },
-            line: { color: '#c6613f', strokeWidth: 2 },
-            point: { color: '#c6613f', size: 72, filled: true },
-            circle: { color: '#c6613f' },
-            rule: { color: '#d8d5c9' },
-            area: { color: '#c6613f', opacity: 0.1 },
-            rect: { cornerRadius: 2 },
+            bar: { color: '#e03a3e', cornerRadiusEnd: 0 },
+            line: { color: '#e03a3e', strokeWidth: 2 },
+            point: { color: '#e03a3e', size: 68, filled: true },
+            circle: { color: '#e03a3e' },
+            rule: { color: '#cbd5e1' },
+            area: { color: '#e03a3e', opacity: 0.09 },
+            rect: { cornerRadius: 0 },
             legend: {
               labelFont: 'Inter',
               titleFont: 'Inter',
-              labelColor: '#6e6d64',
-              titleColor: '#3d3c38',
+              labelColor: '#64748b',
+              titleColor: '#334155',
               labelFontSize: 11,
               symbolType: 'circle',
             },
@@ -156,7 +156,7 @@ export function VegaChart({ spec, ariaLabel = 'Data visualization' }: VegaChartP
       ref={containerRef}
       role="img"
       aria-label={ariaLabel}
-      className="mt-3 w-full overflow-x-auto overflow-y-visible rounded-[10px] border border-[var(--line-soft)] bg-[var(--surface)] px-4 py-3"
+      className="mt-3 w-full overflow-x-auto overflow-y-visible border border-[var(--line)] bg-[var(--surface)] px-4 py-3"
     />
   );
 }

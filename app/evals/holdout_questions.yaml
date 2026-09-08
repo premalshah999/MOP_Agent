@@ -197,3 +197,28 @@
   question: explain the difference between contracts and grants in your data
   intent: META
   no_sql: true
+
+# ---- contract_congress: complete runtime-dataset coverage ----
+- id: h19
+  question: which Maryland congressional district received the most federal grant dollars in 2024
+  intent: ANALYTICAL
+  tables: [contract_congress]
+  must_columns: [cd_118, Grants]
+  reference_sql: >
+    SELECT cd_118 AS label, "Grants" AS v FROM mart_contract_congress
+    WHERE cd_118 LIKE 'MD-%' AND year = '2024'
+    ORDER BY "Grants" DESC, cd_118 ASC LIMIT 1
+  expect: { top_label: true }
+  faithfulness: true
+
+# ---- spending_state: published per-1,000-resident measure ----
+- id: h20
+  question: what were Maryland's federal grants per 1,000 residents in 2024
+  intent: ANALYTICAL
+  tables: [spending_state]
+  must_columns: ["Grants Per 1000"]
+  reference_sql: >
+    SELECT "Grants Per 1000" AS v FROM mart_spending_state
+    WHERE LOWER(state) = 'maryland' AND Year = '2024'
+  expect: { scalar: true, rel_tol: 0.001 }
+  faithfulness: true

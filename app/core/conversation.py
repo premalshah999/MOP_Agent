@@ -1,4 +1,4 @@
-"""Conversation contextualization.
+"""Conversation memory and follow-up contextualization.
 
 Multi-turn fix: a clarification answer ("federal contracts") or a follow-up
 ("what about Virginia?") is meaningless on its own. This rewrites the latest
@@ -20,10 +20,21 @@ question, using the conversation and structured analytical memory only to fill
 in missing context.
 
 Rules:
+- First classify how the latest message relates to the prior request:
+  SUBSTITUTE replaces one value in an existing slot; ADD introduces a new
+  measure/dimension while retaining compatible context; COMPARE explicitly
+  asks to compare old and new values; TRANSFORM changes the calculation or
+  presentation; STANDALONE is a complete new request.
+- A bare substitution must remain a substitution. For example, after
+  "Maryland's poverty rate in 2023", "what about Virginia?" means
+  "Virginia's poverty rate in 2023". It does NOT mean compare Maryland with
+  Virginia. Retain both only when the latest wording explicitly requests a
+  comparison (compare, versus, vs, difference, relative to) or addition.
 - If the latest message is a clarification answer or a follow-up, MERGE it with
-  the earlier question. Preserve every still-relevant entity/geography (state,
-  county, district, agency), metric/measure, filter, time period, flow
-  direction, ranking size, and comparison target.
+  the earlier question. Preserve every still-relevant slot (geography grain,
+  metric/measure, unrelated filter, time period, flow direction, ranking size,
+  and comparison target). A value replaced by SUBSTITUTE is no longer
+  relevant and MUST NOT appear in the rewrite.
   e.g. earlier "federal spending in miami-dade" + answer "federal contracts"
        -> "federal contracts in Miami-Dade county"
   e.g. earlier "top counties in Maryland by grants" + "what about Virginia?"
@@ -34,13 +45,60 @@ Rules:
   most?") as follow-ups. Apply the requested change and retain the rest.
 - A newly named value normally replaces the prior value for the same slot; it
   does not erase unrelated slots. Explicit comparison wording adds a value.
+- In particular, "compare that/it with X" means compare the most recent focal
+  entity or group WITH X. Retain the prior entity, measure, period, grain, and
+  direction; add X as the second comparison entity and rewrite the operation
+  explicitly as a comparison. A possessive such as "X's outflow" supplies the
+  new comparator and measure/direction, not permission to discard the first
+  side of "compare".
+- When a new self-contained expression repeats part of an earlier expression
+  but omits a term, the omission is intentional. Do not restore deleted
+  operands. Example: after "(total assets - total liabilities) + (current
+  assets - current liabilities)", the new question "total assets - total
+  liabilities" contains only that first difference.
 - If the latest message is already a complete, self-contained question (a new
   topic), return it unchanged.
+- Decide this BEFORE rewriting. A latest message that supplies its own
+  operation, measure(s), geography/scope, and named entity is standalone even
+  when it concerns the same dataset as the previous turn. Do not merge an old
+  correlation, ranking, metric, or entity into that complete request.
+  Example: earlier "correlate Asian share with income by state" followed by
+  "sort Wyoming counties by Black and Asian population" -> the latest message
+  is standalone and must remain exactly that request.
 - Prefer the most recent analytical context when older contexts conflict.
+- When structured analytical memory contains exact table ids, preserve those
+  canonical ids in the rewrite instead of carrying forward a misspelled dataset
+  name from user prose.
+- Treat a terse repetition such as "number of employees?", "but the total?",
+  or "I mean the actual value" as a correction that keeps the most recently
+  named dataset and metric and asks for the metric's numeric value. Do not
+  rewrite a metric-value request into a row-count or schema question unless
+  the user explicitly says rows, records, columns, variables, or schema.
+- When that correction names a dataset but no individual geography, preserve
+  that it asks for the dataset-wide total of the metric at the current/default
+  period. Do not rewrite it as one value per state/county/district. If an
+  individual geography was named, preserve that narrower lookup instead.
+- Preserve the distinction between employees working in a geography and
+  federal employees residing there when the conversation establishes one.
+- Preserve explanatory/schema follow-ups as explanatory/schema questions. If
+  the latest message asks "why", asks what a denominator or age qualifier
+  means, challenges whether a prior answer is possible, or asks which groups
+  are actually available, carry forward the relevant dataset and metric but do
+  NOT rewrite it as another request to calculate the previous numeric value.
+  Example: a prior bachelor's-attainment answer followed by "why 25+; what
+  about other ages?" becomes "In the ACS dataset, why is Education >=
+  Bachelor's defined for adults 25+, and are other education-by-age groups
+  available?"
 - Never invent entities or metrics that were not stated by the user.
-- Output the question only — no preamble.
+- Set latest_is_standalone=true only when the latest message can be interpreted
+  without the conversation. When true, standalone_question must reproduce the
+  latest request without imported context.
 
-Return ONLY JSON: {"standalone_question": "<rewritten question>"}"""
+Return ONLY JSON:
+{"latest_is_standalone": <bool>,
+ "followup_mode": "SUBSTITUTE|ADD|COMPARE|TRANSFORM|STANDALONE",
+ "standalone_question": "<latest unchanged, or safely rewritten follow-up>",
+ "context_added": ["<slots copied from history>"]}"""
 
 
 def _is_clarification(turn: dict[str, Any]) -> bool:
@@ -130,7 +188,9 @@ def structured_memory(history: list[dict[str, Any]]) -> str:
         return ""
     blocks: list[str] = []
     for index, memory in enumerate(memories, start=1):
-        lines = [f"  {key} = {value}" for key, value in memory.items() if value not in (None, "", [])]
+        lines = [
+            f"  {key} = {value}" for key, value in memory.items() if value not in (None, "", [])
+        ]
         if lines:
             label = "most recent" if index == 1 else f"{index - 1} turn(s) earlier"
             blocks.append(f"ANALYTICAL CONTEXT — {label}:\n" + "\n".join(lines))
@@ -170,14 +230,19 @@ def contextualize(question: str, history: list[dict[str, Any]] | None) -> str:
         # orchestrator; here we just record it.
         try:
             from app.observability.logging import log_pipeline_event
-            log_pipeline_event({
-                "stage": "contextualize",
-                "status": "skipped",
-                "reason": f"llm_error: {exc}",
-                "fallback": "returning raw question",
-            })
+
+            log_pipeline_event(
+                {
+                    "stage": "contextualize",
+                    "status": "skipped",
+                    "reason": f"llm_error: {exc}",
+                    "fallback": "returning raw question",
+                }
+            )
         except Exception:
             pass
         return question
     rewritten = str(raw.get("standalone_question") or "").strip()
+    if raw.get("latest_is_standalone") is True:
+        return question
     return rewritten or question

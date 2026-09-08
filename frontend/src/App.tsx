@@ -6,7 +6,7 @@ import { AboutPage } from '@/components/AboutPage';
 import { AdminPage } from '@/components/AdminPage';
 import { AuthScreen } from '@/components/AuthScreen';
 import { ChatArea } from '@/components/ChatArea';
-import { DatasetLibraryWorkspace } from '@/components/DatasetLibraryWorkspace';
+import { DatasetCatalog } from '@/components/DatasetCatalog';
 import { OnboardingTour } from '@/components/OnboardingTour';
 import { SettingsModal } from '@/components/SettingsModal';
 import { SharedThread } from '@/components/SharedThread';
@@ -115,10 +115,11 @@ function Workspace() {
         onOpenChat={handleOpenChat}
         onNewChat={() => void handleNewChat()}
         onSelectThread={handleSelectThread}
+        onRenameThread={store.updateThreadTitle}
         onDeleteThread={store.deleteThread}
         onOpenSettings={() => setSettingsOpen(true)}
         resizable
-        className="hidden lg:flex lg:flex-col"
+        className="hidden border-r border-[var(--sidebar-line)] lg:flex lg:flex-col"
       />
 
       {/* Mobile sidebar overlay */}
@@ -134,6 +135,7 @@ function Workspace() {
           onOpenChat={handleOpenChat}
           onNewChat={() => void handleNewChat()}
           onSelectThread={handleSelectThread}
+          onRenameThread={store.updateThreadTitle}
           onDeleteThread={store.deleteThread}
           onOpenSettings={() => setSettingsOpen(true)}
           onClose={() => setMobileSidebarOpen(false)}
@@ -142,23 +144,23 @@ function Workspace() {
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="shrink-0 bg-[var(--bg)]">
-          <div className="mx-auto flex h-12 w-full max-w-7xl items-center justify-between gap-3 px-4 lg:px-7">
-            <div className="min-w-0">
-              <span className="block truncate font-display text-[14px] font-semibold tracking-tight text-[var(--ink)]">
-                Maryland Opportunity
+        <div className="shrink-0 border-b border-[var(--line)] bg-[var(--surface)]">
+          <div className="mx-auto flex h-[58px] w-full max-w-7xl items-center justify-between gap-3 px-4 lg:px-7">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="grid h-7 w-7 shrink-0 place-items-center bg-[var(--ink)] text-[12px] font-bold text-white">
+                M<span className="text-[var(--brand-red)]">.</span>
+              </span>
+              <span className="mop-wordmark hidden truncate text-[14px] text-[var(--ink)] sm:block">
+                Maryland Opportunity Project
               </span>
             </div>
 
-            <div className="inline-flex rounded-full bg-[var(--surface-2)] p-0.5">
+            <nav className="flex h-full items-stretch" aria-label="Workspace">
               <button
                 type="button"
                 onClick={() => setMainView('chat')}
-                className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition ${
-                  mainView === 'chat'
-                    ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
-                    : 'text-[var(--muted)] hover:text-[var(--ink)]'
-                }`}
+                className="mop-nav-button"
+                aria-current={mainView === 'chat' ? 'page' : undefined}
               >
                 <MessageSquare size={13} />
                 Assistant
@@ -166,11 +168,8 @@ function Workspace() {
               <button
                 type="button"
                 onClick={() => setMainView('library')}
-                className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition ${
-                  mainView === 'library'
-                    ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
-                    : 'text-[var(--muted)] hover:text-[var(--ink)]'
-                }`}
+                className="mop-nav-button"
+                aria-current={mainView === 'library' ? 'page' : undefined}
               >
                 <Library size={13} />
                 Data
@@ -179,11 +178,8 @@ function Workspace() {
                 <button
                   type="button"
                   onClick={() => setMainView('admin')}
-                  className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition ${
-                    mainView === 'admin'
-                      ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
-                      : 'text-[var(--muted)] hover:text-[var(--ink)]'
-                  }`}
+                  className="mop-nav-button"
+                  aria-current={mainView === 'admin' ? 'page' : undefined}
                 >
                   <Gauge size={13} />
                   Admin
@@ -193,16 +189,13 @@ function Workspace() {
                 type="button"
                 onClick={() => setMainView('about')}
                 title="About Maryland Opportunity"
-                className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition ${
-                  mainView === 'about'
-                    ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
-                    : 'text-[var(--muted)] hover:text-[var(--ink)]'
-                }`}
+                className="mop-nav-button"
+                aria-current={mainView === 'about' ? 'page' : undefined}
               >
                 <Info size={13} />
                 About
               </button>
-            </div>
+            </nav>
           </div>
         </div>
 
@@ -223,7 +216,7 @@ function Workspace() {
           />
         )}
         {mainView === 'library' && (
-          <DatasetLibraryWorkspace
+          <DatasetCatalog
             datasets={DATASET_GUIDES}
             datasetCatalog={datasetCatalog}
             selectedDatasetId={selectedDataset.id}

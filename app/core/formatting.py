@@ -10,13 +10,23 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 _CURRENCY_UNIT = {"usd", "$", "dollar", "dollars", "us dollars"}
 _PCT_UNIT = {"%", "percent", "percentage", "pct"}
 _COUNT_UNIT = {
-    "people", "person", "persons", "household", "households", "firms",
-    "businesses", "establishments", "count", "counts", "n", "records",
-    "units", "jobs",
+    "people",
+    "person",
+    "persons",
+    "household",
+    "households",
+    "firms",
+    "businesses",
+    "establishments",
+    "count",
+    "counts",
+    "n",
+    "records",
+    "units",
+    "jobs",
 }
 
 _CURRENCY_LABEL = re.compile(
@@ -110,7 +120,11 @@ def format_key_number(item: dict[str, Any]) -> dict[str, Any]:
     if is_pct:
         return {"label": label, "value": fmt_pct(n), "unit": ""}
     if is_count:
-        return {"label": label, "value": fmt_count(n), "unit": unit_raw if unit_lc not in _COUNT_UNIT else ""}
+        return {
+            "label": label,
+            "value": fmt_count(n),
+            "unit": unit_raw if unit_lc not in _COUNT_UNIT else "",
+        }
 
     # Plain numeric with a non-currency/non-pct unit (e.g. "years", "miles"):
     # add commas to the number but keep the unit visible.
@@ -132,6 +146,7 @@ def format_key_numbers(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # the raw rows (or a small set of derivable aggregates) and drops any that
 # can't be traced — caller decides whether to downgrade confidence too.
 # ---------------------------------------------------------------------------
+
 
 def _row_numeric_pool(rows: list[dict[str, Any]]) -> set[float]:
     """Collect every numeric scalar in the returned rows for membership tests."""
@@ -173,6 +188,28 @@ def _row_aggregate_pool(rows: list[dict[str, Any]]) -> set[float]:
     return agg
 
 
+def _rank_is_supported(item: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
+    """Validate a named ordinal against the ordered evidence rows."""
+
+    label = str(item.get("label") or "").strip()
+    value = _to_float(item.get("value"))
+    if value is None or value != int(value) or not re.search(r"\b(?:rank|position)\b", label, re.I):
+        return False
+    rank = int(value)
+    if not 1 <= rank <= len(rows):
+        return False
+    subject = re.sub(r"\b(?:rank|position)\b", " ", label, flags=re.I)
+    subject = re.sub(r"[^a-z0-9]+", " ", subject.casefold()).strip()
+    if not subject:
+        return False
+    row_text = " ".join(
+        str(row_value).casefold()
+        for row_value in rows[rank - 1].values()
+        if isinstance(row_value, str)
+    )
+    return bool(re.search(rf"\b{re.escape(subject)}\b", row_text))
+
+
 def validate_key_numbers_against_rows(
     items: list[dict[str, Any]],
     rows: list[dict[str, Any]],
@@ -206,7 +243,9 @@ def validate_key_numbers_against_rows(
         if n is None:
             kept.append(it)
             continue
-        if any(abs(n - rv) <= rel_tol * max(1.0, abs(rv)) for rv in pool):
+        if _rank_is_supported(it, rows) or any(
+            abs(n - rv) <= rel_tol * max(1.0, abs(rv)) for rv in pool
+        ):
             kept.append(it)
         else:
             dropped.append(str(it.get("label", "")) or "unknown")
@@ -230,8 +269,7 @@ def validate_key_numbers_against_row_sets(
     if not items:
         return [], []
     numeric_sets = [
-        rows for rows in row_sets
-        if rows and (_row_numeric_pool(rows) or _row_aggregate_pool(rows))
+        rows for rows in row_sets if rows and (_row_numeric_pool(rows) or _row_aggregate_pool(rows))
     ]
     if not numeric_sets:
         return list(items), []

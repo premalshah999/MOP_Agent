@@ -9,7 +9,8 @@ Public API preserved for existing consumers:
   quote_identifier, mart_view_name, load_registry, get_dataset, all_allowed_views
 New helpers for the LLM pipeline:
   metadata_doc, catalog_for_prompt, table_schema_block, critical_warnings_for,
-  join_hints_for, geographic_keys, common_question_patterns
+  join_hints_for, geographic_keys, common_question_patterns,
+  semantic_catalog_for_verification
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from app.semantic.models import (
     MetricDefinition,
     SemanticRegistrySnapshot,
 )
-
 
 REGISTRY_VERSION = "metadata-catalog-v3"
 _SPECIAL_IDENTIFIER = re.compile(r"[^A-Za-z0-9_]")
@@ -92,36 +92,140 @@ _YEAR_COLUMNS = {"year", "Year", "act_dt_fis_yr"}
 
 # Columns that are identifiers / dimensions / geometry, never aggregatable measures.
 _KEY_COLUMNS = {
-    "state", "county", "cd_118", "fips", "state_fips", "county_fips",
-    "agency", "agency_name", "agency_code", "naics", "naics_2digit_code",
-    "naics_2digit_title", "naics_2digit",
-    "rcpt_st_cd", "rcpt_state_name", "subawardee_st_cd", "subawardee_state_name",
-    "rcpt_cty", "subawardee_cty", "rcpt_cty_name", "subawardee_cty_name",
-    "rcpt_state", "subawardee_state", "rcpt_full_name", "subawardee_full_name",
-    "rcpt_cd_name", "subawardee_cd_name", "prime_awardee_stcd118", "subawardee_stcd118",
-    "origin_lat", "origin_lon", "dest_lat", "dest_lon", "Unnamed: 0",
+    "state",
+    "county",
+    "cd_118",
+    "fips",
+    "state_fips",
+    "county_fips",
+    "agency",
+    "agency_name",
+    "agency_code",
+    "naics",
+    "naics_2digit_code",
+    "naics_2digit_title",
+    "naics_2digit",
+    "rcpt_st_cd",
+    "rcpt_state_name",
+    "subawardee_st_cd",
+    "subawardee_state_name",
+    "rcpt_cty",
+    "subawardee_cty",
+    "rcpt_cty_name",
+    "subawardee_cty_name",
+    "rcpt_state",
+    "subawardee_state",
+    "rcpt_full_name",
+    "subawardee_full_name",
+    "rcpt_cd_name",
+    "subawardee_cd_name",
+    "prime_awardee_stcd118",
+    "subawardee_stcd118",
+    "origin_lat",
+    "origin_lon",
+    "dest_lat",
+    "dest_lon",
+    "Unnamed: 0",
 }
 
 _AVG_HINTS = (
-    "per_capita", "per capita", "per 1000", "per1000", "ratio", "rate",
-    "median", "percent", "%", "index", "share",
+    "per_capita",
+    "per capita",
+    "per 1000",
+    "per1000",
+    "ratio",
+    "rate",
+    "median",
+    "percent",
+    "%",
+    "index",
+    "share",
 )
 _DIMENSION_COLUMNS = tuple(sorted(_KEY_COLUMNS - {"Unnamed: 0"}))
 
 _CURATED_METRIC_ALIASES = {
-    "below poverty": ["poverty rate", "percent below poverty"],
-    "education >= bachelor's": ["bachelor's degree attainment", "college degree attainment"],
-    "education >= graduate": ["graduate degree attainment"],
+    "total population": ["population count", "resident population"],
+    "age 18-65": ["working-age share", "working-age population percentage"],
+    "# of household": ["household count", "number of households"],
+    "income >$50k": ["households earning over $50,000", "household income above 50k"],
+    "income >$100k": ["households earning over $100,000", "household income above 100k"],
+    "income >$200k": ["households earning over $200,000", "household income above 200k"],
+    "below poverty": ["poverty rate", "percent below poverty", "below poverty level"],
+    "education >= high school": ["high school graduate or higher", "high school attainment"],
+    "education >= bachelor's": [
+        "bachelor's degree attainment",
+        "college degree attainment",
+        "bachelor degree or higher",
+    ],
+    "education >= graduate": ["graduate degree attainment", "graduate or professional degree"],
     "median household income": ["household income", "median income"],
+    "owner occupied": ["homeownership rate", "owner-occupied housing share"],
+    "renter occupied": ["renter occupancy rate", "renter-occupied housing share"],
+    "total_assets": ["government resources", "resources owned", "government assets"],
+    "current_assets": ["short-term assets", "liquid assets", "resources available within one year"],
+    "total_liabilities": ["government debt and obligations", "total obligations"],
+    "current_liabilities": ["short-term obligations", "bills due within one year"],
+    "non-current_liabilities": ["long-term obligations", "long-term liabilities"],
+    "net_position": ["government net worth", "government equity"],
+    "net_pension_liability": ["unfunded pension obligations", "pension shortfall"],
+    "net_opeb_liability": ["retiree healthcare obligations", "unfunded retiree benefits"],
+    "compensated_absences": ["unused leave liability", "vacation and sick leave obligations"],
+    "revenue": ["government income", "taxes fees and transfers"],
+    "expenses": ["cost of public services", "government expenditures"],
+    "current_ratio": ["short-term solvency", "liquidity ratio"],
     "financial_constraint": ["financial stress", "financial constraint"],
     "financial_literacy": ["financial literacy", "financial knowledge"],
-    "alternative_financing": ["alternative financial services"],
-    "risk_averse": ["risk aversion"],
-    "free_cash_flow": ["free cash flow", "cash flow"],
+    "alternative_financing": [
+        "alternative financial services",
+        "payday loans and high-cost credit",
+    ],
+    "satisfied": ["financial wellbeing", "financial well-being", "financially satisfied"],
+    "risk_averse": ["risk aversion", "unwillingness to take financial risk"],
+    "free_cash_flow": ["free cash flow", "cash flow", "fiscal cushion"],
     "debt_ratio": ["debt ratio", "liabilities to assets ratio"],
-    "bonds,_loans_&_notes": ["bonds loans and notes", "bonded debt"],
-    "subaward_amount": ["subaward dollars", "subcontract dollars"],
-    "subaward_amount_year": ["subaward dollars", "subcontract dollars"],
+    "bonds,_loans_&_notes": [
+        "bonds loans and notes",
+        "bonded debt",
+        "amount borrowed",
+        "government borrowing",
+        "borrow",
+        "borrowed",
+        "borrowing",
+    ],
+    "subaward_amount": [
+        "subaward dollars",
+        "subcontract dollars",
+        "sub-contract out",
+        "sub-contract in",
+        "net sub-contract",
+        "net subcontract",
+    ],
+    "subaward_amount_year": [
+        "subaward dollars",
+        "subcontract dollars",
+        "sub-contract out",
+        "sub-contract in",
+        "net sub-contract",
+        "net subcontract",
+    ],
+    "contracts": [
+        "federal contracts",
+        "federal contract obligations",
+        "prime federal contracts",
+        "direct federal contracts",
+    ],
+    "direct payments": [
+        "benefit transfers",
+        "transfer payments",
+        "federal benefits",
+        "welfare payments",
+    ],
+    "resident wage": ["federal wages paid to residents", "resident federal wages"],
+    "employees wage": ["federal civilian payroll", "federal employee wages"],
+    # Terminology used by the supplied source dictionary differs from the
+    # runtime column labels. Preserve both vocabularies in LLM grounding.
+    "employees": ["employee count", "federal employment", "federal employees"],
+    "federal residents": ["resident federal employees", "federal employees residing"],
 }
 
 _CURATED_METRIC_LABELS = {
@@ -219,7 +323,9 @@ def _available_years(meta: dict[str, Any]) -> list[str | int]:
     return []
 
 
-def _default_year(table_name: str, meta: dict[str, Any], years: list[str | int]) -> str | int | None:
+def _default_year(
+    table_name: str, meta: dict[str, Any], years: list[str | int]
+) -> str | int | None:
     if table_name.startswith("gov_"):
         return None  # gov tables are single-snapshot, never year-filtered
     if table_name.startswith("contract_") or table_name.startswith("spending_"):
@@ -270,19 +376,23 @@ def _warnings_index() -> dict[str, list[str]]:
         add(
             t,
             "`year` is a STRING with exactly two values per geography: '2024' "
-            "(single year) and '2020-2024' (5-year aggregate). You MUST filter "
+            "(single-year snapshot) and '2020-2024' (precomputed multi-year "
+            "summary; its exact aggregation method is not documented here). You MUST filter "
             "to exactly one period — default to year = '2024' unless the user "
-            "explicitly asks for the multi-year/5-year total. NEVER omit the "
-            "year filter and NEVER SUM across both rows (that double counts).",
+            "explicitly asks for the multi-year summary. NEVER call that row a "
+            "five-year sum, omit the period filter, or SUM across both rows.",
         )
 
     gov = warnings.get("gov_year_label", {})
     for t in ("gov_state", "gov_county", "gov_congress"):
-        add(t, gov.get("note", "Single year only.") + " " + gov.get("sql_fix", "Do not filter by year."))
+        add(
+            t,
+            gov.get("note", "Single year only.")
+            + " "
+            + gov.get("sql_fix", "Do not filter by year."),
+        )
 
-    # Missing-data placeholder rows: Rhode Island and Vermont report 0 for
-    # every gov_state financial field (no source filings), so "lowest X"
-    # rankings would wrongly crown them with literal zeros.
+    # Missing-data placeholder rows must not win bottom rankings.
     add(
         "gov_state",
         "Rhode Island and Vermont report 0 for EVERY financial column "
@@ -294,9 +404,16 @@ def _warnings_index() -> dict[str, list[str]]:
     )
     add(
         "gov_county",
-        "Rows where Total_Liabilities = 0 are missing source filings, not "
-        "real zeros — for ANY lowest/bottom/ascending ranking on ANY "
-        "financial column add `AND Total_Liabilities > 0`.",
+        "Coverage is field-specific. Exclude NULL for the requested financial "
+        "metric and exclude rows whose core financial fields are all missing/zero. "
+        "Do NOT use a blanket `Total_Liabilities > 0` filter for unrelated metrics: "
+        "some counties have partial filings with valid assets, revenue, or expenses.",
+    )
+    add(
+        "gov_congress",
+        "Twenty district rows contain zero in every financial field because mapped "
+        "source filings are unavailable. Exclude all-zero placeholder rows from "
+        "financial rankings and summaries.",
     )
 
     for t in ("finra_state",):
@@ -305,15 +422,21 @@ def _warnings_index() -> dict[str, list[str]]:
         add(t, "Only year 2021 exists.")
 
     sfd = warnings.get("state_flow_duplicate_columns", {})
-    add("state_flow", sfd.get("fix", "Use rcpt_state_name / subawardee_state_name.") +
-        " state_flow has NO year column (all available records). "
+    add(
+        "state_flow",
+        sfd.get("fix", "Use rcpt_state_name / subawardee_state_name.")
+        + " state_flow has NO year column (all available records). "
         "subaward_amount_year can be negative (clawbacks). Totals include "
         "intra-state flows (for example, Maryland to Maryland) unless the SQL "
         "explicitly excludes them; never describe an unfiltered total as only "
-        "funding to or from other states.")
+        "funding to or from other states.",
+    )
 
     cfi = warnings.get("congress_flow_integer_district_id", {})
-    add("congress_flow", cfi.get("fix", "Use rcpt_cd_name; never join the integer district id to cd_118."))
+    add(
+        "congress_flow",
+        cfi.get("fix", "Use rcpt_cd_name; never join the integer district id to cd_118."),
+    )
 
     cff = warnings.get("county_flow_fips_as_integer", {})
     add("county_flow", cff.get("note", "rcpt_cty / subawardee_cty are integer FIPS codes."))
@@ -322,7 +445,21 @@ def _warnings_index() -> dict[str, list[str]]:
     manifest, _ = _raw()
     for table, info in manifest.items():
         if "Unnamed: 0" in info.get("columns", []):
-            add(table, 'Never SELECT or aggregate the "Unnamed: 0" column — it is a junk row index, not data.')
+            add(
+                table,
+                'Never SELECT or aggregate the "Unnamed: 0" column — it is a junk row index, not data.',
+            )
+
+    # Table-level analyst notes are part of the same semantic contract as the
+    # column dictionary. Feed them to SQL generation, answer writing, and the
+    # faithfulness judge so the public dataset page and the agent cannot drift
+    # into two different descriptions of runtime coverage.
+    for table, meta in metadata_doc().get("tables", {}).items():
+        if not isinstance(meta, dict):
+            continue
+        for note in meta.get("critical_notes") or []:
+            if str(note).strip():
+                add(table, str(note).strip())
 
     return index
 
@@ -362,17 +499,31 @@ def _effective_meta_cols(table_name: str) -> dict[str, Any]:
     own = tables.get(table_name, {}).get("columns", {})
     own = own if isinstance(own, dict) else {}
     canonical_id = _CANONICAL_BY_FAMILY.get(_family_for(table_name))
-    if not canonical_id or canonical_id == table_name:
-        return {k: dict(v) for k, v in own.items() if isinstance(v, dict)}
     canon = tables.get(canonical_id, {}).get("columns", {})
-    canon = canon if isinstance(canon, dict) else {}
+    canon = canon if canonical_id and isinstance(canon, dict) else {}
     merged: dict[str, Any] = {}
     for col, meta in own.items():
         meta = dict(meta) if isinstance(meta, dict) else {}
-        ref = canon.get(col) if isinstance(canon.get(col), dict) else {}
+        ref = (
+            canon.get(col)
+            if canonical_id != table_name and isinstance(canon.get(col), dict)
+            else {}
+        )
         for field in ("description", "unit", "sql_name", "range", "sample_values"):
             if not meta.get(field) and ref.get(field):
                 meta[field] = ref[field]
+        if not meta.get("description") and col.endswith("_per_capita"):
+            base_column = col[: -len("_per_capita")]
+            base = own.get(base_column)
+            if not isinstance(base, dict) or not base.get("description"):
+                base = canon.get(base_column)
+            base_description = (
+                str(base.get("description") or "").rstrip(".") if isinstance(base, dict) else ""
+            )
+            if base_description:
+                meta["description"] = (
+                    f"{base_description}, divided by the represented population (USD per person)."
+                )
         merged[col] = meta
     return merged
 
@@ -417,6 +568,27 @@ def _metric_semantics(column: str, meta_col: dict[str, Any]) -> tuple[str, str, 
     return concept or lower, variant, list(dict.fromkeys(alias for alias in aliases if alias))
 
 
+def _metric_unit(column: str, meta_col: dict[str, Any]) -> str:
+    """Return a documented or description-derived display unit.
+
+    Source dictionaries occasionally omit a unit while explicitly describing
+    a ratio, index, or 0-1 share. Keeping that semantic signal avoids exposing
+    the unhelpful generic unit ``value`` to the planner and dataset library.
+    """
+
+    declared = str(meta_col.get("unit") or "").strip()
+    if declared:
+        return declared
+    lower = column.casefold()
+    description = str(meta_col.get("description") or "").casefold()
+    range_text = str(meta_col.get("range") or "").casefold()
+    if "ratio" in lower or "ratio" in description:
+        return "ratio"
+    if range_text in {"0-1", "0–1"}:
+        return "proportion (0-1)" if "share" in description else "index (0-1)"
+    return "value"
+
+
 def _metrics(columns: list[str], meta_cols: dict[str, Any]) -> dict[str, MetricDefinition]:
     metrics: dict[str, MetricDefinition] = {}
     for col in columns:
@@ -430,7 +602,7 @@ def _metrics(columns: list[str], meta_cols: dict[str, Any]) -> dict[str, MetricD
             label=_metric_label(col),
             description=str(meta_col.get("description", "")) or col,
             sql=sql_name,
-            unit=str(meta_col.get("unit", "value")),
+            unit=_metric_unit(col, meta_col),
             aggregation=_aggregation_for(col, meta_col),
             synonyms=aliases,
             semantic_concept=concept,
@@ -438,7 +610,9 @@ def _metrics(columns: list[str], meta_cols: dict[str, Any]) -> dict[str, MetricD
         )
     groups: dict[str, dict[str, str]] = {}
     for metric in metrics.values():
-        groups.setdefault(str(metric.semantic_concept), {})[str(metric.semantic_variant)] = metric.id
+        groups.setdefault(str(metric.semantic_concept), {})[str(metric.semantic_variant)] = (
+            metric.id
+        )
     for metric in metrics.values():
         variants = groups.get(str(metric.semantic_concept), {})
         metric.related_variants = {
@@ -447,7 +621,9 @@ def _metrics(columns: list[str], meta_cols: dict[str, Any]) -> dict[str, MetricD
     return metrics
 
 
-def _build_dataset(table_name: str, manifest: dict[str, Any], metadata: dict[str, Any]) -> DatasetDefinition:
+def _build_dataset(
+    table_name: str, manifest: dict[str, Any], metadata: dict[str, Any]
+) -> DatasetDefinition:
     info = manifest[table_name]
     meta = metadata.get("tables", {}).get(table_name, {})
     meta_cols = _effective_meta_cols(table_name)
@@ -478,8 +654,7 @@ def _build_dataset(table_name: str, manifest: dict[str, Any], metadata: dict[str
 def load_registry() -> SemanticRegistrySnapshot:
     manifest, metadata = _raw()
     datasets = {
-        table_name: _build_dataset(table_name, manifest, metadata)
-        for table_name in manifest
+        table_name: _build_dataset(table_name, manifest, metadata) for table_name in manifest
     }
     return SemanticRegistrySnapshot(version=REGISTRY_VERSION, datasets=datasets)
 
@@ -519,17 +694,41 @@ def _year_note(ds: DatasetDefinition) -> str:
     )
 
 
-def catalog_for_prompt() -> str:
-    """Compact catalog of every loaded table for the routing LLM.
+def catalog_for_prompt(table_ids: set[str] | list[str] | tuple[str, ...] | None = None) -> str:
+    """Compact catalog of loaded tables for an LLM prompt.
 
     One block per table: name, family, geography, grain, year handling, key
-    columns, and measure columns. Token-efficient but complete enough to route.
+    columns, and measure columns. The router receives the full catalog; agents
+    that already have an audited route can request only those tables, reducing
+    cost and preventing irrelevant sibling schemas from distracting analysis.
     """
     reg = load_registry()
+    selected = set(table_ids) if table_ids is not None else None
     lines: list[str] = []
     for ds in reg.datasets.values():
+        if selected is not None and ds.id not in selected:
+            continue
         year_note = _year_note(ds)
-        measures = _measure_columns(ds)
+        table_notes = metadata_doc().get("tables", {}).get(ds.id, {}).get("critical_notes") or []
+        runtime_note = (
+            "\n- runtime limitations: " + " | ".join(str(note) for note in table_notes)
+            if table_notes
+            else ""
+        )
+        measures: list[str] = []
+        for metric_id in _measure_columns(ds):
+            metric = ds.metrics.get(metric_id)
+            if metric is None:
+                measures.append(metric_id)
+                continue
+            canonical = re.sub(r"[^a-z0-9]+", " ", metric_id.casefold()).strip()
+            aliases = [
+                alias
+                for alias in metric.synonyms
+                if re.sub(r"[^a-z0-9]+", " ", alias.casefold()).strip() != canonical
+            ]
+            alias_note = f" (also: {', '.join(aliases[:3])})" if aliases else ""
+            measures.append(metric_id + alias_note)
         lines.append(
             f"### {ds.id}  [{ds.family} · {ds.geography}]\n"
             f"- {ds.description}\n"
@@ -537,8 +736,85 @@ def catalog_for_prompt() -> str:
             f"- year: {year_note}\n"
             f"- key columns: {', '.join(_key_columns(ds)) or '(none)'}\n"
             f"- measures: {', '.join(measures) if measures else '(none)'}"
+            f"{runtime_note}"
         )
     return "\n\n".join(lines)
+
+
+@lru_cache(maxsize=32)
+def _semantic_catalog_for_verification_cached(selected_ids: tuple[str, ...]) -> str:
+    """A description-rich, deduplicated measure index for route auditing.
+
+    The fast router receives a compact table catalog.  A refusal or a wrong
+    high-confidence route can still happen when the user's wording occurs only
+    in a variable description (for example, "benefit transfers" for Direct
+    Payments).  This index keeps all 67 distinct runtime measures, their rich
+    descriptions, aliases, units, and the exact tables that physically contain
+    them.  It is used by a separate LLM audit; it never chooses an answer or
+    manufactures a field.
+    """
+    registry = load_registry()
+    selected = set(selected_ids) if selected_ids else None
+    by_metric: dict[str, dict[str, Any]] = {}
+    for dataset in registry.datasets.values():
+        if selected is not None and dataset.id not in selected:
+            continue
+        for metric in dataset.metrics.values():
+            item = by_metric.setdefault(
+                metric.id,
+                {
+                    "tables": [],
+                    "labels": [],
+                    "descriptions": [],
+                    "aliases": [],
+                    "units": [],
+                },
+            )
+            item["tables"].append(dataset.id)
+            item["labels"].append(metric.label)
+            item["descriptions"].append(metric.description)
+            item["aliases"].extend(metric.synonyms)
+            item["units"].append(metric.unit)
+
+    table_lines = [
+        f"- {dataset.id}: geography={dataset.geography}; year={_year_note(dataset)}; "
+        f"dimensions={', '.join(dataset.dimensions) or '(none)'}"
+        for dataset in registry.datasets.values()
+        if selected is None or dataset.id in selected
+    ]
+    metric_lines: list[str] = []
+    for metric_id, item in by_metric.items():
+        description = max(
+            (str(value) for value in item["descriptions"] if str(value).strip()),
+            key=len,
+            default=metric_id,
+        )
+        aliases = list(dict.fromkeys(str(value) for value in item["aliases"] if str(value).strip()))
+        labels = list(dict.fromkeys(str(value) for value in item["labels"] if str(value).strip()))
+        units = list(dict.fromkeys(str(value) for value in item["units"] if str(value).strip()))
+        metric_lines.append(
+            f"- exact column `{metric_id}` | tables={','.join(item['tables'])} | "
+            f"label={labels[0] if labels else metric_id} | unit={','.join(units) or 'value'} | "
+            f"meaning={description} | aliases={', '.join(aliases)}"
+        )
+    flow_join = str(
+        (metadata_doc().get("cross_dataset_joins") or {}).get("flow_to_other_tables") or ""
+    ).strip()
+    return (
+        "RUNTIME TABLE INDEX\n"
+        + "\n".join(table_lines)
+        + "\n\nRUNTIME MEASURE INDEX\n"
+        + "\n".join(metric_lines)
+        + (f"\n\nAUTHORITATIVE CROSS-TABLE KEY\n- {flow_join}" if flow_join else "")
+    )
+
+
+def semantic_catalog_for_verification(
+    table_ids: set[str] | list[str] | tuple[str, ...] | None = None,
+) -> str:
+    """Description-rich measure index, optionally scoped by schema retrieval."""
+    selected = tuple(sorted({str(value) for value in table_ids})) if table_ids else ()
+    return _semantic_catalog_for_verification_cached(selected)
 
 
 _FAMILY_BLURB = {
@@ -565,9 +841,8 @@ def domain_summary() -> str:
     for family, tables in by_family.items():
         blurb = _FAMILY_BLURB.get(family, family)
         lines.append(f"- {family}: {blurb}\n  tables: {', '.join(sorted(tables))}")
-    return (
-        "Geographies: US states, counties, and 118th congressional districts.\n"
-        + "\n".join(lines)
+    return "Geographies: US states, counties, and 118th congressional districts.\n" + "\n".join(
+        lines
     )
 
 
@@ -593,7 +868,13 @@ def table_schema_block(table_name: str) -> str:
         desc = mc.get("description", "")
         samples = mc.get("sample_values")
         sample_txt = f" e.g. {samples}" if samples else ""
-        out.append(f"    - {col} [{ctype}]{ref}: {desc}{sample_txt}".rstrip())
+        metric = ds.metrics.get(col)
+        semantic = (
+            f" measure; unit:{metric.unit}; default-row-aggregation:{metric.aggregation}"
+            if metric is not None
+            else " dimension"
+        )
+        out.append(f"    - {col} [{ctype};{semantic.strip()}]{ref}: {desc}{sample_txt}".rstrip())
     warns = critical_warnings_for([table_name])
     if warns:
         out.append("  CRITICAL:")

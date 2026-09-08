@@ -8,6 +8,7 @@ pytest suite (tests/ground_truth.py re-exports this) and `run_evals`.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
@@ -31,8 +32,25 @@ def _conn() -> duckdb.DuckDBPyConnection:
 
 
 def run_reference_sql(sql: str) -> list[dict[str, Any]]:
-    df = _conn().execute(sql).df()
-    return df.astype(object).where(df.notna(), None).to_dict(orient="records")
+    """Execute reference SQL without importing pandas or NumPy.
+
+    DuckDB's ``.df()`` adapter makes the supposedly independent evaluation
+    engine depend on two large, undeclared packages.  Native cursor rows keep
+    the reference path small and make a fresh dev install reproducible.
+    """
+
+    cursor = _conn().execute(sql)
+    columns = [str(description[0]) for description in (cursor.description or [])]
+
+    def clean(value: Any) -> Any:
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+
+    return [
+        {column: clean(value) for column, value in zip(columns, row, strict=True)}
+        for row in cursor.fetchall()
+    ]
 
 
 def reference_scalar(sql: str) -> Any:

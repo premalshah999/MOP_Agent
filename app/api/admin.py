@@ -81,7 +81,8 @@ def usage_summary(user: dict[str, Any]) -> dict[str, Any]:
             "message_id": f.get("message_id"),
             "note": f.get("note"),
         }
-        for f in fb if f.get("verdict") == "down"
+        for f in fb
+        if f.get("verdict") == "down"
     ][-10:]
     return {
         "total_questions": len(rows),

@@ -100,10 +100,3 @@ export const DATASET_GUIDES: DatasetGuide[] = [
     ],
   },
 ];
-
-export const GENERAL_STARTERS = [
-  'Which 15 states have the highest total liabilities per capita?',
-  "Compare Maryland's total liabilities per capita to the national average and median.",
-  'How much did the Department of Defense spend in Maryland in 2024? Break out contracts, grants, and direct payments.',
-  'Which states receive the most federal subaward funding from Maryland? Show top 15.',
-];

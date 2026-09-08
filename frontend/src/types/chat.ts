@@ -1,6 +1,6 @@
-export type ChatRole = 'user' | 'assistant';
+type ChatRole = 'user' | 'assistant';
 
-export interface HistoryMessage {
+interface HistoryMessage {
   role: ChatRole;
   content: string;
 }
@@ -36,7 +36,6 @@ export interface ApiAskResponse {
   caveats?: string[];
   confidence?: 'high' | 'medium' | 'low' | string;
   glossary?: Record<string, string>;
-  verified_query?: { id: string; score?: number } | null;
 }
 
 export interface KeyNumber {
@@ -68,7 +67,7 @@ export interface QueryContract {
   context_memory?: AnalyticalContextMemory | null;
 }
 
-export interface AnalyticalContextMemory {
+interface AnalyticalContextMemory {
   standalone_question?: string;
   tables?: string[];
   metrics?: string[];
@@ -86,7 +85,7 @@ export interface AnalyticalContextMemory {
   focus_state?: string;
 }
 
-export interface PipelineStage {
+interface PipelineStage {
   name: string;
   status: string;
   detail?: string;
@@ -174,7 +173,6 @@ export interface ChatMessage {
   caveats?: string[];
   confidence?: 'high' | 'medium' | 'low' | string;
   glossary?: Record<string, string>;
-  verifiedQuery?: { id: string; score?: number } | null;
 }
 
 export interface ChartBlock {
@@ -224,7 +222,7 @@ export interface AuthResponse {
   user: UserProfile;
 }
 
-export type ChatbotMapType =
+type ChatbotMapType =
   | 'atlas-single-metric'
   | 'atlas-comparison'
   | 'atlas-within-state'
@@ -253,6 +251,7 @@ export interface ChatbotMapIntent {
   unit?: string;
   sortDirection?: 'asc' | 'desc';
   geoSide?: 'direct' | 'source' | 'destination';
+  flowDirection?: 'inflow' | 'outflow' | 'none';
   agency?: string;
   state?: string;
   focusIds?: string[];
@@ -263,14 +262,21 @@ export interface ChatbotMapIntent {
   subtitle?: string;
   reason?: string;
   showLegend?: boolean;
+  sourceTables?: string[];
+  sourceLabel?: string | null;
+  periodLabel?: string | null;
+  returnedGeographyCount?: number;
+  mappedValueCount?: number;
+  missingValueCount?: number;
+  partialResult?: boolean;
 }
 
-export interface DatasetTableDownload {
+interface DatasetTableDownload {
   parquet?: string;
   xlsx?: string;
 }
 
-export interface DatasetVariableCatalogEntry {
+interface DatasetVariableCatalogEntry {
   name: string;
   label: string;
   role: 'measure' | 'dimension';
@@ -283,7 +289,7 @@ export interface DatasetVariableCatalogEntry {
   exampleQuestion?: string;
 }
 
-export interface DatasetTableCatalogEntry {
+interface DatasetTableCatalogEntry {
   tableName: string;
   label: string;
   grain: string;
@@ -291,6 +297,7 @@ export interface DatasetTableCatalogEntry {
   rows: number;
   columns: string[];
   source?: string;
+  sourceUrl?: string;
   geography?: string;
   yearColumn?: string | null;
   defaultYear?: string | number | null;

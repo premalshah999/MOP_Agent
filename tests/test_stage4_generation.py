@@ -13,7 +13,9 @@ import re
 
 import pytest
 
+from app.core import pipeline
 from app.core.peer_context import render_peer_context
+from app.quality.faithfulness import judge_faithfulness
 from app.semantic.registry import critical_warnings_for
 from tests.conftest import llm_available
 from tests.ground_truth import (
@@ -21,13 +23,6 @@ from tests.ground_truth import (
     load_golden,
     reference_scalar,
     run_reference_sql,
-)
-
-orch = pytest.importorskip("app.core.orchestrator", reason="Pipeline not rebuilt yet")
-
-pytestmark = pytest.mark.skipif(
-    not getattr(orch, "PIPELINE_READY", False),
-    reason="LLM-grounded pipeline not wired yet (Phase 2)",
 )
 
 
@@ -49,9 +44,13 @@ def _assert_expectation(case, result: dict) -> None:
     data = result.get("data") or []
     expect = case.expect
     if "row_count" in expect:
-        assert len(data) == expect["row_count"], f"{case.id}: rows {len(data)} != {expect['row_count']}"
+        assert len(data) == expect["row_count"], (
+            f"{case.id}: rows {len(data)} != {expect['row_count']}"
+        )
     if "min_rows" in expect:
-        assert len(data) >= expect["min_rows"], f"{case.id}: rows {len(data)} < {expect['min_rows']}"
+        assert len(data) >= expect["min_rows"], (
+            f"{case.id}: rows {len(data)} < {expect['min_rows']}"
+        )
     if expect.get("top_label"):
         ref = run_reference_sql(case.reference_sql)
         label = str(list(ref[0].values())[0]).lower()
@@ -62,7 +61,8 @@ def _assert_expectation(case, result: dict) -> None:
         ref = float(reference_scalar(case.reference_sql))
         tol = float(expect.get("rel_tol", 0.01))
         candidates = _numbers(_result_blob(result)) + [
-            float(k["value"]) for k in result.get("key_numbers", [])
+            float(k["value"])
+            for k in result.get("key_numbers", [])
             if str(k.get("value")).replace(".", "", 1).lstrip("-").isdigit()
         ]
         ok = any(abs(c - ref) <= tol * max(1.0, abs(ref)) for c in candidates)
@@ -76,16 +76,17 @@ def _assert_expectation(case, result: dict) -> None:
 @pytest.mark.skipif(not llm_available(), reason="no LLM key for generation")
 @pytest.mark.parametrize("case", cases_by_intent("ANALYTICAL"), ids=lambda c: c.id)
 def test_analytical_generation(case) -> None:
-    result = orch.answer_question(case.question)
-    assert result.get("resolution") == "answered", f"{case.id}: resolution={result.get('resolution')}"
+    result = pipeline.answer_question(case.question)
+    assert result.get("resolution") == "answered", (
+        f"{case.id}: resolution={result.get('resolution')}"
+    )
     assert result.get("sql"), f"{case.id}: no SQL produced"
     _assert_expectation(case, result)
 
     if case.faithfulness:
-        judge = pytest.importorskip("app.evals.faithfulness", reason="judge not implemented")
         statistics = (result.get("resultPackage") or {}).get("statistics") or {}
         peer = statistics.get("peer_context") or {}
-        verdict = judge.judge_faithfulness(
+        verdict = judge_faithfulness(
             case.question,
             result.get("answer", ""),
             result.get("data") or [],
@@ -103,5 +104,5 @@ def test_analytical_generation(case) -> None:
     ids=lambda c: c.id,
 )
 def test_non_analytical_emits_no_sql(case) -> None:
-    result = orch.answer_question(case.question)
+    result = pipeline.answer_question(case.question)
     assert not result.get("sql"), f"{case.id} ({case.intent}) wrongly produced SQL"

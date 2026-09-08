@@ -1,21 +1,11 @@
-# Verified Query Repository
+# Analyst Evaluation Queries
 # ==========================
-# Hand-curated (question, blessed SQL) pairs. When a user's question matches
-# any entry's `question` or `paraphrases` above the configured similarity
-# threshold (see app/core/verified_queries.py), the orchestrator skips the
-# LLM SQL-generation stage entirely and uses the blessed SQL directly. The
-# answer is then composed by the normal answer-writer pipeline so it still
-# reads naturally — but the underlying SQL is provably correct, no
-# hallucination surface at the data-retrieval stage.
-#
-# `verified: true` means an analyst reviewed and signed off. Only verified
-# entries are used for matching. Entries with `verified: false` are
-# bootstrap stubs — review them, fix if needed, flip the flag.
-#
-# Add new entries by appending to the list. Numeric `id` is for cross-
-# reference in logs and the admin dashboard; keep them unique.
+# Offline regression material only. These reviewed question/SQL pairs are
+# never matched or executed by the production request path. They preserve
+# analyst examples for evaluation without creating a second, phrase-specific
+# answer engine.
 
-- id: vq001
+- id: aq001
   question: "what was Maryland's median household income in 2023?"
   paraphrases:
     - "median household income in maryland 2023"
@@ -29,7 +19,7 @@
   verified: true
   notes: "Direct ACS 1-year estimate lookup."
 
-- id: vq002
+- id: aq002
   question: "top 5 states by median household income in 2023"
   paraphrases:
     - "highest median household income states"
@@ -45,7 +35,7 @@
   verified: true
   notes: "Includes DC + PR; 'state' column case is lowercase."
 
-- id: vq003
+- id: aq003
   question: "what was Maryland's poverty rate in 2023?"
   paraphrases:
     - "maryland poverty rate"
@@ -59,7 +49,7 @@
   verified: true
   notes: "ACS 'Below poverty' is a percentage, not a count."
 
-- id: vq004
+- id: aq004
   question: "top 10 counties in maryland by grants"
   paraphrases:
     - "best counties in maryland for grants"
@@ -76,7 +66,7 @@
   verified: true
   notes: "Year stored as STRING in contract_county; FY2024 = most recent."
 
-- id: vq005
+- id: aq005
   question: "top 10 states by debt ratio"
   paraphrases:
     - "states with highest debt ratio"
@@ -92,7 +82,7 @@
   verified: true
   notes: "Debt_Ratio = Total_Liabilities / Total_Assets, single FY2023 snapshot."
 
-- id: vq006
+- id: aq006
   question: "top 15 states by financial literacy"
   paraphrases:
     - "states with highest financial literacy"
@@ -111,7 +101,7 @@
   verified: true
   notes: "NFCS 2021 is the most recent wave with state-level data."
 
-- id: vq007
+- id: aq007
   question: "top 5 states by poverty rate"
   paraphrases:
     - "highest poverty rate states"
@@ -127,7 +117,7 @@
   verified: true
   notes: "Highest = worst (largest share below poverty)."
 
-- id: vq008
+- id: aq008
   question: "compare Maryland and Virginia on grants"
   paraphrases:
     - "maryland vs virginia grants"
@@ -142,7 +132,7 @@
   verified: true
   notes: "Year is STRING in contract_state."
 
-- id: vq009
+- id: aq009
   question: "subcontract inflow to maryland"
   paraphrases:
     - "total subaward money flowing into maryland"
@@ -158,7 +148,7 @@
   verified: true
   notes: "Inflow TO Maryland = where the SUBAWARDEE (recipient of the subaward) is based in MD. Returns the scalar total; breakdown variant lives as a follow-up question, not the headline."
 
-- id: vq010
+- id: aq010
   question: "top counties in maryland with maximum funding"
   paraphrases:
     - "top funded counties in maryland"
@@ -176,7 +166,7 @@
   verified: true
   notes: "Maximum funding = grants + contracts + direct payments combined."
 
-- id: vq011
+- id: aq011
   question: "maryland congressional districts by free cash flow"
   paraphrases:
     - "md congressional districts free cash flow"
@@ -191,7 +181,7 @@
   verified: true
   notes: "cd_118 column is the 118th-congress district id (e.g. 'MD-04')."
 
-- id: vq012
+- id: aq012
   question: "top 10 counties in maryland by liabilities per capita"
   paraphrases:
     - "highest liabilities per capita in maryland counties"
@@ -208,7 +198,7 @@
   verified: true
   notes: "gov_county Year column is 'Fiscal Year 2023' string; only one fiscal year present so no filter needed."
 
-- id: vq013
+- id: aq013
   question: "which agencies provide the most grants to maryland"
   paraphrases:
     - "top agencies funding maryland"
@@ -225,7 +215,7 @@
   verified: true
   notes: "Agency-level federal-grant breakdown for one state."
 
-- id: vq014
+- id: aq014
   question: "top states by asian population share"
   paraphrases:
     - "states with highest asian population share"
@@ -241,7 +231,7 @@
   verified: true
   notes: "ACS 'Asian' column is a PERCENTAGE (population share), not a count."
 
-- id: vq015
+- id: aq015
   question: "top counties in california by total assets"
   paraphrases:
     - "biggest asset counties in california"
@@ -259,7 +249,7 @@
   verified: true
   notes: "Government-finance asset totals at county level, FY2023."
 
-- id: vq016
+- id: aq016
   question: "financial stress counties in texas"
   paraphrases:
     - "most financially stressed counties in tx"
@@ -276,7 +266,7 @@
   verified: true
   notes: "FINRA NFCS county survey is single-wave 2021."
 
-- id: vq017
+- id: aq017
   question: "top counties in maryland by college degree attainment"
   paraphrases:
     - "most educated counties in maryland"
@@ -293,7 +283,7 @@
   verified: true
   notes: "ACS bachelor's-degree column is a PERCENTAGE share of adults."
 
-- id: vq018
+- id: aq018
   question: "largest grant counties in california"
   paraphrases:
     - "top california counties by grants"
@@ -310,7 +300,7 @@
   verified: true
   notes: "contract_county.year is a string."
 
-- id: vq019
+- id: aq019
   question: "what is the debt ratio for texas"
   paraphrases:
     - "texas debt ratio"
@@ -324,7 +314,7 @@
   verified: true
   notes: "Debt_Ratio = Total_Liabilities / Total_Assets; FY2023 snapshot."
 
-- id: vq020
+- id: aq020
   question: "where does california stand on total assets"
   paraphrases:
     - "california state assets"
@@ -338,7 +328,7 @@
   verified: true
   notes: "Single-state lookup; peer_context will add national-rank framing."
 
-- id: vq021
+- id: aq021
   question: "top counties in maryland by federal employment"
   paraphrases:
     - "maryland counties with most federal jobs"
@@ -355,7 +345,7 @@
   verified: true
   notes: "'Federal Residents' is the count of federal employees living in the county — the direct employment measure. 'Resident Wage' (their total wages) included as context."
 
-- id: vq022
+- id: aq022
   question: "where does maryland rank nationally for debt ratio"
   paraphrases:
     - "maryland debt ratio national rank"
@@ -377,7 +367,7 @@
 # All gov_state entries are single-snapshot (FY2023); no year filter needed.
 # =============================================================================
 
-- id: vq023
+- id: aq023
   question: "which 15 states have the highest total liabilities per capita?"
   paraphrases:
     - "top 15 states by total liabilities per capita"
@@ -393,7 +383,7 @@
   verified: true
   notes: "Top-45 production shape. gov_state per-capita fields are already normalized by POPULATION."
 
-- id: vq024
+- id: aq024
   question: "which 15 states have the lowest total liabilities per capita?"
   paraphrases:
     - "bottom 15 states by total liabilities per capita"
@@ -408,7 +398,7 @@
     LIMIT 15
   verified: true
 
-- id: vq025
+- id: aq025
   question: "which 15 states have the highest revenue per capita?"
   paraphrases:
     - "top 15 states by revenue per capita"
@@ -422,7 +412,7 @@
     LIMIT 15
   verified: true
 
-- id: vq026
+- id: aq026
   question: "which 15 states have the lowest revenue per capita?"
   paraphrases:
     - "bottom 15 states by revenue per capita"
@@ -436,7 +426,7 @@
     LIMIT 15
   verified: true
 
-- id: vq027
+- id: aq027
   question: "which 15 states have the highest expenses per capita?"
   paraphrases:
     - "top 15 states by expenses per capita"
@@ -450,7 +440,7 @@
     LIMIT 15
   verified: true
 
-- id: vq028
+- id: aq028
   question: "which 15 states have the lowest expenses per capita?"
   paraphrases:
     - "bottom 15 states by expenses per capita"
@@ -464,7 +454,7 @@
     LIMIT 15
   verified: true
 
-- id: vq029
+- id: aq029
   question: "which 15 states have the highest net pension liability per capita?"
   paraphrases:
     - "top 15 states by net pension liability per capita"
@@ -478,7 +468,7 @@
     LIMIT 15
   verified: true
 
-- id: vq030
+- id: aq030
   question: "which 15 states have the lowest net pension liability per capita?"
   paraphrases:
     - "bottom 15 states by net pension liability per capita"
@@ -492,7 +482,7 @@
     LIMIT 15
   verified: true
 
-- id: vq031
+- id: aq031
   question: "which 15 states have the highest net position per capita?"
   paraphrases:
     - "top 15 states by net position per capita"
@@ -507,7 +497,7 @@
   verified: true
   notes: "Net position = assets - liabilities; positive is fiscally healthy."
 
-- id: vq032
+- id: aq032
   question: "which 15 states have the lowest net position per capita?"
   paraphrases:
     - "bottom 15 states by net position per capita"
@@ -521,7 +511,7 @@
     LIMIT 15
   verified: true
 
-- id: vq033
+- id: aq033
   question: "which 15 states have the highest free cash flow per capita?"
   paraphrases:
     - "top 15 states by free cash flow per capita"
@@ -535,7 +525,7 @@
     LIMIT 15
   verified: true
 
-- id: vq034
+- id: aq034
   question: "which 15 states have the lowest free cash flow per capita?"
   paraphrases:
     - "bottom 15 states by free cash flow per capita"
@@ -549,7 +539,7 @@
     LIMIT 15
   verified: true
 
-- id: vq035
+- id: aq035
   question: "which 15 states have the highest net OPEB liability per capita?"
   paraphrases:
     - "top 15 states by net OPEB liability per capita"
@@ -564,7 +554,7 @@
   verified: true
   notes: "OPEB = Other Post-Employment Benefits, primarily retiree healthcare."
 
-- id: vq036
+- id: aq036
   question: "which 15 states have the lowest net OPEB liability per capita?"
   paraphrases:
     - "bottom 15 states by net OPEB liability per capita"
@@ -578,7 +568,7 @@
     LIMIT 15
   verified: true
 
-- id: vq037
+- id: aq037
   question: "which 15 states have the highest long-term debt per capita?"
   paraphrases:
     - "top 15 states by long-term debt per capita"
@@ -593,7 +583,7 @@
   verified: true
   notes: "Long-term debt maps to Non-Current_Liabilities (obligations due beyond one year). Column requires double-quoting for the hyphen."
 
-- id: vq038
+- id: aq038
   question: "which 15 states have the lowest long-term debt per capita?"
   paraphrases:
     - "bottom 15 states by long-term debt per capita"
@@ -607,7 +597,7 @@
     LIMIT 15
   verified: true
 
-- id: vq039
+- id: aq039
   question: "which 15 states have the highest current ratio?"
   paraphrases:
     - "top 15 states by current ratio"
@@ -622,7 +612,7 @@
   verified: true
   notes: "Current ratio = current assets / current liabilities. Higher = more short-term liquidity."
 
-- id: vq040
+- id: aq040
   question: "which 15 states have the lowest current ratio?"
   paraphrases:
     - "bottom 15 states by current ratio"
@@ -636,7 +626,7 @@
     LIMIT 15
   verified: true
 
-- id: vq041
+- id: aq041
   question: "how much did the department of defense spend in maryland in 2024?"
   paraphrases:
     - "DoD spending in maryland 2024"
@@ -652,7 +642,7 @@
   verified: true
   notes: "spending_state_agency stores year as STRING and state in UPPERCASE — LOWER() the state literal for match; year '2024' is FY2024 single-year, '2020-2024' is the 5-year aggregate row."
 
-- id: vq042
+- id: aq042
   question: "how much subcontract funding flows into maryland?"
   paraphrases:
     - "how much subaward funding flows into maryland?"
@@ -664,14 +654,13 @@
     FROM mart_state_flow
     WHERE LOWER(subawardee_state_name) = 'maryland'
   verified: true
-  direct_render: true
   caveats:
     - "Includes intra-state subawards (Maryland to Maryland), not only funding from other states."
     - "Covers all available records; state_flow has no year column."
     - "Amounts are net of negative adjustments such as clawbacks."
   notes: "Analyst-reviewed scalar. Includes Maryland-to-Maryland subawards; state_flow has no year column."
 
-- id: vq043
+- id: aq043
   question: "how much subcontract funding flows out of maryland?"
   paraphrases:
     - "how much subaward funding flows out of maryland?"
@@ -683,7 +672,6 @@
     FROM mart_state_flow
     WHERE LOWER(rcpt_state_name) = 'maryland'
   verified: true
-  direct_render: true
   caveats:
     - "Includes intra-state subawards (Maryland to Maryland), not only funding sent to other states."
     - "Covers all available records; state_flow has no year column."

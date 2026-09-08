@@ -60,7 +60,7 @@ protect deployment rollback, but they do not protect against host loss.
 |---|---|---|
 | SQLite (threads/messages/feedback) | Write lock under contention | WAL mode enabled at init (see `app/storage/sqlite.py`); 10s busy timeout |
 | DuckDB (analytical SQL) | Per-request fresh conn | Fine for read-only workload; views materialised at startup |
-| DeepSeek LLM | Single API key | OpenAI fallback wired in `app/llm/client.py`; honours 429 with backoff |
+| LLM provider | Single selected API key | Explicit DeepSeek/Gemini/OpenAI selection; honours 429 with backoff |
 | `lru_cache` on `distinct_values` | Eviction under diverse queries | Increased `maxsize` to 1024 |
 | Long analytical requests | Additional evidence checks can take longer | Hard wall/tool/token budgets plus four web workers |
 
@@ -78,13 +78,27 @@ python -m app.evals.conversation_eval --mode normal
 python -m app.evals.conversation_eval --mode reasoning
 ```
 
-Do not cut over if any suite regresses. DeepSeek's official documentation says
-the `deepseek-chat` alias is scheduled for deprecation on July 24, 2026; either
-validate a current DeepSeek model or complete the tested Gemini cutover before
-that date. Gemini's OpenAI-compatible endpoint supports the interface used by
-this application, but semantic correctness still depends on these gates. See
+For a local Gemini candidate run:
+
+```bash
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=<key-from-google-ai-studio>
+GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_REASONING_EFFORT=minimal
+GEMINI_MIN_COMPLETION_TOKENS=512
+LLM_TIMEOUT=12
+LLM_RETRIES=2
+GRACEFUL_SHUTDOWN_TIMEOUT=135
+```
+
+Use `LLM_BASE_URL` or `LLM_MODEL` only when intentionally overriding provider
+defaults. Legacy `ASSISTANT_ROUTER_*` values apply only in `auto` mode. The
+`/health` response reports the active provider and model but never exposes the key.
+
+Do not cut over if any suite regresses. Gemini is translated behind the shared
+client interface, but semantic correctness still depends on these gates. See
 the official [DeepSeek model documentation](https://api-docs.deepseek.com/quick_start/pricing)
-and [Gemini OpenAI compatibility guide](https://ai.google.dev/gemini-api/docs/openai).
+and [Gemini generateContent API reference](https://ai.google.dev/api/generate-content).
 
 ## Known data limitations (surface in About page)
 

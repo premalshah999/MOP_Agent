@@ -14,7 +14,6 @@ from pydantic import BaseModel, EmailStr, Field
 
 from app.storage.sqlite import connect, row_dict
 
-
 _security = HTTPBearer(auto_error=False)
 
 
@@ -68,15 +67,17 @@ def _verify_password(password: str, encoded: str) -> bool:
         return False
     if _algo != "pbkdf2_sha256" or not 100_000 <= iterations <= 2_000_000:
         return False
-    candidate = hashlib.pbkdf2_hmac(
-        "sha256", password.encode(), salt.encode(), iterations
-    ).hex()
+    candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), iterations).hex()
     return hmac.compare_digest(candidate, digest)
 
 
 def create_token(user: dict[str, Any]) -> str:
     expires = datetime.now(timezone.utc) + timedelta(seconds=_jwt_expiry_seconds())
-    return jwt.encode({"sub": str(user["id"]), "email": user["email"], "name": user["name"], "exp": expires}, _jwt_secret(), algorithm="HS256")
+    return jwt.encode(
+        {"sub": str(user["id"]), "email": user["email"], "name": user["name"], "exp": expires},
+        _jwt_secret(),
+        algorithm="HS256",
+    )
 
 
 def register_user(body: RegisterRequest) -> dict[str, Any]:
@@ -89,14 +90,20 @@ def register_user(body: RegisterRequest) -> dict[str, Any]:
             conn.commit()
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="Email already registered") from exc
-        user = row_dict(conn.execute("SELECT id, email, name FROM users WHERE email = ?", (body.email.lower(),)).fetchone())
+        user = row_dict(
+            conn.execute(
+                "SELECT id, email, name FROM users WHERE email = ?", (body.email.lower(),)
+            ).fetchone()
+        )
     assert user is not None
     return user
 
 
 def authenticate_user(body: LoginRequest) -> dict[str, Any]:
     with connect() as conn:
-        user = row_dict(conn.execute("SELECT * FROM users WHERE email = ?", (body.email.lower(),)).fetchone())
+        user = row_dict(
+            conn.execute("SELECT * FROM users WHERE email = ?", (body.email.lower(),)).fetchone()
+        )
         if not user or not _verify_password(body.password, user["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid email or password")
         # Transparently upgrade legacy 120k hashes after a successful login.
@@ -116,7 +123,9 @@ def update_profile(user_id: int, *, name: str) -> dict[str, Any]:
     with connect() as conn:
         conn.execute("UPDATE users SET name = ? WHERE id = ?", (clean, user_id))
         conn.commit()
-        user = row_dict(conn.execute("SELECT id, email, name FROM users WHERE id = ?", (user_id,)).fetchone())
+        user = row_dict(
+            conn.execute("SELECT id, email, name FROM users WHERE id = ?", (user_id,)).fetchone()
+        )
     assert user is not None
     return user
 

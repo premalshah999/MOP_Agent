@@ -1,5 +1,6 @@
-import { BadgeCheck, Copy, Database, TerminalSquare, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Copy, Database, ExternalLink, TerminalSquare, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { sendFeedback } from '@/lib/api';
+import { dashboardDestination } from '@/lib/dashboardBridge';
 import { useSettings } from '@/lib/settings';
 import { motion } from 'motion/react';
 import { Fragment, lazy, Suspense, useState } from 'react';
@@ -7,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage, EvidenceBlock, EvidenceCard, EvidenceSection, KeyNumber } from '@/types/chat';
 import type { ReactNode } from 'react';
-import { ChatbotMapButton } from './ChatbotMapButton';
+import { MapButton } from './MapButton';
 
 const VegaChart = lazy(() => import('./VegaChart').then((m) => ({ default: m.VegaChart })));
 const MapView = lazy(() => import('./MapView').then((m) => ({ default: m.MapView })));
@@ -99,9 +100,9 @@ function Md({ content, tone, glossary }: { content: string; tone: 'user' | 'assi
         remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => <p className={`m-0 ${cls}`}>{withGlossary(children, glossary)}</p>,
-          h1: ({ children }) => <h1 className={`m-0 text-[18px] font-semibold leading-7 ${cls}`}>{withGlossary(children, glossary)}</h1>,
-          h2: ({ children }) => <h2 className={`m-0 text-[16px] font-semibold leading-7 ${cls}`}>{withGlossary(children, glossary)}</h2>,
-          h3: ({ children }) => <h3 className={`m-0 text-[14px] font-semibold leading-7 ${cls}`}>{withGlossary(children, glossary)}</h3>,
+          h1: ({ children }) => <h1 className={`m-0 font-display text-[20px] font-medium leading-7 ${cls}`}>{withGlossary(children, glossary)}</h1>,
+          h2: ({ children }) => <h2 className={`m-0 font-display text-[18px] font-medium leading-7 ${cls}`}>{withGlossary(children, glossary)}</h2>,
+          h3: ({ children }) => <h3 className={`m-0 font-display text-[16px] font-medium leading-7 ${cls}`}>{withGlossary(children, glossary)}</h3>,
           strong: ({ children }) => <strong className={`font-semibold ${cls}`}>{withGlossary(children, glossary)}</strong>,
           em: ({ children }) => <em className={`italic ${m}`}>{withGlossary(children, glossary)}</em>,
           ul: ({ children }) => <ul className={`m-0 list-disc space-y-1.5 pl-5 ${cls}`}>{children}</ul>,
@@ -109,7 +110,7 @@ function Md({ content, tone, glossary }: { content: string; tone: 'user' | 'assi
           li: ({ children }) => <li className={cls}>{withGlossary(children, glossary)}</li>,
           code: ({ children }) => <code className={`rounded-[4px] bg-[var(--surface-2)] px-1 py-0.5 font-mono text-[0.9em] ${cls}`}>{children}</code>,
           table: ({ children }) => (
-            <div className="overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--surface)]">
+            <div className="overflow-x-auto border border-[var(--line)] bg-[var(--surface)]">
               <table className={`w-full border-collapse text-left text-[13px] leading-6 ${cls}`}>{children}</table>
             </div>
           ),
@@ -137,7 +138,7 @@ interface MessageProps extends ChatMessage {
   datasetId?: string;
 }
 
-export function Message({ id, role, content, sqlQuery, data, rowCount, chart, charts, evidence, resolution, error, ts, mapIntent, datasetId, onOpenDetail, activeDetailTab, suggestedFollowups, onAskFollowup, keyNumbers, caveats, confidence, glossary, verifiedQuery }: MessageProps) {
+export function Message({ id, role, content, sqlQuery, data, rowCount, chart, charts, evidence, resolution, error, ts, mapIntent, contract, datasetId, onOpenDetail, activeDetailTab, suggestedFollowups, onAskFollowup, keyNumbers, caveats, confidence, glossary }: MessageProps) {
   const settings = useSettings();
   const effectiveGlossary = settings.glossaryTooltips ? glossary : undefined;
   const [verdict, setVerdict] = useState<'up' | 'down' | null>(null);
@@ -162,6 +163,7 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
   const [mapOpen, setMapOpen] = useState(false);
   const effectiveMapIntent = mapIntent ?? null;
   const hasMap = Boolean(effectiveMapIntent?.enabled && effectiveMapIntent.mapType !== 'none' && !error);
+  const dashboard = !error ? dashboardDestination({ datasetId, contract, mapIntent: effectiveMapIntent }) : null;
 
   if (role === 'user') {
     return (
@@ -171,7 +173,7 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
         transition={{ duration: 0.15 }}
         className="flex justify-end"
       >
-        <div className="max-w-xl rounded-2xl bg-[var(--surface-2)] px-4 py-2.5 text-[var(--ink)]">
+        <div className="max-w-xl border-r-2 border-[var(--brand-red)] bg-[var(--surface-2)] px-4 py-2.5 text-[var(--ink)]">
           <p className="whitespace-pre-wrap text-[14.5px] leading-7">{content}</p>
         </div>
       </motion.div>
@@ -190,16 +192,6 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
         {confidence && confidence !== 'high' && (
           <ConfidenceChip level={confidence} />
         )}
-        {verifiedQuery && (
-          <span
-            className="inline-flex items-center gap-1 rounded-full border border-[var(--line)] bg-[var(--surface)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--ink-soft)]"
-            title={`Matched analyst-verified query ${verifiedQuery.id}${verifiedQuery.score ? ` (similarity ${verifiedQuery.score.toFixed(2)})` : ''}`}
-          >
-            <BadgeCheck size={11} className="text-emerald-600" />
-            Verified
-          </span>
-        )}
-
         {/* Toggle buttons */}
         <div className="ml-auto flex items-center gap-1">
           {hasSql && (
@@ -213,7 +205,19 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
             </Btn>
           )}
           {hasMap && (
-            <ChatbotMapButton onClick={() => setMapOpen(true)} label={effectiveMapIntent?.buttonLabel} />
+            <MapButton onClick={() => setMapOpen(true)} label={effectiveMapIntent?.buttonLabel} />
+          )}
+          {dashboard && (
+            <a
+              href={dashboard.href}
+              target="_blank"
+              rel="noreferrer"
+              title={dashboard.description}
+              className="mop-outline-button inline-flex items-center gap-1.5 px-2.5 py-1.5"
+            >
+              {dashboard.label}
+              <ExternalLink size={10} />
+            </a>
           )}
         </div>
       </div>
@@ -232,7 +236,7 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
       )}
 
       {resolution && resolution !== 'answered' && (
-        <div className="mt-3 inline-flex rounded-full bg-[var(--surface-2)] px-3 py-1 text-[11px] font-medium text-[var(--muted)]">
+        <div className="mt-3 inline-flex border-l-2 border-[var(--brand-red)] bg-[var(--surface-2)] px-3 py-1 text-[11px] font-medium text-[var(--muted)]">
           {resolution === 'partially_answered' ? 'Partial coverage'
             : resolution === 'needs_clarification' ? 'Needs clarification'
             : resolution === 'no_data' ? 'No matching data'
@@ -292,7 +296,7 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
               key={`${i}-${s}`}
               type="button"
               onClick={() => onAskFollowup(s)}
-              className="rounded-full border border-[var(--line)] bg-[var(--surface)] px-3.5 py-1.5 text-[12.5px] text-[var(--muted)] transition hover:border-[var(--muted-2)] hover:text-[var(--ink)]"
+              className="border border-[var(--line)] bg-[var(--surface)] px-3.5 py-2 text-[12px] text-[var(--muted)] transition hover:border-[var(--brand-red)] hover:text-[var(--ink)]"
             >
               {s}
             </button>
@@ -350,7 +354,7 @@ function EvidencePanel({ evidence }: { evidence: EvidenceBlock }) {
         </div>
       )}
       {evidence.note && (
-        <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-4 py-3 text-[12px] leading-6 text-[var(--muted)]">
+        <div className="border border-[var(--line)] bg-[var(--surface)] px-4 py-3 text-[12px] leading-6 text-[var(--muted)]">
           {evidence.note}
         </div>
       )}
@@ -360,7 +364,7 @@ function EvidencePanel({ evidence }: { evidence: EvidenceBlock }) {
 
 function EvidenceCardView({ card }: { card: EvidenceCard }) {
   return (
-    <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-4 py-3">
+    <div className="border border-[var(--line)] bg-[var(--surface)] px-4 py-3">
       <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{card.label}</div>
       <div className="mt-1 text-[20px] font-semibold tracking-tight text-[var(--ink)]">{card.value}</div>
       {card.meta && <div className="mt-1 text-[11px] text-[var(--muted-2)]">{card.meta}</div>}
@@ -373,7 +377,7 @@ function EvidenceSectionView({ section }: { section: EvidenceSection }) {
   const items = section.items ?? [];
   const rows = section.rows ?? [];
   return (
-    <section className="rounded-[8px] border border-[var(--line)] bg-[var(--surface)] px-4 py-4">
+    <section className="border border-[var(--line)] bg-[var(--surface)] px-4 py-4">
       <div className="space-y-0.5">
         <h4 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{section.title}</h4>
         {section.subtitle && <p className="text-[11px] text-[var(--muted-2)]">{section.subtitle}</p>}
@@ -416,9 +420,9 @@ function KeyNumberCallout({ items }: { items: KeyNumber[] }) {
   return (
     <div className={`grid gap-2 ${shown.length === 1 ? 'grid-cols-1' : shown.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-2 xl:grid-cols-4'}`}>
       {shown.map((k, i) => (
-        <div key={`${k.label}-${i}`} className="elevate rounded-xl border border-[var(--line-soft)] bg-[var(--surface)] px-4 py-3">
+        <div key={`${k.label}-${i}`} className="elevate border border-[var(--line)] border-t-2 border-t-[var(--brand-red)] bg-[var(--surface)] px-4 py-3">
           <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">{k.label}</div>
-          <div className="tabular-nums mt-1 text-[22px] font-semibold tracking-tight text-[var(--ink)]">
+          <div className="tabular-nums mt-1 font-display text-[24px] font-medium tracking-tight text-[var(--ink)]">
             {String(k.value)}
             {k.unit ? <span className="ml-1 text-[12px] font-medium text-[var(--muted-2)]">{k.unit}</span> : null}
           </div>
@@ -432,7 +436,7 @@ function CaveatsFooter({ items, glossary }: { items: string[]; glossary?: Record
   const shown = items.filter(Boolean).slice(0, 5);
   if (shown.length === 0) return null;
   return (
-    <div className="mt-3 rounded-xl bg-[var(--surface-2)]/60 px-4 py-3">
+    <div className="mt-3 border-l-2 border-[var(--line)] bg-[var(--surface-2)]/60 px-4 py-3">
       <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted-2)]">Notes</div>
       <ul className="mt-1.5 space-y-1 text-[12px] leading-6 text-[var(--muted)]">
         {shown.map((c, i) => (
@@ -482,8 +486,8 @@ function Btn({ onClick, active, label, children }: { onClick: () => void; active
       type="button"
       onClick={onClick}
       aria-label={label}
-      className={`inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[10px] font-medium transition ${
-        active ? 'bg-[var(--surface-2)] text-[var(--ink)]' : 'text-[var(--muted)] hover:text-[var(--ink)]'
+      className={`inline-flex items-center gap-1 border px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.1em] transition ${
+        active ? 'border-[var(--brand-red)] text-[var(--ink)]' : 'border-transparent text-[var(--muted)] hover:border-[var(--line)] hover:text-[var(--ink)]'
       }`}
     >
       {children}

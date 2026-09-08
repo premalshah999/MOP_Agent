@@ -7,7 +7,6 @@ from typing import Any
 
 from app.semantic.registry import get_dataset
 
-
 _YEAR_RE = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
 
 
@@ -79,7 +78,7 @@ def canonical_period_notes(tables: list[str]) -> list[str]:
 
 def mixed_period_note(tables: list[str], effective_period: Any) -> str:
     """Return a user-facing note when joined datasets represent different periods."""
-    family_periods: list[tuple[str, str]] = []
+    family_periods: list[tuple[str, str, tuple[str, ...] | str]] = []
     seen_families: set[str] = set()
     period_map = effective_period if isinstance(effective_period, dict) else {}
     for table in tables:
@@ -88,22 +87,27 @@ def mixed_period_note(tables: list[str], effective_period: Any) -> str:
             continue
         seen_families.add(dataset.family)
         if table.startswith("gov_"):
-            family_periods.append(("Government-finance measures", "FY2023"))
+            family_periods.append(("Government-finance measures", "FY2023", ("2023",)))
             continue
         value = period_map.get(table, dataset.default_year)
         if value in (None, "", "catalog snapshot"):
             continue
+        display_period = str(value)
+        canonical_period: tuple[str, ...] | str = (
+            tuple(_YEAR_RE.findall(display_period))
+            or re.sub(r"\s+", " ", display_period.casefold()).strip()
+        )
         if table.startswith("finra_"):
-            family_periods.append(("FINRA measures", f"survey year {value}"))
+            family_periods.append(("FINRA measures", f"survey year {value}", canonical_period))
         elif table.startswith(("contract_", "spending_")):
-            family_periods.append(("Federal-funding measures", f"FY{value}"))
+            family_periods.append(("Federal-funding measures", f"FY{value}", canonical_period))
         elif table.startswith("acs_"):
-            family_periods.append(("Census measures", str(value)))
+            family_periods.append(("Census measures", str(value), canonical_period))
         else:
-            family_periods.append((dataset.display_name, str(value)))
-    if len({period for _, period in family_periods}) < 2:
+            family_periods.append((dataset.display_name, str(value), canonical_period))
+    if len({period_key for _, _, period_key in family_periods}) < 2:
         return ""
-    clauses = [f"{family} use {period}" for family, period in family_periods]
+    clauses = [f"{family} use {period}" for family, period, _ in family_periods]
     if len(clauses) == 2:
         joined = f"{clauses[0]}; {clauses[1]}"
     else:

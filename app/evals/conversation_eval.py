@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.orchestrator import answer_question
+from app.core.pipeline import answer_question
 
 
 @dataclass(frozen=True)
@@ -31,84 +31,141 @@ CONVERSATIONS: dict[str, list[Turn]] = {
     "government_finance": [
         Turn(
             "Compare Maryland and Virginia on total liabilities per capita.",
-            {"gov_state"}, {"total liabilities per capita"},
-            {"maryland", "virginia"}, operation="comparison",
+            {"gov_state"},
+            {"total liabilities per capita"},
+            {"maryland", "virginia"},
+            operation="comparison",
         ),
         Turn(
             "now compare their debt ratios",
-            {"gov_state"}, {"debt ratio"}, {"maryland", "virginia"},
+            {"gov_state"},
+            {"debt ratio"},
+            {"maryland", "virginia"},
             operation="comparison",
         ),
     ],
     "acs": [
         Turn(
             "What was Maryland's poverty rate in 2023?",
-            {"acs_state"}, {"below poverty"}, {"maryland"},
+            {"acs_state"},
+            {"below poverty"},
+            {"maryland"},
         ),
         Turn(
             "what about Virginia?",
-            {"acs_state"}, {"below poverty"}, {"virginia"},
+            {"acs_state"},
+            {"below poverty"},
+            {"virginia"},
             forbidden_entities={"maryland"},
+        ),
+    ],
+    "acs_result_reference": [
+        Turn(
+            "Which counties have a higher renter population than owner population?",
+            {"acs_county"},
+            {"renter occupied", "owner occupied"},
+            operation="comparison",
+        ),
+        Turn(
+            "Provide the corresponding states of the above counties.",
+            {"acs_county"},
+            {"renter occupied", "owner occupied"},
         ),
     ],
     "federal_spending": [
         Turn(
             "How much federal grant funding did Maryland receive in 2024?",
-            {"contract_state"}, {"grants"}, {"maryland"},
+            {"contract_state"},
+            {"grants"},
+            {"maryland"},
         ),
         Turn(
             "and direct payments?",
-            {"contract_state"}, {"direct payments"}, {"maryland"},
+            {"contract_state"},
+            {"direct payments"},
+            {"maryland"},
+        ),
+    ],
+    "dataset_metric_correction": [
+        Turn(
+            "How many employees does contract_static_state dataset have?",
+            {"contract_state"},
+            {"employees"},
+            operation="aggregate",
+        ),
+        Turn(
+            "but the actual number of employees?",
+            {"contract_state"},
+            {"employees"},
+            operation="aggregate",
         ),
     ],
     "agency_spending": [
         Turn(
             "Which 5 agencies provided the most contracts in Maryland in 2024?",
-            {"spending_state_agency"}, {"contracts"}, {"maryland"},
-            operation="ranking", top_k=5,
+            {"spending_state_agency"},
+            {"contracts"},
+            {"maryland"},
+            operation="ranking",
+            top_k=5,
         ),
         Turn(
             "what about grants?",
-            {"spending_state_agency"}, {"grants"}, {"maryland"},
-            operation="ranking", top_k=5,
+            {"spending_state_agency"},
+            {"grants"},
+            {"maryland"},
+            operation="ranking",
+            top_k=5,
         ),
     ],
     "financial_capability": [
         Turn(
             "Compare Maryland and Virginia on financial literacy in 2021.",
-            {"finra_state"}, {"financial literacy"}, {"maryland", "virginia"},
+            {"finra_state"},
+            {"financial literacy"},
+            {"maryland", "virginia"},
             operation="comparison",
         ),
         Turn(
             "and financial constraint?",
-            {"finra_state"}, {"financial constraint"}, {"maryland", "virginia"},
+            {"finra_state"},
+            {"financial constraint"},
+            {"maryland", "virginia"},
             operation="comparison",
         ),
     ],
     "subaward_flow": [
         Turn(
             "How much subcontract funding flows out of Maryland?",
-            {"state_flow"}, {"subaward amount year"}, {"maryland"},
-            operation="aggregate", flow_direction="outflow",
+            {"state_flow"},
+            {"subaward amount year"},
+            {"maryland"},
+            operation="aggregate",
+            flow_direction="outflow",
         ),
         Turn(
             "compare that with Virginia's outflow",
-            {"state_flow"}, {"subaward amount year"}, {"maryland", "virginia"},
-            operation="comparison", flow_direction="outflow",
+            {"state_flow"},
+            {"subaward amount year"},
+            {"maryland", "virginia"},
+            operation="comparison",
+            flow_direction="outflow",
         ),
     ],
     "cross_dataset": [
         Turn(
             "Compare Maryland and Virginia on financial literacy and poverty rate.",
             {"finra_state", "acs_state"},
-            {"financial literacy", "below poverty"}, {"maryland", "virginia"},
+            {"financial literacy", "below poverty"},
+            {"maryland", "virginia"},
             operation="comparison",
         ),
         Turn(
             "add government debt ratio to that comparison",
             {"finra_state", "acs_state", "gov_state"},
             {"financial literacy", "below poverty", "debt ratio"},
-            {"maryland", "virginia"}, operation="comparison",
+            {"maryland", "virginia"},
+            operation="comparison",
         ),
     ],
 }
@@ -120,7 +177,10 @@ def _norm(value: Any) -> str:
 
 def _contains_all(actual: list[Any], expected: set[str]) -> bool:
     normalized = [_norm(value) for value in actual]
-    return all(any(_norm(item) in value or value in _norm(item) for value in normalized) for item in expected)
+    return all(
+        any(_norm(item) in value or value in _norm(item) for value in normalized)
+        for item in expected
+    )
 
 
 def _grade(result: dict[str, Any], expected: Turn) -> list[str]:
@@ -158,22 +218,40 @@ def run(mode: str = "normal") -> dict[str, Any]:
         for expected in turns:
             result = answer_question(expected.question, history, mode=mode)
             problems = _grade(result, expected)
-            turn_results.append({
-                "question": expected.question,
-                "passed": not problems,
-                "problems": problems,
-                "resolution": result.get("resolution"),
-                "context_memory": (result.get("contract") or {}).get("context_memory"),
-            })
-            history.extend([
-                {"role": "user", "content": expected.question},
+            turn_results.append(
                 {
-                    "role": "assistant",
-                    "content": result.get("answer") or "",
-                    "contract": result.get("contract") or {},
-                    "suggested_followups": result.get("suggested_followups") or [],
-                },
-            ])
+                    "question": expected.question,
+                    "passed": not problems,
+                    "problems": problems,
+                    "resolution": result.get("resolution"),
+                    "answer_preview": str(result.get("answer") or "")[:800],
+                    "sql": result.get("sql"),
+                    "context_memory": (result.get("contract") or {}).get("context_memory"),
+                    "analysis_contract": (result.get("resultPackage") or {}).get(
+                        "analysis_contract"
+                    ),
+                    "quality": result.get("quality"),
+                    "pipeline_stages": [
+                        {
+                            "name": stage.get("name"),
+                            "status": stage.get("status"),
+                            "data": stage.get("data"),
+                        }
+                        for stage in ((result.get("pipelineTrace") or {}).get("stages") or [])
+                    ],
+                }
+            )
+            history.extend(
+                [
+                    {"role": "user", "content": expected.question},
+                    {
+                        "role": "assistant",
+                        "content": result.get("answer") or "",
+                        "contract": result.get("contract") or {},
+                        "suggested_followups": result.get("suggested_followups") or [],
+                    },
+                ]
+            )
         conversation_passed = all(item["passed"] for item in turn_results)
         report["conversations"][name] = {
             "passed": conversation_passed,
@@ -184,11 +262,33 @@ def run(mode: str = "normal") -> dict[str, Any]:
 
 
 def main() -> int:
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except Exception:
+        pass
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("normal", "reasoning"), default="normal")
+    parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     report = run(args.mode)
-    print(json.dumps(report, indent=2, default=str))
+    if args.json:
+        print(json.dumps(report, indent=2, default=str))
+    else:
+        conversations = report["conversations"]
+        turns = [turn for item in conversations.values() for turn in item["turns"]]
+        passed_turns = sum(bool(turn["passed"]) for turn in turns)
+        print(f"Conversation evaluation ({args.mode})")
+        print(f"  conversations: {len(conversations)}")
+        print(f"  turns:         {passed_turns}/{len(turns)} passed")
+        print(f"  GATE: {'PASS' if report['passed'] else 'FAIL'}")
+        for name, item in conversations.items():
+            if item["passed"]:
+                continue
+            for turn in item["turns"]:
+                if not turn["passed"]:
+                    print(f"  ✗ {name}: {turn['question']}: {', '.join(turn['problems'])}")
     return 0 if report["passed"] else 1
 
 

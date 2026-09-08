@@ -13,19 +13,30 @@ Usage:  python -m app.evals.run_evals [--json]
 
 from __future__ import annotations
 
-import json
 import argparse
+import json
 import re
 from typing import Any
 
-from app.core.orchestrator import answer_question
-from app.evals.reference import GoldenCase, load_golden, load_holdout, reference_scalar, run_reference_sql
+from app.core.pipeline import answer_question
+from app.evals.reference import (
+    GoldenCase,
+    load_golden,
+    load_holdout,
+    reference_scalar,
+    run_reference_sql,
+)
 
 THRESHOLDS = {
-    "intent_accuracy": 0.90,
-    "routing_accuracy": 0.90,
-    "generation_pass_rate": 0.85,
-    "faithfulness_pass_rate": 0.90,
+    "intent_accuracy": 1.0,
+    "routing_accuracy": 1.0,
+    "generation_pass_rate": 1.0,
+    "faithfulness_pass_rate": 1.0,
+}
+
+_SCHEMA_EQUIVALENT_COLUMNS = {
+    "rcpt_cty_name": {"rcpt_full_name"},
+    "subawardee_cty_name": {"subawardee_full_name"},
 }
 
 
@@ -42,6 +53,25 @@ def _numbers(text: str) -> list[float]:
 def _check_expectation(case: GoldenCase, result: dict[str, Any]) -> tuple[bool, str]:
     data = result.get("data") or []
     blob = (result.get("answer") or "") + " " + json.dumps(data, default=str)
+    sql = str(result.get("sql") or "")
+    analysis = (result.get("resultPackage") or {}).get("analysis_contract") or {}
+    selected_metrics = {str(value).casefold() for value in analysis.get("metric_columns") or []}
+
+    def column_is_used(column: str) -> bool:
+        candidates = {str(column), *_SCHEMA_EQUIVALENT_COLUMNS.get(str(column).casefold(), set())}
+        return any(
+            candidate.casefold() in selected_metrics
+            or re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(candidate)}(?![A-Za-z0-9_])",
+                sql,
+                re.I,
+            )
+            for candidate in candidates
+        )
+
+    missing_columns = [column for column in case.must_columns if not column_is_used(column)]
+    if missing_columns:
+        return False, "missing required column(s): " + ", ".join(missing_columns)
     exp = case.expect
     if "row_count" in exp and len(data) != exp["row_count"]:
         return False, f"rows {len(data)} != {exp['row_count']}"
@@ -60,7 +90,8 @@ def _check_expectation(case: GoldenCase, result: dict[str, Any]) -> tuple[bool, 
         reference_value = float(reference_scalar(case.reference_sql))
         tol = float(exp.get("rel_tol", 0.01))
         cands = _numbers(blob) + [
-            float(k["value"]) for k in result.get("key_numbers", [])
+            float(k["value"])
+            for k in result.get("key_numbers", [])
             if str(k.get("value")).replace(".", "", 1).lstrip("-").isdigit()
         ]
         if not any(abs(c - reference_value) <= tol * max(1.0, abs(reference_value)) for c in cands):
@@ -86,6 +117,7 @@ def run_case_evals(cases: list[GoldenCase], suite: str = "golden") -> dict[str, 
             "intent_expected": case.intent,
             "intent_got": got_intent,
             "intent_ok": intent_match,
+            "resolution": res.get("resolution"),
         }
 
         if case.intent == "ANALYTICAL":
@@ -110,7 +142,7 @@ def run_case_evals(cases: list[GoldenCase], suite: str = "golden") -> dict[str, 
 
             if case.faithfulness and g_ok:
                 faith_total += 1
-                stages = ((res.get("pipelineTrace") or {}).get("stages") or [])
+                stages = (res.get("pipelineTrace") or {}).get("stages") or []
                 fallback_used = any(stage.get("name") == "evidence_fallback" for stage in stages)
                 verdicts = [
                     (stage.get("data") or {})
@@ -120,16 +152,36 @@ def run_case_evals(cases: list[GoldenCase], suite: str = "golden") -> dict[str, 
                 verdict = (
                     {"faithful": True, "reason": "evidence-only fallback copied validated rows"}
                     if fallback_used
-                    else (verdicts[-1] if verdicts else {
-                        "faithful": False,
-                        "reason": "pipeline emitted no faithfulness verdict",
-                    })
+                    else (
+                        verdicts[-1]
+                        if verdicts
+                        else {
+                            "faithful": False,
+                            "reason": "pipeline emitted no faithfulness verdict",
+                        }
+                    )
                 )
                 faith_ok += bool(verdict.get("faithful"))
                 row["faithful"] = bool(verdict.get("faithful"))
                 row["faithful_reason"] = verdict.get("reason")
         else:
             row["no_sql_ok"] = res.get("sql") is None
+
+        failed = (
+            not row["intent_ok"]
+            or row.get("routing_ok") is False
+            or row.get("generation_ok") is False
+            or row.get("faithful") is False
+            or row.get("no_sql_ok") is False
+        )
+        if failed:
+            row["diagnostic"] = {
+                "sql": res.get("sql"),
+                "answer_preview": str(res.get("answer") or "")[:1200],
+                "analysis_contract": (res.get("resultPackage") or {}).get("analysis_contract"),
+                "quality": res.get("quality"),
+                "pipeline_stages": (res.get("pipelineTrace") or {}).get("stages") or [],
+            }
 
         results.append(row)
 
@@ -142,6 +194,12 @@ def run_case_evals(cases: list[GoldenCase], suite: str = "golden") -> dict[str, 
         "faithfulness_pass_rate": round(faith_ok / faith_total, 3) if faith_total else 1.0,
     }
     summary["thresholds"] = THRESHOLDS
+    summary["provider_failure_count"] = sum(
+        1
+        for row in results
+        if row.get("resolution") == "error"
+        and "unavailable" in json.dumps(row.get("diagnostic") or {}, default=str).casefold()
+    )
     summary["passed_gate"] = all(summary[k] >= v for k, v in THRESHOLDS.items())
     summary["suite"] = suite
     return {"summary": summary, "results": results}
@@ -176,10 +234,18 @@ def main() -> int:
     else:
         print(f"{args.suite.title()} evaluation")
         print(f"  cases: {s['total']}")
-        print(f"  intent accuracy:       {s['intent_accuracy']:.0%}  (>= {THRESHOLDS['intent_accuracy']:.0%})")
-        print(f"  routing accuracy:      {s['routing_accuracy']:.0%}  (>= {THRESHOLDS['routing_accuracy']:.0%})")
-        print(f"  generation pass rate:  {s['generation_pass_rate']:.0%}  (>= {THRESHOLDS['generation_pass_rate']:.0%})")
-        print(f"  faithfulness pass:     {s['faithfulness_pass_rate']:.0%}  (>= {THRESHOLDS['faithfulness_pass_rate']:.0%})")
+        print(
+            f"  intent accuracy:       {s['intent_accuracy']:.0%}  (>= {THRESHOLDS['intent_accuracy']:.0%})"
+        )
+        print(
+            f"  routing accuracy:      {s['routing_accuracy']:.0%}  (>= {THRESHOLDS['routing_accuracy']:.0%})"
+        )
+        print(
+            f"  generation pass rate:  {s['generation_pass_rate']:.0%}  (>= {THRESHOLDS['generation_pass_rate']:.0%})"
+        )
+        print(
+            f"  faithfulness pass:     {s['faithfulness_pass_rate']:.0%}  (>= {THRESHOLDS['faithfulness_pass_rate']:.0%})"
+        )
         print(f"  GATE: {'PASS' if s['passed_gate'] else 'FAIL'}")
         for r in report["results"]:
             flags = []

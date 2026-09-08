@@ -8,21 +8,49 @@ analytics pipeline that will receive the follow-up.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from functools import lru_cache
-import re
 from typing import Any
 
 from app.semantic.registry import get_dataset, load_registry
 
-
 _WORD_RE = re.compile(r"[a-z0-9]+")
 _GENERIC = {
-    "a", "an", "and", "are", "by", "compare", "data", "did", "do", "for",
-    "from", "have", "highest", "how", "i", "in", "is", "it", "lowest",
-    "many", "most", "much", "of", "on", "rank", "show", "states", "the",
-    "to", "top", "what", "which", "with",
+    "a",
+    "an",
+    "and",
+    "are",
+    "by",
+    "compare",
+    "data",
+    "did",
+    "do",
+    "for",
+    "from",
+    "have",
+    "highest",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "lowest",
+    "many",
+    "most",
+    "much",
+    "of",
+    "on",
+    "rank",
+    "show",
+    "states",
+    "the",
+    "to",
+    "top",
+    "what",
+    "which",
+    "with",
 }
 _STATE_NAMES = tuple(
     sorted(
@@ -37,7 +65,9 @@ _STATE_NAMES = tuple(
         reverse=True,
     )
 )
-_STATE_RE = re.compile(r"\b(" + "|".join(re.escape(name) for name in _STATE_NAMES) + r"|DC)\b", re.I)
+_STATE_RE = re.compile(
+    r"\b(" + "|".join(re.escape(name) for name in _STATE_NAMES) + r"|DC)\b", re.I
+)
 
 
 def _normalize(value: str) -> str:
@@ -114,6 +144,14 @@ def _requested_geography(question: str) -> str:
     return "state"
 
 
+def _geography_matches(concept_geography: str, requested: str) -> bool:
+    concept = _normalize(concept_geography)
+    requested_norm = _normalize(requested)
+    if requested_norm == "congressional district":
+        return "congress" in concept or "district" in concept
+    return requested_norm in concept.split() or concept.startswith(requested_norm)
+
+
 def _alias_score(query: str, alias: str) -> float:
     query_tokens = _meaningful_tokens(query)
     alias_tokens = _meaningful_tokens(alias)
@@ -125,7 +163,9 @@ def _alias_score(query: str, alias: str) -> float:
     query_words = _normalize(query).split()
     alias_words = alias.split()
     width = max(1, len(alias_words))
-    windows = [" ".join(query_words[i : i + width]) for i in range(max(1, len(query_words) - width + 1))]
+    windows = [
+        " ".join(query_words[i : i + width]) for i in range(max(1, len(query_words) - width + 1))
+    ]
     fuzzy = max((SequenceMatcher(None, alias, window).ratio() for window in windows), default=0.0)
     # Token containment catches "poverty rate" -> "below poverty"; the
     # n-gram ratio catches real typos such as "financial literasy".
@@ -141,11 +181,17 @@ def discover_metrics(question: str, limit: int = 5) -> list[ConceptMatch]:
         score = max((_alias_score(question, alias) for alias in concept.aliases), default=0.0)
         if flow_signal:
             score += 0.2 if concept.family == "subaward_flow" else -0.08
-        if concept.geography == geography:
+        if _geography_matches(concept.geography, geography):
             score = min(1.0, score + 0.025)
         score = max(0.0, min(1.0, score))
         ranked.append(ConceptMatch(concept, score))
-    ranked.sort(key=lambda item: (-item.score, _dataset_priority(item.concept.dataset_id)))
+    ranked.sort(
+        key=lambda item: (
+            -item.score,
+            0 if _geography_matches(item.concept.geography, geography) else 1,
+            _dataset_priority(item.concept.dataset_id),
+        )
+    )
 
     # Collapse sibling-grain and duplicate federal tables so five suggestions
     # do not all present the same measure under different physical files.
@@ -164,8 +210,15 @@ def discover_metrics(question: str, limit: int = 5) -> list[ConceptMatch]:
 
 def _dataset_priority(dataset_id: str) -> int:
     preferred = (
-        "contract_state", "acs_state", "gov_state", "finra_state", "state_flow",
-        "spending_state_agency", "contract_county", "acs_county", "gov_county",
+        "contract_state",
+        "acs_state",
+        "gov_state",
+        "finra_state",
+        "state_flow",
+        "spending_state_agency",
+        "contract_county",
+        "acs_county",
+        "gov_county",
     )
     try:
         return preferred.index(dataset_id)
@@ -175,7 +228,11 @@ def _dataset_priority(dataset_id: str) -> int:
 
 def _concept(dataset_id: str, variable: str) -> MetricConcept | None:
     return next(
-        (item for item in concept_catalog() if item.dataset_id == dataset_id and item.variable == variable),
+        (
+            item
+            for item in concept_catalog()
+            if item.dataset_id == dataset_id and item.variable == variable
+        ),
         None,
     )
 
@@ -202,7 +259,10 @@ def _topic_defaults(question: str) -> list[MetricConcept]:
             ("finra_state", "financial_constraint"),
             ("finra_state", "satisfied"),
         ]
-    elif any(term in q for term in ("population", "income", "poverty", "education", "demographic", "housing")):
+    elif any(
+        term in q
+        for term in ("population", "income", "poverty", "education", "demographic", "housing")
+    ):
         refs = [
             ("acs_state", "Total population"),
             ("acs_state", "Median household income"),
@@ -222,7 +282,9 @@ def _topic_defaults(question: str) -> list[MetricConcept]:
 def _states(question: str) -> list[str]:
     values: list[str] = []
     for match in _STATE_RE.finditer(question):
-        value = "District of Columbia" if match.group(0).casefold() == "dc" else match.group(0).title()
+        value = (
+            "District of Columbia" if match.group(0).casefold() == "dc" else match.group(0).title()
+        )
         if value not in values:
             values.append(value)
     return values[:2]
@@ -255,7 +317,10 @@ def question_for(concept: MetricConcept, original_question: str) -> str:
     if len(states) == 1:
         if re.search(r"\b(rank|ranking|top|highest|lowest|best|worst)\b", q):
             return f"Where does {states[0]} rank nationally on {label}{period}?"
-        if concept.dataset_id.startswith(("contract_", "spending_")) and concept.unit.casefold() == "usd":
+        if (
+            concept.dataset_id.startswith(("contract_", "spending_"))
+            and concept.unit.casefold() == "usd"
+        ):
             return f"How much did {states[0]} receive in {label}{period}?"
         return f"What is {states[0]}'s {label}{period}?"
     if concept.geography == "county":
@@ -328,7 +393,19 @@ def build_guidance(
 
     best = close[0] if close else None
     if intent == "UNANSWERABLE":
-        if best:
+        limitation = clarification.strip()
+        if limitation and best:
+            answer = (
+                f"{limitation} The closest individually supported measure is "
+                f"**{best.concept.label}**. Choose an option below to analyze a "
+                "supported measure without changing what the requested measure means."
+            )
+        elif limitation:
+            answer = (
+                f"{limitation} Choose a supported direction below, or tell me which "
+                "available measure, place, and period you want to use instead."
+            )
+        elif best:
             answer = (
                 f"I couldn't find that exact term in the data library. The closest supported "
                 f"measure is **{best.concept.label}**. Choose an option below, or tell me "
@@ -342,7 +419,10 @@ def build_guidance(
             )
         resolution = "unsupported"
     else:
-        if best and best.score >= 0.86:
+        requested_clarification = clarification.strip()
+        if requested_clarification:
+            answer = requested_clarification
+        elif best and best.score >= 0.86:
             answer = (
                 f"I found a close supported measure: **{best.concept.label}**. "
                 "Is that what you meant? Choose a question below or add the place and period."

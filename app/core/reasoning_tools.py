@@ -1,8 +1,8 @@
-"""Reasoning-mode tool set.
+"""Typed tools for multi-step analytical reasoning.
 
 Each tool is a small deterministic function that wraps an existing primitive
 (catalog inspector, value resolver, SQL validator+executor). The agent calls
-them via OpenAI-style tool calling; the loop in `reasoning_agent.py` dispatches
+them via OpenAI-style tool calling; the loop in `reasoning.py` dispatches
 on `name` and feeds the JSON result back as a `role:tool` message.
 
 Tools are intentionally narrow and well-named so the model can compose them
@@ -25,7 +25,6 @@ from app.semantic.registry import (
 from app.semantic.value_resolver import distinct_values as _resolver_distinct
 from app.sql.validator import SqlValidationError, validate_sql
 
-
 # --------------------------------------------------------------------------- #
 # OpenAI-format tool schemas the agent sees                                   #
 # --------------------------------------------------------------------------- #
@@ -43,7 +42,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "table": {"type": "string", "description": "Exact catalog table id (e.g. 'contract_county', 'gov_state')."},
+                    "table": {
+                        "type": "string",
+                        "description": "Exact catalog table id (e.g. 'contract_county', 'gov_state').",
+                    },
                 },
                 "required": ["table"],
             },
@@ -64,7 +66,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "table": {"type": "string"},
                     "column": {"type": "string"},
-                    "pattern": {"type": "string", "description": "Optional case-insensitive substring to narrow the list."},
+                    "pattern": {
+                        "type": "string",
+                        "description": "Optional case-insensitive substring to narrow the list.",
+                    },
                     "limit": {"type": "integer", "default": 50},
                 },
                 "required": ["table", "column"],
@@ -83,7 +88,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "sql": {"type": "string", "description": "Single SELECT/WITH statement. Query mart_<table> views only."},
+                    "sql": {
+                        "type": "string",
+                        "description": "Single SELECT/WITH statement. Query mart_<table> views only.",
+                    },
                 },
                 "required": ["sql"],
             },
@@ -104,8 +112,22 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "table": {"type": "string"},
                     "measure": {"type": "string", "description": "Numeric column name."},
-                    "geo_column": {"type": "string", "default": "state", "description": "Label column (state / county / cd_118)."},
-                    "where": {"type": "string", "description": "Optional SQL WHERE clause without the WHERE keyword, e.g. \"year = '2024'\"."},
+                    "geo_column": {
+                        "type": "string",
+                        "default": "state",
+                        "description": "Label column (state / county / cd_118).",
+                    },
+                    "where": {
+                        "type": "string",
+                        "description": "Optional SQL WHERE clause without the WHERE keyword, e.g. \"year = '2024'\".",
+                    },
+                    "focus_value": {
+                        "type": "string",
+                        "description": (
+                            "Optional named geography whose exact value and ascending/descending "
+                            "ranks should be returned."
+                        ),
+                    },
                 },
                 "required": ["table", "measure"],
             },
@@ -119,12 +141,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "TERMINATE: produce the final answer to the user. Call this "
                 "when (and only when) you have enough evidence. Every "
                 "quantitative claim in `text` must be supported by data you "
-                "received from earlier tool calls — no fabrication."
+                "received from earlier tool calls — no fabrication. Select the "
+                "one evidence_id whose rows should be displayed as the primary "
+                "Data/SQL result, and cite any other results used in "
+                "supporting_evidence_ids."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string", "description": "Concise markdown answer for the user."},
+                    "text": {
+                        "type": "string",
+                        "description": "Concise markdown answer for the user.",
+                    },
                     "key_numbers": {
                         "type": "array",
                         "items": {
@@ -138,8 +166,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         },
                     },
                     "caveats": {"type": "array", "items": {"type": "string"}},
+                    "primary_evidence_id": {
+                        "type": "string",
+                        "description": (
+                            "The evidence_id of the successful run_sql or peer_stats "
+                            "result that most directly answers the question. Use an "
+                            "empty string only when no row-producing evidence exists."
+                        ),
+                    },
+                    "supporting_evidence_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Other evidence_ids whose results support claims in the "
+                            "answer. Do not cite schema lookups, errors, or unused work."
+                        ),
+                    },
                 },
-                "required": ["text"],
+                "required": ["text", "primary_evidence_id", "supporting_evidence_ids"],
             },
         },
     },
@@ -158,7 +202,9 @@ def tool_get_schema(table: str) -> dict[str, Any]:
     return {"table": table, "schema": table_schema_block(table)}
 
 
-def tool_distinct_values(table: str, column: str, pattern: str = "", limit: int = 50) -> dict[str, Any]:
+def tool_distinct_values(
+    table: str, column: str, pattern: str = "", limit: int = 50
+) -> dict[str, Any]:
     if table not in _VALID_TABLES:
         return {"error": f"unknown table {table!r}"}
     ds = get_dataset(table)
@@ -200,6 +246,8 @@ def tool_peer_stats(
     measure: str,
     geo_column: str = "state",
     where: str = "",
+    focus_value: str = "",
+    sort_direction: str = "desc",
     semantic_guard: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     if table not in _VALID_TABLES:
@@ -220,22 +268,40 @@ def tool_peer_stats(
         f"QUANTILE_CONT({m}, 0.25) AS p25, QUANTILE_CONT({m}, 0.75) AS p75 "
         f"FROM mart_{table} {where_sql}"
     )
-    top_sql = (
-        f"SELECT {g} AS label, {m} AS v FROM mart_{table} {where_sql} "
-        f"ORDER BY {m} DESC NULLS LAST LIMIT 5"
-    )
     bot_sql = (
         f"SELECT {g} AS label, {m} AS v FROM mart_{table} {where_sql} "
-        f"ORDER BY {m} ASC NULLS LAST LIMIT 5"
+        f"ORDER BY {m} ASC NULLS LAST, {g} ASC LIMIT 5"
     )
+    top_sql = (
+        f"SELECT {g} AS label, {m} AS v FROM mart_{table} {where_sql} "
+        f"ORDER BY {m} DESC NULLS LAST, {g} ASC LIMIT 5"
+    )
+    focus_sql = ""
+    if focus_value:
+        escaped_focus = focus_value.replace("'", "''")
+        scoped_filter = f"({where}) AND {m} IS NOT NULL" if where else f"{m} IS NOT NULL"
+        requested_rank = "rank_asc" if sort_direction == "asc" else "rank_desc"
+        focus_sql = (
+            "WITH ranked AS ("
+            f"SELECT {g} AS label, {m} AS v, "
+            f"RANK() OVER (ORDER BY {m} ASC NULLS LAST) AS rank_asc, "
+            f"RANK() OVER (ORDER BY {m} DESC NULLS LAST) AS rank_desc, "
+            f"COUNT({m}) OVER () AS total FROM mart_{table} WHERE {scoped_filter}"
+            ") SELECT label, v, rank_asc, rank_desc, "
+            f"{requested_rank} AS rank, total FROM ranked "
+            f"WHERE LOWER(CAST(label AS VARCHAR)) = LOWER('{escaped_focus}')"
+        )
     try:
-        for q in (stats_sql, top_sql, bot_sql):
+        for q in (stats_sql, top_sql, bot_sql, focus_sql):
+            if not q:
+                continue
             validate_sql(q)
             if semantic_guard is not None:
                 semantic_guard(q)
         stats = execute_select(stats_sql, max_rows=1)
         top5 = execute_select(top_sql, max_rows=5)
         bot5 = execute_select(bot_sql, max_rows=5)
+        focus = execute_select(focus_sql, max_rows=1) if focus_sql else []
     except SqlValidationError as exc:
         return {"error": f"validation: {exc}"}
     except Exception as exc:
@@ -244,9 +310,17 @@ def tool_peer_stats(
         "table": table,
         "measure": measure,
         "where": where,
+        # The ranking statement and rows are the peer tool's primary visible
+        # evidence. Distribution statistics remain alongside them in the tool
+        # trail for synthesis and faithfulness checks.
+        "sql": focus_sql if focus else top_sql,
+        "rows": focus if focus else top5,
+        "row_count": len(focus if focus else top5),
         "stats": stats[0] if stats else {},
         "top5": top5,
         "bottom5": bot5,
+        "focus": focus[0] if focus else None,
+        "rank_direction": sort_direction if focus else None,
     }
 
 
@@ -283,6 +357,8 @@ def execute_tool(
             str(args.get("measure", "")),
             str(args.get("geo_column", "state") or "state"),
             str(args.get("where", "") or ""),
+            str(args.get("focus_value", "") or ""),
+            str(args.get("sort_direction", "desc") or "desc"),
             semantic_guard,
         )
     return {"error": f"unknown tool {name!r}"}

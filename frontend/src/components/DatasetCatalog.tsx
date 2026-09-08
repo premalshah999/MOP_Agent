@@ -8,7 +8,7 @@ import type { DatasetCatalogEntry } from '@/types/chat';
    left, the selected family's tables on the right. No stat walls, no
    marketing copy: name, what it's good for, the files, a download. */
 
-interface DatasetLibraryWorkspaceProps {
+interface DatasetCatalogProps {
   datasets: DatasetGuide[];
   datasetCatalog: DatasetCatalogEntry[];
   selectedDatasetId: string;
@@ -35,13 +35,13 @@ const GUIDE_TO_CATALOG: Record<string, string[]> = {
   cross_dataset: [],
 };
 
-export function DatasetLibraryWorkspace({
+export function DatasetCatalog({
   datasets,
   datasetCatalog,
   selectedDatasetId,
   onSelectDataset,
   onUseInChat,
-}: DatasetLibraryWorkspaceProps) {
+}: DatasetCatalogProps) {
   const [activeId, setActiveId] = useState(selectedDatasetId);
   const [activeTableId, setActiveTableId] = useState('');
   const [dictionarySearch, setDictionarySearch] = useState('');
@@ -80,7 +80,8 @@ export function DatasetLibraryWorkspace({
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-5xl px-5 py-8 lg:px-8">
-        <h1 className="font-display text-[26px] font-medium tracking-tight text-[var(--ink)]">Data library</h1>
+        <div className="mop-kicker">MOP data catalog</div>
+        <h1 className="mt-2 font-display text-[30px] font-medium tracking-tight text-[var(--ink)]">Data library</h1>
         <p className="mt-1.5 max-w-xl text-[13.5px] leading-6 text-[var(--muted)]">
           The datasets behind analytical answers. Browse a family, download the exact files, or take a question straight to the chat.
         </p>
@@ -95,10 +96,10 @@ export function DatasetLibraryWorkspace({
                   key={d.id}
                   type="button"
                   onClick={() => { setActiveId(d.id); onSelectDataset(d.id); }}
-                  className={`rounded-lg px-3 py-2 text-left text-[13.5px] transition ${
+                  className={`border-l-2 px-3 py-2 text-left text-[13.5px] transition ${
                     active
-                      ? 'bg-[var(--surface-2)] font-medium text-[var(--ink)]'
-                      : 'text-[var(--muted)] hover:bg-[var(--surface-2)]/60 hover:text-[var(--ink)]'
+                      ? 'border-[var(--brand-red)] bg-[var(--surface-2)] font-medium text-[var(--ink)]'
+                      : 'border-transparent text-[var(--muted)] hover:bg-[var(--surface-2)]/60 hover:text-[var(--ink)]'
                   }`}
                 >
                   {d.name}
@@ -117,7 +118,7 @@ export function DatasetLibraryWorkspace({
               <button
                 type="button"
                 onClick={() => onUseInChat(guide.id)}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--accent)] px-3.5 py-1.5 text-[12.5px] font-medium text-white transition hover:bg-[var(--accent-hover)]"
+                className="mop-primary-button inline-flex shrink-0 items-center gap-1.5 px-3.5 py-2"
               >
                 Ask about this data
                 <ArrowUpRight size={13} />
@@ -125,7 +126,7 @@ export function DatasetLibraryWorkspace({
             </div>
 
             {/* Tables */}
-            <div className="mt-5 overflow-hidden rounded-2xl border border-[var(--line-soft)] bg-[var(--surface)]">
+            <div className="mt-5 overflow-hidden border border-[var(--line)] bg-[var(--surface)]">
               {tables.length === 0 ? (
                 <div className="px-5 py-6 text-[13px] leading-6 text-[var(--muted)]">
                   This family is analysis-only — it queries across every other dataset rather than shipping files of its own.
@@ -157,7 +158,7 @@ export function DatasetLibraryWorkspace({
                         href={buildApiUrl(t.downloads.xlsx || t.downloads.parquet || '')}
                         download
                         title={`Download ${t.label}`}
-                        className="mr-3 shrink-0 rounded-lg p-2 text-[var(--muted)] transition hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+                        className="mr-3 shrink-0 border border-transparent p-2 text-[var(--muted)] transition hover:border-[var(--line)] hover:text-[var(--brand-red)]"
                       >
                         <Download size={15} />
                       </a>
@@ -169,7 +170,7 @@ export function DatasetLibraryWorkspace({
 
             {/* Variable dictionary */}
             {activeTable && (
-              <section className="mt-5 overflow-hidden rounded-2xl border border-[var(--line-soft)] bg-[var(--surface)]">
+              <section className="mt-5 overflow-hidden border border-[var(--line)] bg-[var(--surface)]">
                 <div className="border-b border-[var(--line-soft)] px-5 py-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -179,20 +180,35 @@ export function DatasetLibraryWorkspace({
                       </p>
                     </div>
                     <div className="text-right text-[11px] leading-5 text-[var(--muted-2)]">
-                      {activeTable.source && <div>Source: {activeTable.source}</div>}
+                      {activeTable.source && (
+                        <div>
+                          Source:{' '}
+                          {activeTable.sourceUrl ? (
+                            <a
+                              href={activeTable.sourceUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-0.5 hover:text-[var(--accent)]"
+                            >
+                              {activeTable.source}
+                              <ArrowUpRight size={10} aria-hidden="true" />
+                            </a>
+                          ) : activeTable.source}
+                        </div>
+                      )}
                       {activeTable.periodLabel && <div>Coverage: {activeTable.periodLabel}</div>}
                     </div>
                   </div>
 
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex gap-1 rounded-lg bg-[var(--surface-2)] p-0.5">
+                    <div className="flex border border-[var(--line)] bg-[var(--surface-2)]">
                       {(['all', 'measure', 'dimension'] as const).map((role) => (
                         <button
                           key={role}
                           type="button"
                           onClick={() => setVariableRole(role)}
-                          className={`rounded-md px-2.5 py-1 text-[11.5px] capitalize transition ${
-                            variableRole === role ? 'bg-[var(--surface)] font-medium text-[var(--ink)] shadow-sm' : 'text-[var(--muted)] hover:text-[var(--ink)]'
+                          className={`border-r border-[var(--line)] px-2.5 py-1 text-[11.5px] capitalize transition last:border-r-0 ${
+                            variableRole === role ? 'bg-[var(--surface)] font-medium text-[var(--ink)]' : 'text-[var(--muted)] hover:text-[var(--ink)]'
                           }`}
                         >
                           {role === 'all' ? 'All variables' : `${role}s`}
@@ -206,11 +222,25 @@ export function DatasetLibraryWorkspace({
                         value={dictionarySearch}
                         onChange={(event) => setDictionarySearch(event.target.value)}
                         placeholder="Search variables and terms"
-                        className="w-full rounded-lg border border-[var(--line)] bg-[var(--bg)] py-1.5 pl-8 pr-3 text-[12px] text-[var(--ink)] outline-none transition placeholder:text-[var(--muted-2)] focus:border-[var(--accent)]"
+                        className="w-full border border-[var(--line)] bg-[var(--bg)] py-1.5 pl-8 pr-3 text-[12px] text-[var(--ink)] outline-none transition placeholder:text-[var(--muted-2)] focus:border-[var(--brand-red)]"
                       />
                     </label>
                   </div>
                 </div>
+
+                {activeTable.notes && activeTable.notes.length > 0 && (
+                  <div className="border-b border-[var(--line-soft)] bg-[var(--surface-2)]/45 px-5 py-3.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Coverage and interpretation</p>
+                    <ul className="mt-2 space-y-1.5 text-[11.5px] leading-5 text-[var(--muted)]">
+                      {activeTable.notes.map((note) => (
+                        <li key={note} className="flex gap-2">
+                          <span aria-hidden="true" className="mt-[8px] h-1 w-1 shrink-0 rounded-full bg-[var(--muted-2)]" />
+                          <span>{note}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 <div className="max-h-[560px] overflow-y-auto">
                   {filteredVariables.length > 0 ? filteredVariables.map((variable, index) => (
@@ -250,7 +280,7 @@ export function DatasetLibraryWorkspace({
                           <button
                             type="button"
                             onClick={() => onUseInChat(guide.id, variable.exampleQuestion)}
-                            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--line)] px-2.5 py-1 text-[11px] font-medium text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                            className="mop-outline-button inline-flex shrink-0 items-center gap-1 px-2.5 py-1"
                           >
                             Ask about it
                             <ArrowUpRight size={11} />
@@ -267,7 +297,7 @@ export function DatasetLibraryWorkspace({
                       <button
                         type="button"
                         onClick={() => onUseInChat(guide.id, `I couldn't find "${dictionarySearch.trim()}" in this dataset. What is the closest measure I can use?`)}
-                        className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-[var(--accent)] px-3.5 py-1.5 text-[11.5px] font-medium text-white transition hover:bg-[var(--accent-hover)]"
+                        className="mop-primary-button mt-3 inline-flex items-center gap-1.5 px-3.5 py-2"
                       >
                         Ask for the closest measure
                         <ArrowUpRight size={12} />
@@ -288,7 +318,7 @@ export function DatasetLibraryWorkspace({
                       key={`${guide.id}-${i}`}
                       type="button"
                       onClick={() => onUseInChat(guide.id, q)}
-                      className="rounded-full border border-[var(--line)] bg-[var(--surface)] px-3.5 py-1.5 text-left text-[12.5px] text-[var(--muted)] transition hover:border-[var(--muted-2)] hover:text-[var(--ink)]"
+                      className="border border-[var(--line)] bg-[var(--surface)] px-3.5 py-2 text-left text-[12px] text-[var(--muted)] transition hover:border-[var(--brand-red)] hover:text-[var(--ink)]"
                     >
                       {q}
                     </button>

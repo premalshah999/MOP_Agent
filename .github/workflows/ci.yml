@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   backend:
@@ -15,7 +16,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check app tests
+      - run: ruff format --check app tests
       # Live-LLM stage tests self-skip when no key is configured.
       - run: pytest -q
       - run: python -m app.semantic.audit --format json
@@ -42,3 +45,26 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
+
+  full-release-gate:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Premium full release certification
+        if: env.DEEPSEEK_API_KEY != ''
+        run: python -m app.evals.premium_eval --profile full
+      - name: Upload premium certification report
+        if: always() && env.DEEPSEEK_API_KEY != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: premium-release-certification
+          path: reports/premium/

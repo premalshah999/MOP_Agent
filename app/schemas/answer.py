@@ -1,3 +1,5 @@
+"""Validated response structures shared by normal and reasoning modes."""
+
 from __future__ import annotations
 
 from typing import Literal

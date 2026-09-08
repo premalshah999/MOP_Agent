@@ -2,7 +2,7 @@
 
 Runs every task in `reasoning_tasks.yaml` through the orchestrator in
 mode='reasoning' and grades the answer with an LLM judge on a rubric:
-  - groundedness   (0-10) every claim supported by the tool/SQL results
+  - groundedness   (0-10) every claim supported by cited tool/SQL results
   - completeness   (0-10) addresses the user's question
   - usefulness     (0-10) gives framing/context beyond a bare lookup
   - no_hallucination (0-10) no invented entities, ranks, or numbers
@@ -21,13 +21,13 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-from app.core.orchestrator import answer_question
+from app.core.pipeline import answer_question
 from app.llm import client
 from app.paths import ROOT_DIR
 
 TASKS_PATH = ROOT_DIR / "app" / "evals" / "reasoning_tasks.yaml"
-TASK_PASS_THRESHOLD = 7.0
-GATE_PASS_THRESHOLD = 0.80
+TASK_PASS_THRESHOLD = 9.0
+GATE_PASS_THRESHOLD = 1.0
 
 
 _JUDGE_SYSTEM = """You grade an analyst's answer to a US public-policy data question.
@@ -42,6 +42,13 @@ returned (last SQL rows, last SQL statement). Score each dimension 0-10:
   "is X high?", a delta for "compare", a rank for "where does X stand"),
   not just a bare number.
 - no_hallucination: 10 if zero fabricated entities/numbers/claims; lower if any.
+
+For a ranking with hundreds of members, do not require the prose to enumerate
+hundreds of names. An exact classified count plus clearly labeled
+representative top/bottom rows is more useful and may be fully complete. If the
+tool result says `truncated: true`, require the answer to disclose that its
+visible list is partial; penalize an answer that presents the sample as
+exhaustive.
 
 Return ONLY JSON:
 {"groundedness": <0-10>, "completeness": <0-10>, "usefulness": <0-10>,
@@ -61,14 +68,40 @@ def _judge(
 ) -> dict[str, Any]:
     # Compact every tool result to keep the judge prompt bounded.
     tool_trail = []
-    for tr in (tool_results or []):
+    for tr in tool_results or []:
         res = tr.get("result", {}) or {}
         if tr.get("name") == "run_sql":
-            tool_trail.append({"tool": "run_sql", "sql": res.get("sql", "")[:200], "rows": res.get("rows", [])[:15], "error": res.get("error")})
+            tool_trail.append(
+                {
+                    "tool": "run_sql",
+                    "sql": res.get("sql", "")[:200],
+                    "rows": res.get("rows", [])[:15],
+                    "row_count": res.get("row_count"),
+                    "truncated": bool(res.get("truncated")),
+                    "error": res.get("error"),
+                }
+            )
         elif tr.get("name") == "peer_stats":
-            tool_trail.append({"tool": "peer_stats", "args": tr.get("args"), "stats": res.get("stats"), "top5": res.get("top5"), "bottom5": res.get("bottom5")})
+            tool_trail.append(
+                {
+                    "tool": "peer_stats",
+                    "args": tr.get("args"),
+                    "stats": res.get("stats"),
+                    "top5": res.get("top5"),
+                    "bottom5": res.get("bottom5"),
+                    "focus": res.get("focus"),
+                    "rank_direction": res.get("rank_direction"),
+                }
+            )
         elif tr.get("name") == "distinct_values":
-            tool_trail.append({"tool": "distinct_values", "args": tr.get("args"), "count": res.get("count"), "sample": res.get("values", [])[:10]})
+            tool_trail.append(
+                {
+                    "tool": "distinct_values",
+                    "args": tr.get("args"),
+                    "count": res.get("count"),
+                    "sample": res.get("values", [])[:10],
+                }
+            )
         elif tr.get("name") == "get_schema":
             tool_trail.append({"tool": "get_schema", "args": tr.get("args")})
     user = (
@@ -87,7 +120,13 @@ def _judge(
             purpose="reasoning_judge",
         )
     except client.LLMError as exc:
-        return {"error": str(exc), "groundedness": 0, "completeness": 0, "usefulness": 0, "no_hallucination": 0}
+        return {
+            "error": str(exc),
+            "groundedness": 0,
+            "completeness": 0,
+            "usefulness": 0,
+            "no_hallucination": 0,
+        }
     return {
         "groundedness": float(raw.get("groundedness", 0)),
         "completeness": float(raw.get("completeness", 0)),
@@ -95,6 +134,31 @@ def _judge(
         "no_hallucination": float(raw.get("no_hallucination", 0)),
         "reason": str(raw.get("reason", "")),
     }
+
+
+def _presentation_evidence_aligned(result: dict[str, Any]) -> bool:
+    """Require the visible SQL/data package to originate from cited primary evidence."""
+
+    package = result.get("resultPackage") or {}
+    primary_id = package.get("primary_evidence_id")
+    if result.get("resolution") != "answered" or not primary_id:
+        return False
+    primary = next(
+        (
+            item
+            for item in (package.get("cited_tool_results") or [])
+            if item.get("evidence_id") == primary_id
+        ),
+        None,
+    )
+    if not primary:
+        return False
+    evidence = primary.get("result") or {}
+    if evidence.get("error") or evidence.get("sql") != result.get("sql"):
+        return False
+    evidence_rows = evidence.get("rows") or []
+    visible_rows = result.get("data") or []
+    return bool(evidence_rows) and len(evidence_rows) == len(visible_rows)
 
 
 def run_reasoning_evals(limit: int | None = None) -> dict[str, Any]:
@@ -108,19 +172,40 @@ def run_reasoning_evals(limit: int | None = None) -> dict[str, Any]:
             r = answer_question(q, mode="reasoning")
         except Exception as exc:
             results.append(
-                {"id": task["id"], "question": q, "error": f"pipeline: {exc}", "avg": 0.0, "pass": False}
+                {
+                    "id": task["id"],
+                    "question": q,
+                    "error": f"pipeline: {exc}",
+                    "avg": 0.0,
+                    "pass": False,
+                }
             )
             continue
         sql = r.get("sql")
         rows = r.get("data") or []
         answer = r.get("answer", "") or ""
-        tool_results = (r.get("resultPackage") or {}).get("tool_results") or []
+        package = r.get("resultPackage") or {}
+        tool_results = package.get("cited_tool_results") or package.get("tool_results") or []
+        presentation_aligned = _presentation_evidence_aligned(r)
         scores = _judge(q, answer, sql, rows, tool_results)
         avg = round(
-            (scores["groundedness"] + scores["completeness"] + scores["usefulness"] + scores["no_hallucination"]) / 4,
+            (
+                scores["groundedness"]
+                + scores["completeness"]
+                + scores["usefulness"]
+                + scores["no_hallucination"]
+            )
+            / 4,
             2,
         )
-        agent_stage = next((s for s in r.get("pipelineTrace", {}).get("stages", []) if s.get("name") == "reasoning_agent"), None)
+        agent_stage = next(
+            (
+                s
+                for s in r.get("pipelineTrace", {}).get("stages", [])
+                if s.get("name") == "reasoning_agent"
+            ),
+            None,
+        )
         results.append(
             {
                 "id": task["id"],
@@ -130,7 +215,8 @@ def run_reasoning_evals(limit: int | None = None) -> dict[str, Any]:
                 "answer_preview": answer[:160].replace("\n", " "),
                 **scores,
                 "avg": avg,
-                "pass": avg >= TASK_PASS_THRESHOLD,
+                "presentation_aligned": presentation_aligned,
+                "pass": avg >= TASK_PASS_THRESHOLD and presentation_aligned,
             }
         )
     n = len(results)
@@ -166,8 +252,10 @@ def main() -> int:
         return 0 if report["summary"]["gate"] else 1
     s = report["summary"]
     print("Reasoning evaluation")
-    print(f"  tasks: {s['tasks']} | passed: {s['passed']} | rate: {s['pass_rate']:.0%} "
-          f"(threshold {s['gate_threshold']:.0%})")
+    print(
+        f"  tasks: {s['tasks']} | passed: {s['passed']} | rate: {s['pass_rate']:.0%} "
+        f"(threshold {s['gate_threshold']:.0%})"
+    )
     print(f"  GATE: {'PASS' if s['gate'] else 'FAIL'}")
     for r in report["results"]:
         flag = "✓" if r["pass"] else "✗"
@@ -175,6 +263,7 @@ def main() -> int:
             f"  {flag} {r['id']} avg={r.get('avg', 0):.1f} "
             f"(g={r.get('groundedness', 0)} c={r.get('completeness', 0)} "
             f"u={r.get('usefulness', 0)} nh={r.get('no_hallucination', 0)}) "
+            f"aligned={r.get('presentation_aligned')} "
             f"calls={r.get('tool_calls')} stopped={r.get('stopped')}"
         )
         if not r["pass"]:

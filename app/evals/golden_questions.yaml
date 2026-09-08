@@ -269,6 +269,74 @@
     WHERE LOWER(state) = 'california' AND year = '2024'
   expect: { scalar: true, rel_tol: 0.01 }
 
+- id: g37
+  question: how many employees does contract_static_state dataset have?
+  intent: ANALYTICAL
+  tables: [contract_state]
+  must_columns: [Employees]
+  note: contract_static_state is an unambiguous typo; answer the Employees measure, not the 102 physical rows
+  reference_sql: >
+    SELECT SUM("Employees") AS v FROM mart_contract_state
+    WHERE year = '2024'
+  expect: { scalar: true, rel_tol: 0.001 }
+  faithfulness: true
+
+# ---------------- FEEDBACK SLOT 2 ----------------
+- id: g39
+  question: ACS dataset contains data for how many counties?
+  intent: ANALYTICAL
+  tables: [acs_county]
+  must_columns: [fips]
+  reference_sql: >
+    SELECT COUNT(DISTINCT fips) AS v FROM mart_acs_county WHERE Year = 2023
+  expect: { scalar: true, rel_tol: 0.0 }
+  faithfulness: true
+
+- id: g40
+  question: Provide correlation of median household income with all education variables and report in a table.
+  intent: ANALYTICAL
+  tables: [acs_state]
+  must_columns: ["Median household income", "Education >= High School", "Education >= Bachelor's", "Education >= Graduate"]
+  reference_sql: >
+    SELECT CORR("Median household income", "Education >= High School") AS v
+    FROM mart_acs_state WHERE Year = 2023
+  expect: { scalar: true, rel_tol: 0.001 }
+  faithfulness: true
+
+- id: g41
+  question: For the state of Colorado, correlate all loaded education measures with median household income and the loaded income bands.
+  intent: ANALYTICAL
+  tables: [acs_county]
+  must_columns: ["Median household income", "Education >= High School", "Education >= Bachelor's", "Education >= Graduate", "Income >$50K", "Income >$100K", "Income >$200K"]
+  note: Colorado is the scope; its counties are the repeated observations. acs_state would have one row and return NULL.
+  reference_sql: >
+    SELECT CORR("Education >= High School", "Median household income") AS v
+    FROM mart_acs_county WHERE LOWER(state) = 'colorado' AND Year = 2023
+  expect: { scalar: true, rel_tol: 0.001 }
+  faithfulness: true
+
+- id: g42
+  question: Rank the Wyoming counties by Black and Asian population.
+  intent: ANALYTICAL
+  tables: [acs_county]
+  must_columns: [state, county, Black, Asian]
+  reference_sql: >
+    SELECT county AS label, Black AS v, Asian
+    FROM mart_acs_county WHERE LOWER(state) = 'wyoming' AND Year = 2023
+    ORDER BY Black DESC, Asian DESC, county ASC
+  expect: { row_count: 23, top_label: true }
+  faithfulness: true
+
+- id: g43
+  question: What is the national average bachelor's degree attainment in the ACS data for 2023?
+  intent: ANALYTICAL
+  tables: [acs_state]
+  must_columns: ["Education >= Bachelor's"]
+  reference_sql: >
+    SELECT AVG("Education >= Bachelor's") AS v FROM mart_acs_state WHERE Year = 2023
+  expect: { scalar: true, rel_tol: 0.001, answer_contains: [unweighted, state-level] }
+  faithfulness: true
+
 # ---------------- CLARIFY ----------------
 - id: g24
   question: How much federal money goes to Maryland?
@@ -304,6 +372,21 @@
   intent: UNANSWERABLE
   no_sql: true
 
+- id: g44
+  question: How many men have less than 9th grade education?
+  intent: UNANSWERABLE
+  no_sql: true
+
+- id: g45
+  question: How many women have an associate's degree?
+  intent: UNANSWERABLE
+  no_sql: true
+
+- id: g46
+  question: How many people are 85 years old and above?
+  intent: UNANSWERABLE
+  no_sql: true
+
 # ---------------- META ----------------
 - id: g30
   question: who are you?
@@ -327,6 +410,22 @@
 
 - id: g34
   question: what years are available for FINRA county data?
+  intent: META
+  no_sql: true
+
+- id: g38
+  question: how many rows are in contract_state?
+  intent: META
+  no_sql: true
+  note: physical row count is a catalog fact and must not be confused with Employees
+
+- id: g47
+  question: What are the different age groups in the ACS dataset?
+  intent: META
+  no_sql: true
+
+- id: g48
+  question: The ACS bachelor's attainment measure is for adults 25+. Why, and what about other age groups?
   intent: META
   no_sql: true
 

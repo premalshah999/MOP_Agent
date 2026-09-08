@@ -1,49 +1,47 @@
-"""Pipeline orchestrator — LLM-grounded text-to-SQL.
+"""Coordinate the production question-answering workflow.
 
-Stage 1 intent -> Stage 2 routing -> Stage 3 grounding -> Stage 4 SQL (with
-self-repair) + grounded answer + faithfulness judge. The `answer_question()`
-return contract is unchanged so the FastAPI app, threads, auth, and frontend
-keep working.
+Conversation context, semantic planning, grounding, SQL generation, evidence
+validation, response writing, and visualization all pass through
+``answer_question``. The API contract remains stable while these internal
+stages evolve.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re as _re
 from typing import Any, Callable
 
 from app.core import meta_answer
-from app.core.answer_writer import write_answer
-from app.core.analysis_contract import AnalysisContract, build_analysis_contract
+from app.core.analysis_plan import AnalysisContract, build_analysis_contract
 from app.core.clarifier import generate_clarification
+from app.core.conversation import contextualize, prior_history
+from app.core.evidence_renderer import render_validated_rows
 from app.core.formatting import (
     format_key_numbers,
     validate_key_numbers_against_row_sets,
 )
 from app.core.glossary import detect_terms
-from app.core.peer_context import compute_peer_context, render_peer_context
-from app.core.period_guard import canonical_period_notes, mixed_period_note, period_claim_issues
-from app.core.verified_queries import match as match_verified_query
-from app.duckdb.connection import execute_select
-from app.sql.validator import SqlValidationError, validate_sql
 from app.core.grounding import build_grounding
-from app.core.intent_route import classify_and_route
-from app.core.reasoning_agent import run_reasoning_agent
-from app.core.sql_writer import generate_and_execute
-from app.core.contextualize import contextualize, prior_history
-from app.core.evidence_renderer import render_verified_rows
-from app.sql.semantic_validator import stabilize_verified_ranking_sql, validate_semantic_sql
+from app.core.peer_context import compute_peer_context, render_peer_context
+from app.core.period_guard import (
+    canonical_period_notes,
+    mixed_period_note,
+    period_claim_issues,
+)
+from app.core.planner import classify_and_route
+from app.core.query_engine import generate_and_execute
+from app.core.reasoning import run_reasoning_agent
+from app.core.response_writer import write_answer
 from app.core.suggestions import suggest_followups
 from app.core.visuals import build_visuals, enrich_rows_for_map
-
-import os
-import re as _re
-
-
-from app.evals.faithfulness import judge_faithfulness
+from app.llm import client as llm_client
 from app.observability.logging import log_pipeline_event
-from app.semantic.registry import critical_warnings_for, get_dataset
+from app.quality.faithfulness import judge_faithfulness
+from app.semantic.registry import critical_warnings_for, get_dataset, load_registry
 from app.semantic.value_resolver import RESOLVABLE_COLUMNS, resolve_filter_value
-
+from app.sql.semantic_validator import validate_semantic_sql
 
 _SQL_STR_LITERAL = _re.compile(r"'([^']{2,80})'")
 
@@ -91,8 +89,13 @@ def _did_you_mean(sql: str, table: str | None) -> str:
     return "Did you mean: " + "; ".join(f"`{a}` → `{b}`" for a, b, _ in fixes[:3]) + "?"
 
 
-PIPELINE_VERSION = "llm-grounded-v4"
+PIPELINE_VERSION = "llm-grounded-v5"
 PIPELINE_READY = True
+
+
+def _contract_fingerprint(value: Any) -> str:
+    blob = json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _empty_map_intent() -> dict[str, Any]:
@@ -127,9 +130,7 @@ def _build_context_memory(
                 continue
             raw_values = info.get("values")
             values = (
-                list(raw_values)
-                if isinstance(raw_values, (list, tuple))
-                else [info.get("value")]
+                list(raw_values) if isinstance(raw_values, (list, tuple)) else [info.get("value")]
             )
             clean_values = [str(value) for value in values if value not in (None, "")]
             if not clean_values:
@@ -151,13 +152,76 @@ def _build_context_memory(
         "requested_period": analysis.requested_period,
         "requested_years": list(analysis.requested_years),
         "sort_direction": analysis.sort_direction,
+        "sort_columns": list(analysis.sort_columns),
         "top_k": analysis.top_k,
+        "statistic": analysis.statistic,
+        "result_unit": analysis.result_unit,
+        "formula": analysis.formula.model_dump(),
+        "predicate": analysis.predicate.model_dump(),
+        "observation_grain": analysis.observation_grain,
+        "result_scope": analysis.result_scope,
+        "include_component_measures": analysis.include_component_measures,
+        "output_dimensions": list(analysis.output_dimensions),
         "filters": filters,
         "entities": entities,
         "comparison_entities": state_entities if len(state_entities) > 1 else [],
         "focus_state": state_entities[0] if len(state_entities) == 1 else None,
     }
     return {key: value for key, value in memory.items() if value not in (None, "", [], {})}
+
+
+def _add_result_context(
+    memory: dict[str, Any],
+    rows: list[dict[str, Any]],
+    tables: list[str],
+) -> dict[str, Any]:
+    """Persist compact, structured result identities for later follow-ups.
+
+    Requests such as "show the states for the counties above" cannot be
+    resolved from the analytical contract alone.  Storing generated prose is
+    unsafe, but the executed row labels are verified evidence.  Keep only
+    dimension-like values from the first 25 displayed rows, never free-form
+    answer text or unbounded result data.
+    """
+    output = dict(memory)
+    dimension_keys: set[str] = {
+        "state",
+        "county",
+        "fips",
+        "cd_118",
+        "agency",
+        "agency_name",
+        "rcpt_state_name",
+        "subawardee_state_name",
+        "rcpt_state",
+        "subawardee_state",
+        "rcpt_cty_name",
+        "subawardee_cty_name",
+        "rcpt_full_name",
+        "subawardee_full_name",
+        "rcpt_cd_name",
+        "subawardee_cd_name",
+        "naics_2digit_title",
+        "comparison",
+        "metric",
+    }
+    for table in tables:
+        dataset = get_dataset(table)
+        if dataset is not None:
+            dimension_keys.update(dataset.dimensions)
+    result_entities: list[dict[str, Any]] = []
+    for row in rows[:25]:
+        item = {
+            key: value
+            for key, value in row.items()
+            if key in dimension_keys and value not in (None, "")
+        }
+        if item and item not in result_entities:
+            result_entities.append(item)
+    if result_entities:
+        output["result_entities"] = result_entities
+    output["result_row_count"] = len(rows)
+    return output
 
 
 def _envelope(
@@ -184,7 +248,6 @@ def _envelope(
     user_id: int | str | None = None,
     request_id: str | None = None,
     intent: str = "",
-    verified_match: dict[str, Any] | None = None,
     analysis_contract: dict[str, Any] | None = None,
     data_truncated: bool = False,
     key_number_row_sets: list[list[dict[str, Any]]] | None = None,
@@ -244,6 +307,18 @@ def _envelope(
             "confidence": confidence,
             "quality_status": "warning" if quality_warnings else "ok",
             "warnings": quality_warnings,
+            "pipeline_version": PIPELINE_VERSION,
+            "semantic_registry_version": load_registry().version,
+            "provider": llm_client.active_provider(),
+            "provider_warnings": llm_client.provider_warnings(),
+            "semantic_contract_fingerprint": _contract_fingerprint(analysis_contract),
+            "sql_fingerprint": _contract_fingerprint(sql or ""),
+            "evidence_fingerprint": _contract_fingerprint(rows),
+            "route_verification_changed": any(
+                stage.get("name") == "route_verification"
+                and bool((stage.get("data") or {}).get("changed"))
+                for stage in stages
+            ),
         }
     )
     return {
@@ -277,10 +352,11 @@ def _envelope(
             "family": tables[0] if tables else None,
             "metric": metric,
             "operation": analysis_contract.get("operation"),
-            "unit": None,
+            "unit": analysis_contract.get("result_unit"),
             "geography_level": geography_level,
             "year": year,
             "focus_state": focus_state,
+            "flow_direction": analysis_contract.get("flow_direction"),
             "sort_direction": analysis_contract.get("sort_direction"),
             "top_k": analysis_contract.get("top_k"),
             "tables": tables,
@@ -290,8 +366,16 @@ def _envelope(
             "validation_message": quality_warnings[0] if quality_warnings else None,
             "context_memory": context_memory or None,
         },
-        "pipelineTrace": {"version": PIPELINE_VERSION, "stages": stages},
-        "quality": {"status": "warning" if quality_warnings else "ok", "warnings": quality_warnings},
+        "pipelineTrace": {
+            "version": PIPELINE_VERSION,
+            "semantic_registry_version": load_registry().version,
+            "provider": llm_client.active_provider(),
+            "stages": stages,
+        },
+        "quality": {
+            "status": "warning" if quality_warnings else "ok",
+            "warnings": quality_warnings,
+        },
         "confidence": confidence,
         "key_numbers": key_numbers,
         "assumptions": assumptions,
@@ -299,9 +383,6 @@ def _envelope(
         # Only the terms actually present in the answer prose or caveats;
         # the frontend wraps matches with <abbr title="..."> tooltips.
         "glossary": detect_terms((answer or "") + "\n" + "\n".join(caveats)),
-        # When the Verified Query Repository was hit, surface a small badge
-        # so the user sees this answer's SQL was analyst-reviewed.
-        "verified_query": verified_match,
     }
 
 
@@ -319,9 +400,7 @@ def _reasoning_evidence_row_sets(
         if result.get("error"):
             continue
         if tool_result.get("name") == "run_sql":
-            result_rows = [
-                row for row in (result.get("rows") or []) if isinstance(row, dict)
-            ]
+            result_rows = [row for row in (result.get("rows") or []) if isinstance(row, dict)]
             if result_rows:
                 row_sets.append(result_rows)
         elif tool_result.get("name") == "peer_stats":
@@ -329,12 +408,67 @@ def _reasoning_evidence_row_sets(
             if isinstance(stats, dict) and stats:
                 row_sets.append([stats])
             for key in ("top5", "bottom5"):
-                result_rows = [
-                    row for row in (result.get(key) or []) if isinstance(row, dict)
-                ]
+                result_rows = [row for row in (result.get(key) or []) if isinstance(row, dict)]
                 if result_rows:
                     row_sets.append(result_rows)
     return row_sets
+
+
+def _cited_reasoning_tool_results(agent: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return only evidence the final reasoning answer explicitly cited.
+
+    Forced synthesis paths predate explicit citations, so they retain the full
+    trail. A normal successful tool answer always supplies a primary evidence
+    id and is verified against exactly that result plus named supporting
+    results, never unrelated exploration.
+    """
+
+    tool_results = list(agent.get("tool_results") or [])
+    cited_ids = {
+        value
+        for value in [
+            agent.get("primary_evidence_id"),
+            *(agent.get("supporting_evidence_ids") or []),
+        ]
+        if value
+    }
+    if not cited_ids:
+        return tool_results
+    return [result for result in tool_results if result.get("evidence_id") in cited_ids]
+
+
+def _reasoning_requires_final_shape(analysis: AnalysisContract) -> bool:
+    """Identify contracts whose evidence is one atomic statistical result.
+
+    A reasoning agent may explore with partial queries for broad comparisons,
+    but a single derived value or correlation must keep its answer, displayed
+    SQL, and displayed rows aligned. Requiring the final shape for those typed
+    contracts prevents a prose answer assembled from two hidden one-row calls.
+    """
+
+    return analysis.result_scope == "single" and (
+        analysis.statistic in {"derived", "correlation"}
+        or analysis.formula.operator not in {"none", "identity"}
+    )
+
+
+def _reasoning_focus_values(resolved: dict[str, Any]) -> dict[str, list[str]]:
+    """Collect canonical named entities for peer tools without guessing scope."""
+
+    output: dict[str, list[str]] = {}
+    for table_entities in resolved.values():
+        if not isinstance(table_entities, dict):
+            continue
+        for column, info in table_entities.items():
+            if not isinstance(info, dict):
+                continue
+            values = info.get("values") or [info.get("value")]
+            bucket = output.setdefault(str(column), [])
+            for value in values:
+                text = str(value or "").strip()
+                if text and text not in bucket:
+                    bucket.append(text)
+    return output
 
 
 def _reasoning_mode(
@@ -360,8 +494,11 @@ def _reasoning_mode(
 
     def _reasoning_sql_guard(sql_text: str) -> None:
         validate_semantic_sql(
-            sql_text, q, analysis, grounding.get("resolved") or {},
-            enforce_shape=False,
+            sql_text,
+            q,
+            analysis,
+            grounding.get("resolved") or {},
+            enforce_shape=_reasoning_requires_final_shape(analysis),
         )
 
     agent = run_reasoning_agent(
@@ -372,6 +509,8 @@ def _reasoning_mode(
         allowed_tables=set(analysis.tables),
         operation=analysis.operation,
         flow_direction=analysis.flow_direction,
+        analysis_contract=analysis.model_dump(),
+        focus_values_by_column=_reasoning_focus_values(grounding.get("resolved") or {}),
     )
     _push(
         "reasoning_agent",
@@ -384,42 +523,49 @@ def _reasoning_mode(
 
     rows = agent["rows"]
     sql = agent["sql"]
+    data_truncated = bool(agent.get("truncated"))
     answer = agent["answer"] or "I could not answer that."
     caveats = list(agent["caveats"])
     key_numbers = list(agent["key_numbers"])
     quality_warnings: list[str] = []
     confidence = "high" if agent["stopped_reason"] == "ok" else "low"
 
-    # Derive tables used from the SQL history (best effort) for the contract.
+    cited_tool_results = _cited_reasoning_tool_results(agent)
+
+    # Derive tables from cited evidence, not abandoned exploratory queries.
     tables: list[str] = []
-    for s in agent.get("sql_history") or []:
+    cited_sql = [
+        str((item.get("result") or {}).get("sql") or "")
+        for item in cited_tool_results
+        if item.get("name") in {"run_sql", "peer_stats"}
+    ]
+    for s in cited_sql or ([sql] if sql else []):
         for t in _MART_RE.findall(s):
             t_low = t.lower()
             if t_low and t_low not in tables:
                 tables.append(t_low)
-    primary_table = tables[0] if tables else None
-    dataset = get_dataset(primary_table) if primary_table else None
-    routing_stub = {**routing, "tables": tables or analysis.tables}
-    display_rows = enrich_rows_for_map(q, routing_stub, grounding.get("resolved") or {}, rows)
-    visuals = build_visuals(q, routing_stub, grounding.get("resolved") or {}, display_rows)
-    _push(
-            "visual_recommender",
-            "completed",
-            chart=bool(visuals["chart"]),
-            map=visuals["map_intent"].get("mapType") if visuals["map_intent"].get("enabled") else "none",
-        )
+    routing_stub = {
+        **routing,
+        "tables": tables or analysis.tables,
+        "operation": analysis.operation,
+        "result_unit": analysis.result_unit,
+        "formula": analysis.formula.model_dump(),
+        "effective_period": analysis.effective_period,
+        "requested_period": analysis.requested_period,
+        "requested_years": list(analysis.requested_years),
+        "data_truncated": data_truncated,
+    }
 
     # Faithfulness is blocking here too.  Reasoning mode previously bypassed
     # the normal semantic contract and streamed its draft before verification.
-    tool_results = agent.get("tool_results") or []
     data_notes = critical_warnings_for(tables or analysis.tables)
-    if rows or tool_results:
+    if rows or cited_tool_results:
         verdict = judge_faithfulness(
             q,
             answer,
             rows,
             sql or "",
-            tool_results,
+            cited_tool_results,
             data_notes=data_notes,
         )
         _push("faithfulness_judge", "completed", attempt=1, **verdict)
@@ -430,9 +576,10 @@ def _reasoning_mode(
                 sql or "",
                 rows,
                 grounding.get("text") or "",
-                extra_evidence=json.dumps(tool_results, default=str)[:6000],
+                extra_evidence=agent.get("cited_evidence_digest") or "",
                 previous_answer=answer,
                 verification_issue=verdict["reason"],
+                truncated=data_truncated,
             )
             _push("answer_repair", "completed", reason=verdict["reason"])
             repaired_verdict = (
@@ -441,7 +588,7 @@ def _reasoning_mode(
                     repaired["answer"],
                     rows,
                     sql or "",
-                    tool_results,
+                    cited_tool_results,
                     data_notes=data_notes,
                 )
                 if repaired.get("valid", True)
@@ -464,7 +611,7 @@ def _reasoning_mode(
                 answer,
                 rows,
                 sql or "",
-                tool_results,
+                cited_tool_results,
                 data_notes=data_notes,
             )
             _push("faithfulness_judge", "completed", attempt=2, **retry_verdict)
@@ -472,14 +619,17 @@ def _reasoning_mode(
             verdict = retry_verdict
         if verdict["faithful"]:
             confidence = "high"
-        else:
-            fallback = render_verified_rows(rows)
+        elif rows:
+            fallback = render_validated_rows(rows, truncated=data_truncated)
             answer = fallback["answer"]
             key_numbers = fallback["key_numbers"]
             caveats = list(fallback["caveats"])
             confidence = "high"
-            quality_warnings.append("model prose replaced with verified evidence-only fallback")
+            quality_warnings.append("model prose replaced with validated evidence-only fallback")
             _push("evidence_fallback", "completed", reason=verdict["reason"])
+        else:
+            confidence = "low"
+            quality_warnings.append("analysis ended without row-producing evidence")
     else:
         _push("faithfulness_judge", "skipped", reason="no_evidence")
 
@@ -492,17 +642,39 @@ def _reasoning_mode(
     else:
         resolution = "error"
 
-    _emit("answer_preview", {
-        "answer": answer,
-        "sql": sql,
-        "data": display_rows,
-        "row_count": len(display_rows),
-        "chart": visuals["chart"],
-        "charts": visuals["charts"],
-        "mapIntent": visuals["map_intent"],
-        "resolution": resolution,
-        "key_numbers": key_numbers,
-    })
+    if data_truncated:
+        quality_warnings.append("result set truncated at MAX_RETURN_ROWS")
+
+    # Visuals are a view of the final cited evidence. Build them only after
+    # answer verification/repair so prose, SQL, rows, and chart cannot describe
+    # different stages of the investigation.
+    display_rows = enrich_rows_for_map(q, routing_stub, grounding.get("resolved") or {}, rows)
+    visuals = build_visuals(q, routing_stub, grounding.get("resolved") or {}, display_rows)
+    _push(
+        "visual_recommender",
+        "completed",
+        chart=bool(visuals["chart"]),
+        map=(
+            visuals["map_intent"].get("mapType") if visuals["map_intent"].get("enabled") else "none"
+        ),
+        evidence_id=agent.get("primary_evidence_id"),
+    )
+
+    _emit(
+        "answer_preview",
+        {
+            "answer": answer,
+            "sql": sql,
+            "data": display_rows,
+            "row_count": len(display_rows),
+            "data_truncated": data_truncated,
+            "chart": visuals["chart"],
+            "charts": visuals["charts"],
+            "mapIntent": visuals["map_intent"],
+            "resolution": resolution,
+            "key_numbers": key_numbers,
+        },
+    )
     envelope = _envelope(
         question=question,
         answer=answer,
@@ -512,7 +684,7 @@ def _reasoning_mode(
         sql=sql,
         rows=display_rows,
         tables=tables or analysis.tables,
-        geography_level=dataset.geography if dataset else None,
+        geography_level=analysis.geography_level,
         year=analysis.effective_period,
         focus_state=None,
         metric=(analysis.metric_columns[0] if analysis.metric_columns else None),
@@ -524,18 +696,20 @@ def _reasoning_mode(
         map_intent=visuals["map_intent"],
         intent="ANALYTICAL",
         analysis_contract=analysis.model_dump(),
-        key_number_row_sets=_reasoning_evidence_row_sets(display_rows, tool_results),
+        data_truncated=data_truncated,
+        key_number_row_sets=_reasoning_evidence_row_sets(display_rows, cited_tool_results),
         user_id=user_id,
         request_id=request_id,
-        context_memory=_build_context_memory(
-            q, analysis, grounding.get("resolved") or {}
-        ),
+        context_memory=_build_context_memory(q, analysis, grounding.get("resolved") or {}),
     )
     # Surface the full agent tool trail so the faithfulness judge and the
     # reasoning evaluator can see peer_stats / multi-SQL evidence, not just
     # the most recent run_sql rows.
     envelope["resultPackage"]["tool_results"] = agent.get("tool_results", [])
     envelope["resultPackage"]["sql_history"] = agent.get("sql_history", [])
+    envelope["resultPackage"]["primary_evidence_id"] = agent.get("primary_evidence_id")
+    envelope["resultPackage"]["supporting_evidence_ids"] = agent.get("supporting_evidence_ids", [])
+    envelope["resultPackage"]["cited_tool_results"] = cited_tool_results
     if envelope.get("resolution") == "answered":
         sf = suggest_followups(question, answer, envelope.get("contract"))
         envelope["suggested_followups"] = sf
@@ -560,6 +734,7 @@ def answer_question(
         entry = _stage(name, status, **data)
         stages.append(entry)
         _emit("stage", entry)
+
     if mode not in {"normal", "reasoning"}:
         mode = "normal"
     stages: list[dict[str, Any]] = []
@@ -569,8 +744,24 @@ def answer_question(
         _push("contextualize", "completed", standalone=q)
 
     ir = classify_and_route(q, history)
-    intent = {k: ir[k] for k in ("intent", "requires_sql", "needs_clarification", "clarification_question", "reason")}
+    intent = {
+        k: ir[k]
+        for k in (
+            "intent",
+            "requires_sql",
+            "needs_clarification",
+            "clarification_question",
+            "reason",
+        )
+    }
     _push("stage1_intent", "completed", **intent)
+    if ir.get("route_verification"):
+        verification = dict(ir["route_verification"])
+        _push(
+            "route_verification",
+            "completed" if verification.get("available", True) else "unavailable",
+            **verification,
+        )
 
     if ir.get("service_unavailable"):
         _push("analysis_service", "unavailable")
@@ -590,7 +781,7 @@ def answer_question(
         )
 
     if intent["intent"] != "ANALYTICAL":
-        meta = meta_answer.respond(q, intent["intent"], intent)
+        meta = meta_answer.respond(q, intent["intent"], ir)
         _push("non_analytical_responder", "completed", intent=intent["intent"])
         env = _envelope(
             question=question,
@@ -608,11 +799,31 @@ def answer_question(
             env["suggested_followups"] = clarification_chips
         return env
 
-    routing = {k: ir[k] for k in (
-        "tables", "columns", "geography_level", "year_strategy", "join_plan",
-        "needs_clarification", "clarification", "confidence", "reason",
-        "operation", "flow_direction", "sort_direction", "top_k", "assumptions",
-    )}
+    routing = {
+        k: ir[k]
+        for k in (
+            "tables",
+            "columns",
+            "geography_level",
+            "year_strategy",
+            "join_plan",
+            "needs_clarification",
+            "clarification",
+            "confidence",
+            "reason",
+            "operation",
+            "flow_direction",
+            "sort_direction",
+            "top_k",
+            "assumptions",
+        )
+    }
+    # Compatibility for older in-process callers and recorded fixtures. The
+    # production planner always supplies this typed list.
+    routing["filter_columns"] = list(ir.get("filter_columns") or [])
+    # Compatibility for tests/older integrations; production planner responses
+    # always include the typed semantic plan.
+    routing["semantic_plan"] = ir.get("semantic_plan")
     _push("stage2_routing", "completed", **routing)
     if not routing["tables"] or routing["needs_clarification"]:
         ask = routing["clarification"] or "Which dataset and measure should I use?"
@@ -643,16 +854,36 @@ def answer_question(
         return env
 
     analysis = build_analysis_contract(q, routing)
+    # Keep execution, validation, visuals, and the response envelope on the
+    # same normalized flow semantics selected by the typed contract.
+    routing.update(
+        {
+            "columns": list(analysis.metric_columns) or list(routing.get("columns") or []),
+            "geography_level": analysis.geography_level,
+            "operation": analysis.operation,
+            "flow_direction": analysis.flow_direction,
+            "sort_direction": analysis.sort_direction,
+            "top_k": analysis.top_k,
+            "result_unit": analysis.result_unit,
+            "formula": analysis.formula.model_dump(),
+            "effective_period": analysis.effective_period,
+            "requested_period": analysis.requested_period,
+            "requested_years": list(analysis.requested_years),
+        }
+    )
     analysis_data = analysis.model_dump()
     _push("analysis_contract", "completed", **analysis_data)
 
     grounding = build_grounding(
         q,
-        routing["tables"],
+        analysis.tables,
         year_strategy=routing["year_strategy"],
         join_plan=routing["join_plan"],
+        filter_columns=routing["filter_columns"],
+        output_dimensions=analysis.output_dimensions,
+        flow_direction=analysis.flow_direction,
     )
-    _push("stage3_retrieval", "completed", tables=routing["tables"], resolved=grounding["resolved"])
+    _push("stage3_retrieval", "completed", tables=analysis.tables, resolved=grounding["resolved"])
     context_memory = _build_context_memory(q, analysis, grounding["resolved"])
 
     if mode == "reasoning":
@@ -669,69 +900,21 @@ def answer_question(
             emit=_emit,
         )
 
-    # Verified Query Repository. Two modes, chosen by the matcher:
-    #   exact    — the question means the same thing as the blessed one
-    #              (same direction/numbers/geography): execute the blessed
-    #              SQL verbatim. Zero hallucination surface, VERIFIED badge.
-    #   exemplar — lexically similar but salient tokens differ (bottom vs
-    #              top, 2019 vs 2023, outflow vs inflow): the LLM still
-    #              writes the SQL, with the blessed pair injected as a
-    #              verified reference to adapt. The LLM decides; the
-    #              repository only informs. Executing fuzzy matches verbatim
-    #              served opposite-direction answers in adversarial testing.
-    gen: dict[str, Any]
-    verified_match: dict[str, Any] | None = None
-    exemplar: dict[str, Any] | None = None
-    try:
-        verified_match = match_verified_query(q)
-    except Exception:
-        verified_match = None
-    if verified_match and verified_match.get("_mode") != "exact":
-        exemplar = verified_match
-        _push("verified_query_match", "exemplar",
-              id=exemplar.get("id"), score=round(exemplar.get("_score", 0.0), 3))
-        verified_match = None
-    if verified_match:
-        _push("verified_query_match", "matched",
-              id=verified_match.get("id"), score=round(verified_match.get("_score", 0.0), 3))
-        try:
-            blessed_sql = str(verified_match["sql"]).strip()
-            blessed_sql = stabilize_verified_ranking_sql(blessed_sql, analysis)
-            validate_sql(blessed_sql)
-            validate_semantic_sql(blessed_sql, q, analysis, grounding["resolved"])
-            fetched_blessed_rows = execute_select(
-                blessed_sql,
-                max_rows=int(os.getenv("MAX_RETURN_ROWS", "250")) + 1,
-            )
-            max_rows = int(os.getenv("MAX_RETURN_ROWS", "250"))
-            blessed_rows = fetched_blessed_rows[:max_rows]
-            gen = {
-                "sql": blessed_sql,
-                "rows": blessed_rows,
-                "error": None if blessed_rows else "empty_result",
-                "attempts": [],
-                "truncated": len(fetched_blessed_rows) > max_rows,
-            }
-            _push("stage4_sql_generation", "skipped",
-                  reason="verified_query_used", row_count=len(blessed_rows))
-        except (SqlValidationError, Exception) as exc:
-            # Blessed SQL failed — fall back to LLM path with a quality warning.
-            _push("verified_query_match", "fallback", reason=str(exc)[:120])
-            exemplar = verified_match
-            verified_match = None
-
-    if verified_match is None:
-        gen = generate_and_execute(
-            q, grounding["text"], history, routing["tables"], exemplar=exemplar,
-            contract=analysis, resolved=grounding["resolved"],
-        )
-        _push(
-            "stage4_sql_generation",
-            "completed" if gen["sql"] else "failed",
-            attempts=len(gen["attempts"]),
-            error=gen["error"],
-            row_count=len(gen["rows"]),
-        )
+    gen = generate_and_execute(
+        q,
+        grounding["text"],
+        history,
+        analysis.tables,
+        contract=analysis,
+        resolved=grounding["resolved"],
+    )
+    _push(
+        "stage4_sql_generation",
+        "completed" if gen["sql"] else "failed",
+        attempts=len(gen["attempts"]),
+        error=gen["error"],
+        row_count=len(gen["rows"]),
+    )
 
     if not gen["sql"] or (gen["error"] and gen["error"] != "empty_result" and not gen["rows"]):
         provider_unavailable = str(gen.get("error") or "").startswith("LLM error:")
@@ -757,13 +940,17 @@ def answer_question(
         )
 
     # Peer / comparative context: cheap side-queries to give a single-state
-    # answer real meaning (rank, vs national median, YoY). Never load-bearing
+    # answer real meaning (rank, vs peer-geography median, YoY). Never load-bearing
     # — failures silently produce None. Passed as a dedicated prompt section.
     peer: dict[str, Any] | None = None
     peer_text = ""
     if gen["rows"] and routing["tables"]:
         resolved0 = grounding["resolved"].get(routing["tables"][0], {})
-        fstate_val = resolved0.get("state", {}).get("value") if isinstance(resolved0.get("state"), dict) else None
+        fstate_val = (
+            resolved0.get("state", {}).get("value")
+            if isinstance(resolved0.get("state"), dict)
+            else None
+        )
         peer = compute_peer_context(
             table=routing["tables"][0],
             focus_state=fstate_val,
@@ -773,31 +960,25 @@ def answer_question(
         )
         peer_text = render_peer_context(peer) if peer else ""
         if peer_text:
-            _push("peer_context", "completed", **{k: v for k, v in (peer or {}).items() if k in ("rank", "total_states", "yoy_change_pct")})
+            _push(
+                "peer_context",
+                "completed",
+                **{
+                    k: v
+                    for k, v in (peer or {}).items()
+                    if k in ("rank", "total_states", "yoy_change_pct")
+                },
+            )
 
-    direct_verified_render = bool(
-        verified_match
-        and verified_match.get("direct_render") is True
-        and len(gen["rows"]) == 1
-        and not gen.get("truncated")
+    final = write_answer(
+        q,
+        gen["sql"],
+        gen["rows"],
+        grounding["text"],
+        peer_text,
+        truncated=bool(gen.get("truncated")),
     )
-    if direct_verified_render:
-        final = render_verified_rows(gen["rows"], fallback=False)
-        verified_caveats = verified_match.get("caveats") if verified_match else None
-        if isinstance(verified_caveats, list) and verified_caveats:
-            final["caveats"] = [str(item) for item in verified_caveats]
-        _push(
-            "stage4_answer_generation",
-            "skipped",
-            reason="analyst_verified_direct_render",
-            confidence=final["confidence"],
-        )
-    else:
-        final = write_answer(
-            q, gen["sql"], gen["rows"], grounding["text"], peer_text,
-            truncated=bool(gen.get("truncated")),
-        )
-        _push("stage4_answer_generation", "completed", confidence=final["confidence"])
+    _push("stage4_answer_generation", "completed", confidence=final["confidence"])
     if gen["rows"] and not final.get("valid", True):
         retry = write_answer(
             q,
@@ -821,33 +1002,30 @@ def answer_question(
             final["answer"] = (final["answer"] or "").rstrip() + f"\n\n*{hint}*"
 
     resolution = "answered" if gen["rows"] else "no_data"
-    primary_table = routing["tables"][0]
-    dataset = get_dataset(primary_table)
-    resolved = grounding["resolved"].get(primary_table, {})
-    focus_state = resolved.get("state", {}).get("value") if isinstance(resolved.get("state"), dict) else None
+    focus_state = context_memory.get("focus_state")
 
+    routing["data_truncated"] = bool(gen.get("truncated"))
     display_rows = enrich_rows_for_map(q, routing, grounding["resolved"], gen["rows"])
+    context_memory = _add_result_context(context_memory, display_rows, routing["tables"])
     visuals = build_visuals(q, routing, grounding["resolved"], display_rows)
     _push(
-            "visual_recommender",
-            "completed",
-            chart=bool(visuals["chart"]),
-            map=visuals["map_intent"].get("mapType") if visuals["map_intent"].get("enabled") else "none",
-        )
+        "visual_recommender",
+        "completed",
+        chart=bool(visuals["chart"]),
+        map=visuals["map_intent"].get("mapType")
+        if visuals["map_intent"].get("enabled")
+        else "none",
+    )
 
     caveats = list(final["caveats"])
     confidence = "low"
     quality_warnings: list[str] = []
-    if direct_verified_render:
-        confidence = "high"
-        _push(
-            "faithfulness_judge",
-            "skipped",
-            reason="analyst_verified_query_with_mechanical_row_rendering",
-        )
-    elif gen["rows"] and final.get("valid", True):
+    if gen["rows"] and final.get("valid", True):
         verdict = judge_faithfulness(
-            q, final["answer"], gen["rows"], gen["sql"],
+            q,
+            final["answer"],
+            gen["rows"],
+            gen["sql"],
             peer_context=peer_text,
             data_notes=critical_warnings_for(routing["tables"]),
         )
@@ -856,7 +1034,11 @@ def answer_question(
 
         if not verdict["faithful"] and verdict.get("available", True):
             repaired = write_answer(
-                q, gen["sql"], gen["rows"], grounding["text"], peer_text,
+                q,
+                gen["sql"],
+                gen["rows"],
+                grounding["text"],
+                peer_text,
                 previous_answer=final["answer"],
                 verification_issue=verdict["reason"],
                 truncated=bool(gen.get("truncated")),
@@ -864,7 +1046,10 @@ def answer_question(
             _push("answer_repair", "completed", reason=verdict["reason"])
             repaired_verdict = (
                 judge_faithfulness(
-                    q, repaired["answer"], gen["rows"], gen["sql"],
+                    q,
+                    repaired["answer"],
+                    gen["rows"],
+                    gen["sql"],
                     peer_context=peer_text,
                     data_notes=critical_warnings_for(routing["tables"]),
                 )
@@ -885,7 +1070,10 @@ def answer_question(
             # One retry handles a transient verifier outage, but the answer is
             # never accepted merely because the safety service is unavailable.
             retry_verdict = judge_faithfulness(
-                q, final["answer"], gen["rows"], gen["sql"],
+                q,
+                final["answer"],
+                gen["rows"],
+                gen["sql"],
                 peer_context=peer_text,
                 data_notes=critical_warnings_for(routing["tables"]),
             )
@@ -896,21 +1084,19 @@ def answer_question(
         if verdict["faithful"]:
             confidence = "high" if routing.get("confidence") == "high" else "medium"
         else:
-            final = render_verified_rows(
-                gen["rows"], truncated=bool(gen.get("truncated"))
-            )
+            final = render_validated_rows(gen["rows"], truncated=bool(gen.get("truncated")))
             caveats = list(final["caveats"])
             confidence = "high"
-            quality_warnings.append("model prose replaced with verified evidence-only fallback")
+            quality_warnings.append("model prose replaced with validated evidence-only fallback")
             _push("evidence_fallback", "completed", reason=verdict["reason"])
     elif gen["rows"]:
         _push("faithfulness_judge", "skipped", reason="answer_schema_invalid")
-        final = render_verified_rows(
-            gen["rows"], truncated=bool(gen.get("truncated"))
-        )
+        final = render_validated_rows(gen["rows"], truncated=bool(gen.get("truncated")))
         caveats = list(final["caveats"])
         confidence = "high"
-        quality_warnings.append("invalid model response replaced with verified evidence-only fallback")
+        quality_warnings.append(
+            "invalid model response replaced with validated evidence-only fallback"
+        )
         _push("evidence_fallback", "completed", reason="answer_schema_invalid")
     else:
         _push("faithfulness_judge", "skipped")
@@ -923,9 +1109,7 @@ def answer_question(
         routing["columns"],
     )
     if period_issues:
-        final = render_verified_rows(
-            gen["rows"], truncated=bool(gen.get("truncated"))
-        )
+        final = render_validated_rows(gen["rows"], truncated=bool(gen.get("truncated")))
         caveats = list(final["caveats"]) + canonical_period_notes(routing["tables"])
         confidence = "high"
         quality_warnings.extend(f"period_claim_guard: {issue}" for issue in period_issues)
@@ -946,17 +1130,20 @@ def answer_question(
     # The UI sees prose only after the blocking verification gate.  Previously
     # answer_preview exposed a known-bad draft and the later warning could not
     # retract it.
-    _emit("answer_preview", {
-        "answer": final["answer"],
-        "sql": gen["sql"],
-        "data": display_rows,
-        "row_count": len(display_rows),
-        "chart": visuals["chart"],
-        "charts": visuals["charts"],
-        "mapIntent": visuals["map_intent"],
-        "resolution": resolution,
-        "key_numbers": final["key_numbers"],
-    })
+    _emit(
+        "answer_preview",
+        {
+            "answer": final["answer"],
+            "sql": gen["sql"],
+            "data": display_rows,
+            "row_count": len(display_rows),
+            "chart": visuals["chart"],
+            "charts": visuals["charts"],
+            "mapIntent": visuals["map_intent"],
+            "resolution": resolution,
+            "key_numbers": final["key_numbers"],
+        },
+    )
 
     envelope = _envelope(
         question=question,
@@ -967,9 +1154,7 @@ def answer_question(
         sql=gen["sql"],
         rows=display_rows,
         tables=routing["tables"],
-        # Flag verified-query path so the UI can render a "Verified" badge.
-        verified_match=({"id": verified_match["id"], "score": verified_match.get("_score")} if verified_match else None),
-        geography_level=dataset.geography if dataset else routing["geography_level"],
+        geography_level=analysis.geography_level,
         year=analysis.effective_period,
         focus_state=focus_state,
         metric=(routing["columns"][0] if routing["columns"] else None),

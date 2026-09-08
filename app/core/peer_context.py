@@ -1,7 +1,7 @@
 """Peer / comparative context for single-entity answers.
 
 When SQL returns one row for one state, the answer is almost always more useful
-if it can say "MD ranks 8th of 51" or "above the national median of $X" or
+if it can say "MD ranks 8th of 51" or "above the peer-geography median" or
 "up 4% from 2022" — but the LLM only knows what's in the rows. This module
 runs 3 cheap side-queries (rank, median, prior-year) and returns a small JSON
 block the answer prompt can use as `PEER CONTEXT`.
@@ -36,8 +36,11 @@ def _pick_measure(
     column present in BOTH the row and the dataset schema."""
     real = {c for c in (dataset_columns or [])}
     row_numeric = {
-        k for k, v in row.items()
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and k.lower() not in {"year", "state"}
+        k
+        for k, v in row.items()
+        if isinstance(v, (int, float))
+        and not isinstance(v, bool)
+        and k.lower() not in {"year", "state"}
     }
     # Routing's metric column is most authoritative if it's real and numeric.
     for c in routing_columns or []:
@@ -177,8 +180,7 @@ def render_peer_context(ctx: dict[str, Any]) -> str:
     focus = ctx.get("focus_state") or "Focus state"
     if ctx.get("rank") and ctx.get("total_states"):
         lines.append(
-            f"- {focus} highest-first rank for {measure}: "
-            f"#{ctx['rank']} of {ctx['total_states']}"
+            f"- {focus} highest-first rank for {measure}: #{ctx['rank']} of {ctx['total_states']}"
         )
     nm = ctx.get("national_median")
     val = ctx.get("value")
@@ -186,7 +188,8 @@ def render_peer_context(ctx: dict[str, Any]) -> str:
         rel = (val - nm) / nm * 100
         direction = "above" if rel > 0 else "below"
         lines.append(
-            f"- {focus} vs national median ({_format_peer_value(nm)}): "
+            f"- {focus} vs median across represented state-level geographies "
+            f"({_format_peer_value(nm)}): "
             f"{abs(rel):.1f}% {direction}"
         )
     if ctx.get("yoy_change_pct") is not None and ctx.get("prior_year"):
