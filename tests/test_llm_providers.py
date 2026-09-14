@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 
+import pytest
+
 from app.core import reasoning
 from app.llm import client
 
@@ -53,6 +55,20 @@ def test_auto_mode_preserves_legacy_provider_precedence(monkeypatch) -> None:
     assert client.provider_config().name == "deepseek"
     monkeypatch.delenv("DEEPSEEK_API_KEY")
     assert client.provider_config().name == "gemini"
+
+
+def test_provider_rejects_unsafe_base_urls(monkeypatch) -> None:
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setenv("LLM_BASE_URL", "file:///tmp/provider-response.json")
+    with pytest.raises(client.LLMError, match=r"absolute HTTP\(S\) URL"):
+        client.provider_config()
+
+    monkeypatch.setenv("LLM_BASE_URL", "http://provider.internal/v1")
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(client.LLMError, match="must use HTTPS"):
+        client.provider_config()
 
 
 def test_deepseek_default_is_explicit_v4_and_legacy_alias_warns(monkeypatch) -> None:

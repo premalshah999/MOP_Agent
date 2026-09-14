@@ -10,7 +10,7 @@ from typing import Any
 import jwt
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.storage.sqlite import connect, row_dict
 
@@ -28,14 +28,21 @@ def _jwt_expiry_seconds() -> int:
 
 
 class RegisterRequest(BaseModel):
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=80)
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=256)
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be blank")
+        return value
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=1)
+    password: str = Field(min_length=1, max_length=256)
 
 
 _PBKDF2_ITERATIONS = 600_000
@@ -138,6 +145,13 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Missing bearer token")
     try:
         payload = jwt.decode(credentials.credentials, _jwt_secret(), algorithms=["HS256"])
-    except jwt.PyJWTError as exc:
+        user_id = int(payload["sub"])
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=401, detail="Invalid bearer token") from exc
-    return {"id": int(payload["sub"]), "email": payload["email"], "name": payload["name"]}
+    with connect() as conn:
+        user = row_dict(
+            conn.execute("SELECT id, email, name FROM users WHERE id = ?", (user_id,)).fetchone()
+        )
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid bearer token")
+    return user

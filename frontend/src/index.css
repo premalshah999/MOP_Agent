@@ -148,6 +148,167 @@ input:focus-visible {
 }
 .vega-embed:hover summary { opacity: 0.75 !important; }
 
+/* ── Evidence visualizations ───────────────────────────────────── */
+.visualization-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 14px 36px rgba(15, 23, 42, 0.055);
+}
+
+.visualization-card.fixed {
+  background: #fbfcfe;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.24);
+}
+
+.visualization-accent {
+  height: 3px;
+  background: linear-gradient(90deg, var(--brand-red) 0 19%, var(--brand-gold) 19% 27%, #24364f 27% 100%);
+}
+
+.visualization-canvas {
+  min-height: 248px;
+  overflow: hidden;
+  border: 1px solid #edf1f5;
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 0 0, rgba(224, 58, 62, 0.025), transparent 28%),
+    linear-gradient(180deg, #ffffff, #fcfdfe);
+  padding: 18px 14px 10px;
+}
+
+.visualization-canvas .vega-embed,
+.visualization-canvas .vega-embed > div {
+  width: 100%;
+}
+
+.visualization-canvas svg {
+  display: block;
+  max-width: 100%;
+}
+
+.visualization-action,
+.visualization-icon-action {
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--muted);
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.visualization-action {
+  display: inline-flex;
+  gap: 0.3rem;
+  min-height: 28px;
+  padding: 0 0.45rem;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.visualization-icon-action {
+  display: inline-flex;
+  height: 28px;
+  width: 28px;
+}
+
+.visualization-action:hover,
+.visualization-icon-action:hover {
+  background: var(--surface-2);
+  color: var(--brand-red-dark);
+}
+
+.visualization-action:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.map-preview-card {
+  position: relative;
+  display: flex;
+  width: 100%;
+  margin-top: 0.75rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.map-preview-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(224, 58, 62, 0.42);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.075);
+}
+
+.map-preview-graphic {
+  position: relative;
+  width: 108px;
+  min-height: 108px;
+  flex: 0 0 108px;
+  overflow: hidden;
+  border-right: 1px solid var(--line-soft);
+  background: #f5f7fa;
+}
+
+.map-preview-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.7;
+  background-image:
+    linear-gradient(rgba(36, 54, 79, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(36, 54, 79, 0.07) 1px, transparent 1px);
+  background-size: 18px 18px;
+  transform: rotate(-8deg) scale(1.2);
+}
+
+.map-preview-pin {
+  position: absolute;
+  width: 24px;
+  height: 18px;
+  border: 2px solid white;
+  border-radius: 45% 55% 52% 48%;
+  background: var(--brand-red);
+  box-shadow: 0 3px 9px rgba(143, 31, 40, 0.22);
+}
+
+.map-preview-pin-one { left: 24px; top: 29px; transform: rotate(-14deg); }
+.map-preview-pin-two { right: 20px; top: 49px; width: 31px; height: 23px; transform: rotate(12deg); background: #f4b9ba; }
+
+.map-preview-ramp {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  display: flex;
+  overflow: hidden;
+  border: 2px solid white;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.13);
+}
+
+.map-preview-ramp span { width: 12px; height: 7px; }
+
+.map-preview-icon {
+  display: inline-flex;
+  height: 36px;
+  width: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--brand-red);
+}
+
+@media (max-width: 520px) {
+  .map-preview-graphic { width: 76px; flex-basis: 76px; }
+  .map-preview-pin-one { left: 12px; }
+  .map-preview-pin-two { right: 9px; }
+  .visualization-canvas { padding-inline: 7px; }
+}
+
 .tabular-nums { font-variant-numeric: tabular-nums; }
 
 .elevate {
@@ -157,8 +318,8 @@ input:focus-visible {
 /* MapLibre chrome */
 .maplibregl-ctrl-group {
   border: 1px solid var(--line) !important;
-  border-radius: 0 !important;
-  box-shadow: none !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.07) !important;
   overflow: hidden;
 }
 .maplibregl-ctrl-attrib {

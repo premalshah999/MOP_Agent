@@ -20,6 +20,7 @@ from app.api.threads import (  # noqa: E402
     create_thread,
     format_message,
     list_messages,
+    list_recent_messages,
 )
 from app.storage.sqlite import init_storage  # noqa: E402
 
@@ -46,6 +47,24 @@ class StorageTests(unittest.TestCase):
         formatted = format_message(messages[0])
         self.assertEqual(formatted["resolution"], "answered")
         self.assertEqual(formatted["rowCount"], 1)
+
+    def test_recent_messages_limits_in_sql_and_preserves_order(self) -> None:
+        user = register_user(
+            RegisterRequest(name="Alice", email="recent@example.com", password="secret123")
+        )
+        thread = create_thread(user["id"], "contract_county", "Recent")
+        for index in range(8):
+            create_message(thread["id"], "user", f"message-{index}")
+
+        recent = list_recent_messages(thread["id"], limit=3)
+        self.assertEqual(
+            [message["content"] for message in recent],
+            [
+                "message-5",
+                "message-6",
+                "message-7",
+            ],
+        )
 
 
 if __name__ == "__main__":

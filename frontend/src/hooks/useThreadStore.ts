@@ -92,6 +92,9 @@ export function useThreadStore(defaultDatasetId: string) {
         );
       })
       .catch((err) => {
+        // A transient failure must not permanently mark this thread as loaded;
+        // switching away and back should retry the request.
+        loadedThreadsRef.current.delete(activeThreadId);
         console.error('[MOP] Failed to load messages:', err);
       });
   }, [activeThreadId]);
@@ -115,14 +118,15 @@ export function useThreadStore(defaultDatasetId: string) {
   );
 
   const updateThreadTitle = useCallback(
-    (threadId: string, title: string) => {
-      setThreads((prev) =>
-        prev.map((t) =>
-          t.id === threadId ? { ...t, title } : t,
-        ),
-      );
-      // Fire and forget server update
-      apiUpdateThread(threadId, { title }).catch(() => {});
+    async (threadId: string, title: string) => {
+      try {
+        const updated = await apiUpdateThread(threadId, { title });
+        setThreads((prev) =>
+          prev.map((t) => (t.id === threadId ? { ...t, title: updated.title } : t)),
+        );
+      } catch (err) {
+        console.error('[MOP] Failed to rename thread:', err);
+      }
     },
     [],
   );
@@ -156,36 +160,43 @@ export function useThreadStore(defaultDatasetId: string) {
   );
 
   const deleteThread = useCallback(
-    (threadId: string) => {
-      // Optimistic delete
-      setThreads((prev) => {
-        const next = prev.filter((t) => t.id !== threadId);
-        if (threadId === activeThreadId && next.length > 0) {
-          setActiveThreadId(next[0].id);
-          setSelectedDatasetId(next[0].datasetId);
-        } else if (next.length === 0) {
-          setActiveThreadId(null);
-        }
-        return next;
-      });
-      loadedThreadsRef.current.delete(threadId);
-      apiDeleteThread(threadId).catch((err) => {
+    async (threadId: string) => {
+      try {
+        await apiDeleteThread(threadId);
+        setThreads((prev) => {
+          const next = prev.filter((t) => t.id !== threadId);
+          if (threadId === activeThreadId && next.length > 0) {
+            setActiveThreadId(next[0].id);
+            setSelectedDatasetId(next[0].datasetId);
+          } else if (next.length === 0) {
+            setActiveThreadId(null);
+          }
+          return next;
+        });
+        loadedThreadsRef.current.delete(threadId);
+      } catch (err) {
         console.error('[MOP] Failed to delete thread:', err);
-      });
+      }
     },
     [activeThreadId],
   );
 
   const selectDataset = useCallback(
     async (datasetId: string) => {
-      setSelectedDatasetId(datasetId);
       if (!activeThread || activeThread.messages.length === 0) {
         // Update the current empty thread's dataset
         if (activeThread) {
-          setThreads((prev) =>
-            prev.map((t) => (t.id === activeThread.id ? { ...t, datasetId } : t)),
-          );
-          apiUpdateThread(activeThread.id, { dataset_id: datasetId }).catch(() => {});
+          try {
+            await apiUpdateThread(activeThread.id, { dataset_id: datasetId });
+            setThreads((prev) =>
+              prev.map((t) => (t.id === activeThread.id ? { ...t, datasetId } : t)),
+            );
+            setSelectedDatasetId(datasetId);
+          } catch (err) {
+            console.error('[MOP] Failed to change dataset:', err);
+          }
+        } else {
+          setSelectedDatasetId(datasetId);
         }
         return;
       }
@@ -196,13 +207,11 @@ export function useThreadStore(defaultDatasetId: string) {
   );
 
   const clearAll = useCallback(
-    () => {
+    async () => {
+      await apiClearAllThreads();
       setThreads([]);
       setActiveThreadId(null);
       loadedThreadsRef.current.clear();
-      apiClearAllThreads().catch((err) => {
-        console.error('[MOP] Failed to clear threads:', err);
-      });
     },
     [],
   );

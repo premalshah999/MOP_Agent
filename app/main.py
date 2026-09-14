@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
-from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -41,6 +42,7 @@ from app.api.threads import (
     format_thread,
     get_thread,
     list_messages,
+    list_recent_messages,
     list_threads,
     lookup_share,
     update_thread,
@@ -52,7 +54,7 @@ from app.paths import DATA_DIR, FRONTEND_DIST, MANIFEST_PATH
 from app.semantic.registry import load_registry
 from app.storage.sqlite import init_storage
 
-load_dotenv()
+logger = logging.getLogger("mop_agent.http")
 
 # Sentry — env-gated. When SENTRY_DSN is unset (dev / no observability stack)
 # this is a complete no-op; nothing breaks if sentry-sdk isn't available.
@@ -71,21 +73,51 @@ if _SENTRY_DSN:
         pass
 
 
+class HistoryMessage(BaseModel):
+    """Small, prose-only compatibility envelope for older API clients.
+
+    Authenticated browser sessions use server-side thread history. Keeping the
+    client fallback narrow prevents callers from posting result tables or
+    arbitrary nested objects back into the model context.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=20_000)
+
+    @field_validator("content")
+    @classmethod
+    def content_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("history content must not be blank")
+        return value
+
+
 class AskRequest(BaseModel):
-    question: str
-    thread_id: str | None = None
-    history: list[dict[str, Any]] = Field(default_factory=list)
-    mode: str = "normal"  # "normal" (default, fast) | "reasoning" (agent loop)
+    question: str = Field(min_length=1, max_length=8_000)
+    thread_id: str | None = Field(default=None, max_length=128)
+    history: list[HistoryMessage] = Field(default_factory=list, max_length=24)
+    mode: Literal["normal", "reasoning"] = "normal"
+
+    @field_validator("question")
+    @classmethod
+    def question_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question must not be blank")
+        return value
 
 
 class CreateThreadRequest(BaseModel):
-    dataset_id: str = "contract_county"
-    title: str = "New thread"
+    dataset_id: str = Field(
+        default="contract_county", min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+    title: str = Field(default="New thread", min_length=1, max_length=200)
 
 
 class UpdateThreadRequest(BaseModel):
-    title: str | None = None
-    dataset_id: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    dataset_id: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"
+    )
 
 
 def _frontend_built() -> bool:
@@ -118,6 +150,28 @@ def _validate_production_config() -> None:
         problems.append("ALLOWED_ORIGINS must name the deployed origin")
     if not hosts or "your-domain.example" in hosts or hosts == "*":
         problems.append("TRUSTED_HOSTS must name the deployed host")
+    if os.getenv("DEBUG_ERRORS", "").strip().casefold() in {"1", "true", "yes"}:
+        problems.append("DEBUG_ERRORS must be disabled in production")
+
+    numeric_settings = {
+        "JWT_EXPIRY_SECONDS": (300, 31_536_000),
+        "LLM_TIMEOUT": (1, 300),
+        "LLM_RETRIES": (0, 5),
+        "QUERY_TIMEOUT_SECONDS": (1, 300),
+        "MAX_RETURN_ROWS": (1, 5_000),
+        "WEB_CONCURRENCY": (1, 32),
+    }
+    for name, (minimum, maximum) in numeric_settings.items():
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            problems.append(f"{name} must be an integer")
+            continue
+        if not minimum <= value <= maximum:
+            problems.append(f"{name} must be between {minimum} and {maximum}")
     if problems:
         raise RuntimeError("Invalid production configuration: " + "; ".join(problems))
 
@@ -208,6 +262,15 @@ def _rate_limit_key(request: Request) -> str:
     return f"ip:{_client_ip(request)}"
 
 
+def _effective_history(
+    body: AskRequest, stored_history: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Prefer authoritative server history and retain a legacy-client fallback."""
+    if stored_history:
+        return stored_history
+    return [message.model_dump() for message in body.history]
+
+
 limiter = Limiter(key_func=_rate_limit_key)
 
 app = FastAPI(title="MOP Controlled Analytics Assistant", lifespan=lifespan)
@@ -250,12 +313,29 @@ app.add_middleware(
 
 @app.middleware("http")
 async def request_context(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID", uuid4().hex)
+    supplied_request_id = request.headers.get("X-Request-ID", "").strip()
+    request_id = (
+        supplied_request_id
+        if supplied_request_id
+        and len(supplied_request_id) <= 128
+        and re.fullmatch(r"[A-Za-z0-9._:-]+", supplied_request_id)
+        else uuid4().hex
+    )
     request.state.request_id = request_id
     started = time.perf_counter()
     try:
         response = await call_next(request)
     except Exception as exc:
+        logger.exception(
+            "Unhandled request error request_id=%s path=%s", request_id, request.url.path
+        )
+        if _SENTRY_DSN:
+            try:
+                import sentry_sdk
+
+                sentry_sdk.capture_exception(exc)
+            except Exception:
+                logger.debug("Unable to report exception to Sentry", exc_info=True)
         debug_errors = os.getenv("DEBUG_ERRORS", "").lower() in {"1", "true", "yes"}
         detail = str(exc) if debug_errors else "Unexpected server error."
         response = _json(
@@ -268,6 +348,15 @@ async def request_context(request: Request, call_next):
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
+        "form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' "
+        "https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:",
+    )
     # HSTS only meaningful when served over HTTPS, but harmless to send anyway
     # — browsers ignore it on HTTP. Switch max-age higher (e.g. 63072000) once
     # TLS is in place and you've verified no HTTP regressions.
@@ -275,6 +364,15 @@ async def request_context(request: Request, call_next):
     response.headers.setdefault(
         "X-Response-Time-Ms", str(int((time.perf_counter() - started) * 1000))
     )
+    path = request.url.path
+    if path.startswith("/api/") or path.startswith("/health"):
+        response.headers["Cache-Control"] = "no-store"
+    elif path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path.startswith("/geo/"):
+        response.headers["Cache-Control"] = "public, max-age=86400"
+    elif response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 
@@ -377,7 +475,7 @@ def me(request: Request, user: dict[str, Any] = Depends(get_current_user)):
 
 
 class UpdateProfileRequest(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=80)
 
 
 @app.patch("/api/auth/me")
@@ -400,14 +498,18 @@ def admin_usage(request: Request, user: dict[str, Any] = Depends(get_current_use
 
 @app.get("/api/admin/questions")
 def admin_questions(
-    request: Request, user: dict[str, Any] = Depends(get_current_user), limit: int = 50
+    request: Request,
+    user: dict[str, Any] = Depends(get_current_user),
+    limit: int = Query(default=50, ge=1, le=200),
 ):
     return _json(200, {"items": recent_questions(user, limit=limit)}, request.state.request_id)
 
 
 @app.get("/api/admin/feedback")
 def admin_feedback(
-    request: Request, user: dict[str, Any] = Depends(get_current_user), limit: int = 50
+    request: Request,
+    user: dict[str, Any] = Depends(get_current_user),
+    limit: int = Query(default=50, ge=1, le=200),
 ):
     return _json(200, {"items": recent_feedback(user, limit=limit)}, request.state.request_id)
 
@@ -535,7 +637,7 @@ def ask_stream(
         title = body.question[:60] + ("..." if len(body.question) > 60 else "")
         update_thread(thread["id"], user["id"], title=title)
     stored_history: list[dict[str, Any]] = []
-    for message in list_messages(thread["id"]):
+    for message in list_recent_messages(thread["id"], limit=12):
         if message["role"] not in {"user", "assistant"}:
             continue
         formatted = format_message(message)
@@ -563,7 +665,7 @@ def ask_stream(
         try:
             result = answer_question(
                 body.question,
-                body.history or stored_history,
+                _effective_history(body, stored_history),
                 user_id=user["id"],
                 request_id=request.state.request_id,
                 mode=body.mode,
@@ -600,7 +702,24 @@ def ask_stream(
                 }
             )
         except Exception as exc:  # surface any pipeline failure as an SSE error
-            final_error.append(str(exc))
+            logger.exception(
+                "Streaming analysis failed request_id=%s thread_id=%s",
+                request.state.request_id,
+                thread["id"],
+            )
+            if _SENTRY_DSN:
+                try:
+                    import sentry_sdk
+
+                    sentry_sdk.capture_exception(exc)
+                except Exception:
+                    logger.debug("Unable to report stream exception to Sentry", exc_info=True)
+            debug_errors = os.getenv("DEBUG_ERRORS", "").lower() in {"1", "true", "yes"}
+            final_error.append(
+                str(exc)
+                if debug_errors
+                else f"Analysis failed unexpectedly. Please retry. Reference: {request.state.request_id}"
+            )
         finally:
             events.put((SENTINEL, None))  # type: ignore[arg-type]
 
@@ -645,7 +764,7 @@ def ask(body: AskRequest, request: Request, user: dict[str, Any] = Depends(get_c
         title = body.question[:60] + ("..." if len(body.question) > 60 else "")
         update_thread(thread["id"], user["id"], title=title)
     stored_history = []
-    for message in list_messages(thread["id"]):
+    for message in list_recent_messages(thread["id"], limit=12):
         if message["role"] not in {"user", "assistant"}:
             continue
         formatted = format_message(message)
@@ -659,7 +778,7 @@ def ask(body: AskRequest, request: Request, user: dict[str, Any] = Depends(get_c
     user_message = create_message(thread["id"], "user", body.question)
     result = answer_question(
         body.question,
-        body.history or stored_history,
+        _effective_history(body, stored_history),
         user_id=user["id"],
         request_id=request.state.request_id,
         mode=body.mode,
@@ -717,12 +836,12 @@ def api_download_dataset(table_name: str, format: str = "parquet"):
 
 @app.get("/api/values")
 def api_values(
-    dataset: str,
-    level: str,
-    variable: str,
     request: Request,
-    year: str | None = None,
-    state: str | None = None,
+    dataset: str = Query(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"),
+    level: str = Query(min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_-]+$"),
+    variable: str = Query(min_length=1, max_length=200),
+    year: str | None = Query(default=None, max_length=40),
+    state: str | None = Query(default=None, max_length=100),
 ):
     rows = fetch_values(dataset, level, variable, year=year, state=state)
     return _json(200, {"rows": rows, "row_count": len(rows)}, request.state.request_id)

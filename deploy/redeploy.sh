@@ -72,6 +72,18 @@ docker compose up -d --remove-orphans
 for attempt in $(seq 1 45); do
   if curl -fsS "$HEALTH_URL" >/dev/null \
     && curl -fsS "$DEEP_HEALTH_URL" >/dev/null; then
+    # Keep three automatic rollback images. Named/manual rollback tags are
+    # deliberately untouched. Prune only unused build cache older than a week
+    # so repeated releases cannot silently consume the host disk.
+    mapfile -t AUTO_ROLLBACK_TAGS < <(
+      docker image ls mop-agent --format '{{.Tag}}' \
+        | grep -E '^rollback-[0-9]{8}T[0-9]{6}Z$' \
+        | sort -r || true
+    )
+    for old_tag in "${AUTO_ROLLBACK_TAGS[@]:3}"; do
+      docker image rm "mop-agent:${old_tag}" >/dev/null 2>&1 || true
+    done
+    docker builder prune -f --filter 'until=168h' >/dev/null 2>&1 || true
     docker compose ps
     echo "Deployment healthy: $HEALTH_URL and $DEEP_HEALTH_URL"
     exit 0

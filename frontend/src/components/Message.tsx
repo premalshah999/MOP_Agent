@@ -138,7 +138,7 @@ interface MessageProps extends ChatMessage {
   datasetId?: string;
 }
 
-export function Message({ id, role, content, sqlQuery, data, rowCount, chart, charts, evidence, resolution, error, ts, mapIntent, contract, datasetId, onOpenDetail, activeDetailTab, suggestedFollowups, onAskFollowup, keyNumbers, caveats, confidence, glossary }: MessageProps) {
+export function Message({ id, role, content, sqlQuery, data, chart, charts, evidence, resolution, error, mapIntent, contract, datasetId, onOpenDetail, activeDetailTab, suggestedFollowups, onAskFollowup, keyNumbers, caveats, confidence, glossary }: MessageProps) {
   const settings = useSettings();
   const effectiveGlossary = settings.glossaryTooltips ? glossary : undefined;
   const [verdict, setVerdict] = useState<'up' | 'down' | null>(null);
@@ -204,9 +204,6 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
               <Database size={11} /> Data
             </Btn>
           )}
-          {hasMap && (
-            <MapButton onClick={() => setMapOpen(true)} label={effectiveMapIntent?.buttonLabel} />
-          )}
           {dashboard && (
             <a
               href={dashboard.href}
@@ -252,15 +249,14 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
       {hasChartBlocks && (
         <div className="mt-4 space-y-3">
           {chartBlocks.map((block, index) => (
-            <div key={`${block.title}-${index}`} className="space-y-1.5">
-              <div className="space-y-0.5">
-                <h4 className="text-[13px] font-medium text-[var(--ink-soft)]">
-                  {block.title}
-                </h4>
-                {block.subtitle && <p className="text-[12px] text-[var(--muted)]">{block.subtitle}</p>}
-              </div>
+            <div key={`${block.title}-${index}`}>
               <Suspense fallback={<div className="h-32 animate-pulse rounded-[8px] bg-[var(--surface-2)]" />}>
-                <VegaChart spec={block.spec} ariaLabel={block.title} />
+                <VegaChart
+                  spec={block.spec}
+                  ariaLabel={block.title}
+                  title={block.title}
+                  subtitle={block.subtitle}
+                />
               </Suspense>
             </div>
           ))}
@@ -269,8 +265,19 @@ export function Message({ id, role, content, sqlQuery, data, rowCount, chart, ch
 
       {!hasChartBlocks && hasChart && (
         <Suspense fallback={<div className="mt-3 h-32 animate-pulse rounded-[8px] bg-[var(--surface-2)]" />}>
-          <VegaChart spec={chart!} ariaLabel="Answer visualization" />
+          <VegaChart spec={chart!} ariaLabel="Answer visualization" title="Answer visualization" />
         </Suspense>
+      )}
+
+      {hasMap && effectiveMapIntent && (
+        <MapButton
+          onClick={() => setMapOpen(true)}
+          label={effectiveMapIntent.buttonLabel}
+          title={effectiveMapIntent.title}
+          subtitle={effectiveMapIntent.subtitle}
+          metricLabel={effectiveMapIntent.metricLabel}
+          geographyCount={effectiveMapIntent.mappedValueCount ?? effectiveMapIntent.returnedGeographyCount}
+        />
       )}
 
       {/* Error */}

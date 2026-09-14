@@ -142,9 +142,10 @@ _US_STATES = (
 )
 _STATE_DISPLAY_NAMES = {name.casefold(): name.title() for name in _US_STATES}
 
-_PRIMARY = "#c6613f"
-_ACCENT_NEG = "#2a78d6"
-_SERIES_COLORS = ["#c6613f", "#2a78d6", "#558b6e", "#8b6bb1"]
+_PRIMARY = "#24364f"
+_BRAND_RED = "#e03a3e"
+_ACCENT_NEG = "#2563eb"
+_SERIES_COLORS = ["#e03a3e", "#24364f", "#f2b134", "#2a8f85", "#6f5bd3", "#9f4f71"]
 _HOVER_DIM = 0.35
 _MAX_RANKING_MARKS = 20
 
@@ -358,10 +359,6 @@ def _same_unit_family(profiles: list[dict[str, str]]) -> bool:
         for profile in profiles
     }
     return len(families) == 1
-
-
-def _money(profile: dict[str, str]) -> bool:
-    return profile["unit"].lower() == "usd"
 
 
 def _quant_axis(
@@ -868,6 +865,8 @@ def build_charts(
     )
     all_data.sort(key=lambda item: float(item["value"]), reverse=not ascending)
     data = all_data[:_MAX_RANKING_MARKS]
+    for rank, item in enumerate(data, start=1):
+        item["rank"] = rank
     order = "ascending" if ascending else "descending"
     subtitle = ""
     if len(all_data) > len(data):
@@ -899,7 +898,7 @@ def build_charts(
                 },
             }
         )
-        note = "Negative values are blue; positive values are terracotta."
+        note = "Negative values are blue; positive values are navy."
         return [
             {
                 "title": f"{profile['label']} by {label_title}",
@@ -994,10 +993,13 @@ def build_charts(
                         "type": "bar",
                         "cornerRadiusEnd": 5,
                         "height": {"band": 0.62},
-                        "color": _PRIMARY,
                         "tooltip": True,
                     },
                     "encoding": {
+                        "color": {
+                            "condition": {"test": "datum.rank === 1", "value": _BRAND_RED},
+                            "value": _PRIMARY,
+                        },
                         "opacity": {
                             "condition": {"param": "hover", "empty": True, "value": 1},
                             "value": _HOVER_DIM,

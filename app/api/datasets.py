@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from typing import Any
 
 from fastapi import HTTPException
@@ -88,7 +89,9 @@ def _variables(dataset: Any) -> list[dict[str, Any]]:
     return variables
 
 
+@lru_cache(maxsize=1)
 def dataset_catalog() -> list[dict[str, Any]]:
+    """Build the immutable deployment catalog once per worker process."""
     manifest = json.load(MANIFEST_PATH.open())
     registry = load_registry()
     families: dict[str, dict[str, Any]] = {}

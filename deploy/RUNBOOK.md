@@ -7,14 +7,16 @@ people are using it at once.
 
 ### UptimeRobot (free, no code change)
 1. Sign up at https://uptimerobot.com (free tier = 50 monitors @ 5-min interval).
-2. **Primary monitor** — `http://<prod-host>/health/deep`. Returns 503 when
-   any backend dep is down: LLM (DeepSeek key missing / revoked / rate-limited
-   to dead), DuckDB, or SQLite. This catches the silent-failure mode where
-   the process is up but every analytical question goes to clarification.
+2. **External monitor** — `https://<prod-host>/health`. This is the public,
+   no-cost readiness check for the process, frontend, semantic registry, and
+   analytical views.
    - Interval: 5 minutes
    - Alert contacts: your email; optionally Slack/Discord webhook
-3. **Secondary** (cheap) — `http://<prod-host>/health` for "is the process
-   even responding?" shallow check. Useful if `/health/deep` flaps under load.
+3. **Provider monitor** — run `curl -fsS http://127.0.0.1:8000/health/deep`
+   from the host or an authenticated host-local monitoring agent. The nginx
+   configuration deliberately blocks this endpoint from the public internet
+   because every request invokes the paid LLM provider. It returns 503 when
+   the LLM, DuckDB, or SQLite is unavailable.
 
 Alerting threshold: 2 consecutive failures (so a one-off blip doesn't page).
 
@@ -26,10 +28,10 @@ unset DSN = no-op.
 ## Log rotation
 
 In-process rotation is on by default (`app/observability/logging.py`).
-- Rotates `query_log.jsonl` and `feedback.jsonl` when each crosses
+- Rotates `query_log.jsonl`, `llm_calls.jsonl`, and `feedback.jsonl` when each crosses
   `LOG_ROTATE_MAX_BYTES` (default 10MB).
 - Keeps `LOG_ROTATE_KEEP` archives (default 5, FIFO prune).
-- Archive naming: `query_log-YYYYmmdd-HHMMSS.jsonl`
+- Archive naming: `query_log-YYYYmmdd-HHMMSS-microseconds-PID.jsonl`
 
 At 40–50 users firing ~5 queries/session, expect 1–2 rotations per week.
 No cron / logrotate required.
@@ -61,7 +63,7 @@ protect deployment rollback, but they do not protect against host loss.
 | SQLite (threads/messages/feedback) | Write lock under contention | WAL mode enabled at init (see `app/storage/sqlite.py`); 10s busy timeout |
 | DuckDB (analytical SQL) | Per-request fresh conn | Fine for read-only workload; views materialised at startup |
 | LLM provider | Single selected API key | Explicit DeepSeek/Gemini/OpenAI selection; honours 429 with backoff |
-| `lru_cache` on `distinct_values` | Eviction under diverse queries | Increased `maxsize` to 1024 |
+| `lru_cache` on `distinct_values` | Eviction under diverse queries | Bounded `maxsize` of 2048 |
 | Long analytical requests | Additional evidence checks can take longer | Hard wall/tool/token budgets plus four web workers |
 
 ## Model-provider cutover gate

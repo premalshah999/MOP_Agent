@@ -1,8 +1,22 @@
 import { AlertTriangle, RotateCcw, X } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import maplibregl, { type LngLatBoundsLike, type MapGeoJSONFeature, type StyleSpecification } from 'maplibre-gl';
+import {
+  Map as MapLibreMap,
+  NavigationControl,
+  setWorkerUrl,
+  type LngLatBoundsLike,
+  type MapGeoJSONFeature,
+  type MapLayerMouseEvent,
+  type StyleSpecification,
+} from 'maplibre-gl';
+import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { buildApiUrl } from '@/lib/api';
 import type { ChatbotMapIntent } from '@/types/chat';
+
+// MapLibre 6 ships its renderer as ESM. Let Vite bundle the worker and its
+// shared module into a self-contained asset; otherwise GeoJSON sources can
+// remain unresolved in production builds without a useful browser error.
+setWorkerUrl(mapLibreWorkerUrl);
 
 /* ────────────────────────────────────────────────────────────────────
    MapView — the one map surface. A pure-vector choropleth drawn on the
@@ -216,10 +230,10 @@ function fmtValue(v: number, unit: string): string {
 }
 
 /* ── Choropleth scales: quantiles; zero-centered when signs diverge ── */
-const RAMP = ['#fee5d9', '#fcae91', '#fb6a4a', '#de2d26', '#a50f15'];
-const FLOW_IN_RAMP = ['#dbeafe', '#93c5fd', '#60a5fa', '#2563eb', '#1e3a8a'];
-const DIVERGING_RAMP = ['#1e40af', '#60a5fa', '#f8fafc', '#fc8181', '#991b1b'];
-const NO_VALUE_COLOR = '#e5e7eb';
+const RAMP = ['#f8e8e8', '#f4b9ba', '#eb7d80', '#e03a3e', '#8f1f28'];
+const FLOW_IN_RAMP = ['#e6eef7', '#b7cbe3', '#739bc5', '#356da4', '#173f6b'];
+const DIVERGING_RAMP = ['#173f6b', '#739bc5', '#f8fafc', '#eb7d80', '#8f1f28'];
+const NO_VALUE_COLOR = '#e8edf2';
 
 interface ColorScale {
   colors: string[];
@@ -549,7 +563,7 @@ interface MapViewProps {
 
 export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
+  const mapRef = useRef<MapLibreMap | null>(null);
   const featureBoundsRef = useRef(new Map<string, Bounds>());
   const viewBoundsRef = useRef<Bounds | null>(null);
   const hoveredIdRef = useRef<number | string | null>(null);
@@ -604,9 +618,9 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
     const style: StyleSpecification = {
       version: 8,
       sources: {},
-      layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#fafafa' } }],
+      layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#f7f9fb' } }],
     };
-    const map = new maplibregl.Map({
+    const map = new MapLibreMap({
       container: containerRef.current,
       style,
       attributionControl: false,
@@ -615,7 +629,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
       scrollZoom: false,
     });
     mapRef.current = map;
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    map.addControl(new NavigationControl({ showCompass: false }), 'top-right');
 
     const load = async () => {
       try {
@@ -633,7 +647,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
         });
         map.addLayer({
           id: 'states-base-line', type: 'line', source: 'states-base',
-          paint: { 'line-color': '#fecaca', 'line-width': 0.75 },
+          paint: { 'line-color': '#cbd5e1', 'line-width': 0.75 },
         });
         if (focusPostal && mapIntent.mapType.startsWith('flow-')) {
           // The rows describe the opposite side of a focused flow (origins
@@ -692,7 +706,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
         if (scopeFeatures.length) {
           map.addSource('scope', { type: 'geojson', data: { type: 'FeatureCollection', features: scopeFeatures } as never });
           map.addLayer({ id: 'scope-fill', type: 'fill', source: 'scope', paint: { 'fill-color': NO_VALUE_COLOR, 'fill-opacity': 0.72 } });
-          map.addLayer({ id: 'scope-line', type: 'line', source: 'scope', paint: { 'line-color': '#fecaca', 'line-width': 0.8 } });
+          map.addLayer({ id: 'scope-line', type: 'line', source: 'scope', paint: { 'line-color': '#cbd5e1', 'line-width': 0.8 } });
         }
 
         map.addSource('data', { type: 'geojson', generateId: true, data: { type: 'FeatureCollection', features: dataFeatures } as never });
@@ -788,7 +802,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
                   'circle-stroke-width': ['get', '__strokeWidth'],
                 },
               });
-              map.on('mousemove', 'flow-lines-hit', (event) => {
+              map.on('mousemove', 'flow-lines-hit', (event: MapLayerMouseEvent) => {
                 const feature = event.features?.[0] as MapGeoJSONFeature | undefined;
                 if (!feature) return;
                 const props = feature.properties as Record<string, unknown>;
@@ -809,7 +823,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
                 map.getCanvas().style.cursor = '';
                 setHover(null);
               });
-              map.on('click', 'flow-lines-hit', (event) => {
+              map.on('click', 'flow-lines-hit', (event: MapLayerMouseEvent) => {
                 const feature = event.features?.[0] as MapGeoJSONFeature | undefined;
                 if (!feature) return;
                 const props = feature.properties as Record<string, unknown>;
@@ -856,7 +870,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
           setHover(null);
           map.getCanvas().style.cursor = '';
         };
-        map.on('mousemove', 'data-fill', (e) => {
+        map.on('mousemove', 'data-fill', (e: MapLayerMouseEvent) => {
           const f = e.features?.[0] as MapGeoJSONFeature | undefined;
           if (!f) return;
           if (hoveredIdRef.current !== null && hoveredIdRef.current !== f.id) {
@@ -875,7 +889,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
           });
         });
         map.on('mouseleave', 'data-fill', clearHover);
-        map.on('click', 'data-fill', (e) => {
+        map.on('click', 'data-fill', (e: MapLayerMouseEvent) => {
           const f = e.features?.[0] as MapGeoJSONFeature | undefined;
           if (!f) return;
           const p = f.properties as Record<string, unknown>;
@@ -964,7 +978,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="absolute inset-3 flex flex-col overflow-hidden border border-[var(--line)] bg-[var(--surface)] shadow-[0_24px_64px_rgba(15,23,42,0.18)] sm:inset-6"
+        className="absolute inset-3 flex flex-col overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[0_24px_72px_rgba(15,23,42,0.22)] sm:inset-6"
       >
         {/* Header */}
         <header className="flex items-start justify-between gap-4 border-b border-[var(--line)] px-5 py-3.5 sm:px-6">
@@ -996,7 +1010,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
             onClick={onClose}
             aria-label="Close map"
             autoFocus
-            className="border border-[var(--line)] p-2 text-[var(--muted)] transition hover:border-[var(--brand-red)] hover:text-[var(--brand-red)]"
+            className="rounded-lg border border-[var(--line)] p-2 text-[var(--muted)] transition hover:border-[var(--brand-red)] hover:bg-[var(--accent-soft)] hover:text-[var(--brand-red)]"
           >
             <X size={17} />
           </button>
@@ -1029,7 +1043,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
                 <button
                   type="button"
                   onClick={resetView}
-                  className="absolute right-3 top-[78px] z-10 inline-flex items-center gap-1.5 border border-[var(--line)] bg-[var(--surface)]/95 px-2.5 py-1.5 text-[10.5px] font-semibold text-[var(--muted)] shadow-sm transition hover:border-[var(--brand-red)] hover:text-[var(--brand-red)]"
+                  className="absolute right-3 top-[78px] z-10 inline-flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface)]/95 px-2.5 py-1.5 text-[10.5px] font-semibold text-[var(--muted)] shadow-sm transition hover:border-[var(--brand-red)] hover:text-[var(--brand-red)]"
                   aria-label="Reset map extent"
                 >
                   <RotateCcw size={12} /> Reset
@@ -1054,7 +1068,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
               {/* Top-3 quick-jump chips */}
               {top3.length > 1 && (
                 <div className="absolute left-4 top-4 z-10 flex flex-col gap-1.5">
-                  <div className="w-fit border border-[var(--line)] bg-[var(--surface)]/94 px-2 py-1 text-[9.5px] font-bold uppercase tracking-[0.12em] text-[var(--muted)]">
+                  <div className="w-fit rounded-md border border-[var(--line)] bg-[var(--surface)]/94 px-2 py-1 text-[9.5px] font-bold uppercase tracking-[0.12em] text-[var(--muted)] shadow-sm">
                     {detected.rankDirection === 'lowest' ? 'Lowest returned' : 'Highest returned'}
                   </div>
                   {top3.map((r) => (
@@ -1062,13 +1076,13 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
                       key={r.key}
                       type="button"
                       onClick={() => flyToRegion(r)}
-                      className={`group flex items-center gap-2 border px-3 py-1.5 text-left transition ${
+                      className={`group flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left shadow-sm transition ${
                         pinned?.key === r.key
                           ? 'border-[var(--brand-red)] bg-[var(--surface)]'
                           : 'border-[var(--line)] bg-[var(--surface)]/94 hover:border-[var(--brand-red)]'
                       }`}
                     >
-                      <span className="grid h-5 w-5 shrink-0 place-items-center bg-[var(--ink)] text-[10px] font-bold text-white">
+                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-[var(--ink)] text-[10px] font-bold text-white">
                         {r.tied ? `T${r.rank}` : r.rank}
                       </span>
                       <span className="max-w-44 truncate text-[12px] font-medium text-[var(--ink)]">{r.label}</span>
@@ -1080,7 +1094,7 @@ export function MapView({ isOpen, onClose, mapIntent, rows }: MapViewProps) {
 
               {/* Pinned detail card */}
               {pinned && (
-                <div className="absolute bottom-24 left-4 z-10 w-64 border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[0_18px_36px_rgba(15,23,42,0.12)]">
+                <div className="absolute bottom-24 left-4 z-10 w-64 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[0_18px_36px_rgba(15,23,42,0.12)]">
                   <div className="flex items-start justify-between gap-2">
                     <div className="text-[14px] font-semibold leading-5 text-[var(--ink)]">{pinned.label}</div>
                     <button type="button" onClick={() => setPinned(null)} aria-label="Clear selection" className="rounded-md p-0.5 text-[var(--muted-2)] hover:text-[var(--ink)]">

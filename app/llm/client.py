@@ -99,7 +99,19 @@ def provider_config() -> ProviderConfig:
         or os.getenv(f"{requested.upper()}_BASE_URL")
         or (os.getenv("ASSISTANT_ROUTER_BASE_URL") if auto_mode else None)
         or default_base
-    )
+    ).strip()
+    parsed_base = urllib.parse.urlsplit(base)
+    if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc:
+        raise LLMError("The configured LLM base URL must be an absolute HTTP(S) URL")
+    if parsed_base.username or parsed_base.password or parsed_base.query or parsed_base.fragment:
+        raise LLMError(
+            "The configured LLM base URL cannot contain credentials, a query, or a fragment"
+        )
+    if (
+        os.getenv("APP_ENV", "development").strip().casefold() == "production"
+        and parsed_base.scheme != "https"
+    ):
+        raise LLMError("The production LLM base URL must use HTTPS")
     model = (
         os.getenv("LLM_MODEL")
         or os.getenv(f"{requested.upper()}_MODEL")

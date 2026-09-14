@@ -80,11 +80,6 @@ function Workspace() {
     setMobileSidebarOpen(false);
   }, []);
 
-  const handleOpenLibrary = useCallback(() => {
-    setMainView('library');
-    setMobileSidebarOpen(false);
-  }, []);
-
   const handleSelectThread = useCallback((id: string) => {
     store.selectThread(id);
     setMainView('chat');

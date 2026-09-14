@@ -2,11 +2,11 @@
 # semantic, and live reliability gates. Open-ended minimums made a clean
 # production rebuild silently adopt breaking parser/framework releases.
 duckdb==1.5.1
-fastapi==0.128.4
+fastapi==0.141.1
 uvicorn==0.40.0
-python-dotenv==1.2.1
+python-dotenv==1.2.3
 pydantic[email]==2.12.5
-PyJWT==2.10.1
+PyJWT==2.14.0
 sqlglot==30.6.0
 slowapi==0.1.9
 sentry-sdk==2.18.0

@@ -33,7 +33,9 @@ def _maybe_rotate(path: Path) -> None:
             return
     except OSError:
         return
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    # Include process id and microseconds so simultaneous workers cannot
+    # overwrite each other's archive within the same second.
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f") + f"-{os.getpid()}"
     archive = path.with_name(f"{path.stem}-{stamp}{path.suffix}")
     try:
         os.replace(path, archive)
@@ -50,15 +52,31 @@ def _maybe_rotate(path: Path) -> None:
             pass
 
 
+def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    """Append one private JSONL record with a single O_APPEND write."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _maybe_rotate(path)
+    encoded = (json.dumps(payload, default=str, sort_keys=True) + "\n").encode("utf-8")
+    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        written = os.write(descriptor, encoded)
+        if written != len(encoded):
+            raise OSError(f"Short JSONL append: wrote {written} of {len(encoded)} bytes")
+    finally:
+        os.close(descriptor)
+
+
 def log_pipeline_event(event: dict[str, Any]) -> None:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _maybe_rotate(LOG_PATH)
     payload = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         **event,
     }
-    with LOG_PATH.open("a") as f:
-        f.write(json.dumps(payload, default=str, sort_keys=True) + "\n")
+    try:
+        append_jsonl(LOG_PATH, payload)
+    except OSError:
+        # Telemetry must never turn a valid analytical response into a 500.
+        return
 
 
 def log_llm_event(event: dict[str, Any]) -> None:
@@ -70,14 +88,11 @@ def log_llm_event(event: dict[str, Any]) -> None:
     """
 
     try:
-        LLM_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _maybe_rotate(LLM_LOG_PATH)
         payload = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             **event,
         }
-        with LLM_LOG_PATH.open("a") as f:
-            f.write(json.dumps(payload, default=str, sort_keys=True) + "\n")
+        append_jsonl(LLM_LOG_PATH, payload)
     except OSError:
         # Observability is deliberately non-blocking: losing one drift sample
         # must not prevent an otherwise valid analytical answer.

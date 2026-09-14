@@ -1,14 +1,14 @@
 import { Check, Download, Loader2, Trash2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { apiListThreads, apiUpdateProfile } from '@/lib/api';
-import { updateSettings, useSettings, type AppSettings } from '@/lib/settings';
+import { apiGetMessages, apiListThreads, apiUpdateProfile } from '@/lib/api';
+import { updateSettings, useSettings } from '@/lib/settings';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   /** Called after "Clear all chats" so the thread store can refresh. */
-  onThreadsCleared?: () => void;
+  onThreadsCleared?: () => void | Promise<void>;
 }
 
 export function SettingsModal({ isOpen, onClose, onThreadsCleared }: SettingsModalProps) {
@@ -45,7 +45,13 @@ export function SettingsModal({ isOpen, onClose, onThreadsCleared }: SettingsMod
   const exportChats = async () => {
     try {
       const threads = await apiListThreads();
-      const blob = new Blob([JSON.stringify(threads, null, 2)], { type: 'application/json' });
+      const conversations = await Promise.all(
+        threads.map(async (thread) => ({
+          ...thread,
+          messages: await apiGetMessages(thread.id),
+        })),
+      );
+      const blob = new Blob([JSON.stringify(conversations, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -61,9 +67,13 @@ export function SettingsModal({ isOpen, onClose, onThreadsCleared }: SettingsMod
     if (clearState === 'idle') { setClearState('confirm'); return; }
     if (clearState !== 'confirm') return;
     setClearState('working');
-    onThreadsCleared?.(); // thread store clears server + local state
-    setClearState('done');
-    setTimeout(() => setClearState('idle'), 1600);
+    try {
+      await onThreadsCleared?.();
+      setClearState('done');
+      setTimeout(() => setClearState('idle'), 1600);
+    } catch {
+      setClearState('confirm');
+    }
   };
 
   return (

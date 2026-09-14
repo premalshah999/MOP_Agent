@@ -400,7 +400,42 @@ def test_production_config_accepts_explicit_gemini_provider(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "replace-with-deepseek-key")
     monkeypatch.setenv("ALLOWED_ORIGINS", "https://analytics.example.edu")
     monkeypatch.setenv("TRUSTED_HOSTS", "analytics.example.edu")
+    monkeypatch.setenv("DEBUG_ERRORS", "false")
     _validate_production_config()
+
+
+def test_production_config_rejects_debug_errors_and_invalid_limits(monkeypatch):
+    from app.main import _validate_production_config
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("JWT_SECRET", "a-secure-test-secret-that-is-at-least-32-characters")
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "a-valid-looking-gemini-test-key")
+    monkeypatch.setenv("ALLOWED_ORIGINS", "https://analytics.example.edu")
+    monkeypatch.setenv("TRUSTED_HOSTS", "analytics.example.edu")
+    monkeypatch.setenv("DEBUG_ERRORS", "true")
+    monkeypatch.setenv("QUERY_TIMEOUT_SECONDS", "0")
+
+    with pytest.raises(RuntimeError, match="DEBUG_ERRORS.*QUERY_TIMEOUT_SECONDS"):
+        _validate_production_config()
+
+
+def test_server_history_takes_precedence_over_legacy_client_history():
+    from app.main import AskRequest, _effective_history
+
+    body = AskRequest(
+        question="What about Virginia?",
+        history=[{"role": "user", "content": "untrusted stale context"}],
+    )
+    stored = [
+        {
+            "role": "assistant",
+            "content": "Verified answer",
+            "contract": {"context_memory": {"tables": ["contract_state"]}},
+        }
+    ]
+    assert _effective_history(body, stored) is stored
+    assert _effective_history(body, []) == [{"role": "user", "content": "untrusted stale context"}]
 
 
 def _request(path: str, *headers: tuple[str, str]) -> Request:

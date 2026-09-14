@@ -103,6 +103,7 @@ def compute_peer_context(
         return None
 
     m = quote_identifier(measure)
+    escaped_focus_state = focus_state.replace("'", "''")
     where = "WHERE 1=1"
     yr_int: int | None = None
     if year_col and year not in (None, ""):
@@ -120,7 +121,8 @@ def compute_peer_context(
 
     rank_sql = (
         f"SELECT (SELECT COUNT(*) FROM mart_{table} {where} AND {m} > "
-        f"(SELECT {m} FROM mart_{table} {where} AND LOWER(state) = '{focus_state.lower()}' LIMIT 1) "
+        f"(SELECT {m} FROM mart_{table} {where} AND LOWER(state) = "
+        f"'{escaped_focus_state.lower()}' LIMIT 1) "
         f"AND {m} IS NOT NULL) + 1 AS rank, "
         f"(SELECT COUNT(*) FROM mart_{table} {where} AND {m} IS NOT NULL) AS n, "
         f"(SELECT MEDIAN({m}) FROM mart_{table} {where}) AS national_median"
@@ -154,7 +156,7 @@ def compute_peer_context(
         y = quote_identifier(year_col)
         prior_sql = (
             f"SELECT {m} AS prior_value FROM mart_{table} "
-            f"WHERE LOWER(state) = '{focus_state.lower()}' "
+            f"WHERE LOWER(state) = '{escaped_focus_state.lower()}' "
             f"AND CAST({y} AS VARCHAR) = '{yr_int - 1}' LIMIT 1"
         )
         try:

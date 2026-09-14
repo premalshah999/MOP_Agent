@@ -4,7 +4,6 @@ import type {
   AuthResponse,
   ChartBlock,
   ChatbotMapIntent,
-  ChatThread,
   DatasetCatalogEntry,
   EvidenceBlock,
   HealthSummary,

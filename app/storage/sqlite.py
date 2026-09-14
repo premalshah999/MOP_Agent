@@ -16,12 +16,15 @@ def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
     return conn
 
 
 def init_storage() -> None:
     with connect() as conn:
+        # Journal mode is persistent database state. Setting it once during
+        # startup avoids taking an unnecessary schema lock on every request.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (

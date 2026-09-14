@@ -7,22 +7,21 @@ this captures product-quality signals without becoming a full feedback platform.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from app.observability.logging import _maybe_rotate
+from app.observability.logging import append_jsonl
 from app.paths import RUNTIME_DIR
 
 FEEDBACK_LOG = RUNTIME_DIR / "feedback.jsonl"
 
 
 class FeedbackRequest(BaseModel):
-    message_id: str
-    thread_id: str | None = None
+    message_id: str = Field(min_length=1, max_length=128)
+    thread_id: str | None = Field(default=None, max_length=128)
     verdict: Literal["up", "down"]
     note: str | None = Field(default=None, max_length=2000)
 
@@ -30,8 +29,6 @@ class FeedbackRequest(BaseModel):
 def record_feedback(payload: FeedbackRequest, user: dict[str, Any]) -> dict[str, Any]:
     if not payload.message_id.strip():
         raise HTTPException(status_code=400, detail="message_id is required")
-    FEEDBACK_LOG.parent.mkdir(parents=True, exist_ok=True)
-    _maybe_rotate(FEEDBACK_LOG)
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "user_id": user.get("id"),
@@ -41,6 +38,8 @@ def record_feedback(payload: FeedbackRequest, user: dict[str, Any]) -> dict[str,
         "verdict": payload.verdict,
         "note": (payload.note or "").strip() or None,
     }
-    with FEEDBACK_LOG.open("a") as f:
-        f.write(json.dumps(entry, default=str, sort_keys=True) + "\n")
+    try:
+        append_jsonl(FEEDBACK_LOG, entry)
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="Feedback could not be saved") from exc
     return {"ok": True}

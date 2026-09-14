@@ -264,6 +264,8 @@ def test_large_ranking_stays_ranking_and_reports_visual_limit() -> None:
     assert "layer" in block["spec"]
     assert len(block["spec"]["data"]["values"]) == 20
     assert block["subtitle"] == "Showing 20 of 52 returned rows"
+    assert block["spec"]["data"]["values"][0]["rank"] == 1
+    assert block["spec"]["layer"][0]["encoding"]["color"]["condition"]["value"] == "#e03a3e"
 
 
 def test_bottom_ranking_is_sorted_ascending_in_chart_and_map() -> None:

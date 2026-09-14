@@ -41,7 +41,7 @@ if os.path.exists(source):
 
 log_archive = "/backup/runtime-logs.tar.gz"
 with tarfile.open(log_archive, "w:gz") as archive:
-    for pattern in ("query_log.jsonl*", "feedback.jsonl*"):
+    for pattern in ("query_log.jsonl*", "llm_calls.jsonl*", "feedback.jsonl*"):
         for path in glob.glob(os.path.join(runtime, pattern)):
             archive.add(path, arcname=os.path.basename(path))
 PY

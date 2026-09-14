@@ -4,7 +4,7 @@ import json
 import math
 import os
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock, Timer
 from typing import Any
 
 import duckdb
@@ -15,6 +15,17 @@ from app.semantic.registry import mart_view_name
 DB_PATH = Path(os.getenv("DUCKDB_PATH", str(RUNTIME_DIR / "mop.duckdb"))).expanduser().resolve()
 _INIT_LOCK = Lock()
 _INITIALIZED = False
+
+
+class QueryTimeoutError(RuntimeError):
+    """Raised when DuckDB exceeds the configured execution deadline."""
+
+
+def _query_timeout_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("QUERY_TIMEOUT_SECONDS", "15")))
+    except ValueError:
+        return 15.0
 
 
 def _connect(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
@@ -81,11 +92,39 @@ def list_registered_views() -> list[str]:
 
 def execute_select(sql: str, *, max_rows: int = 250) -> list[dict[str, Any]]:
     initialize_duckdb()
-    wrapped = f"SELECT * FROM ({sql.rstrip(';')}) AS limited_result LIMIT {max_rows}"
+    safe_max_rows = max(1, min(int(max_rows), 5_000))
+    statement = sql.strip().rstrip(";").strip()
+    wrapped = f"SELECT * FROM ({statement}) AS limited_result LIMIT {safe_max_rows}"
     with _connect(read_only=True) as conn:
-        cursor = conn.execute(wrapped)
-        columns = [description[0] for description in cursor.description]
-        values = cursor.fetchall()
+        timeout = _query_timeout_seconds()
+        timed_out = Event()
+
+        def interrupt() -> None:
+            timed_out.set()
+            try:
+                conn.interrupt()
+            except Exception:
+                # The query may have completed between the timer firing and
+                # the interrupt reaching DuckDB.
+                return
+
+        timer = Timer(timeout, interrupt) if timeout > 0 else None
+        if timer:
+            timer.daemon = True
+            timer.start()
+        try:
+            cursor = conn.execute(wrapped)
+            columns = [description[0] for description in cursor.description]
+            values = cursor.fetchall()
+        except duckdb.InterruptException as exc:
+            if timed_out.is_set():
+                raise QueryTimeoutError(
+                    f"Query exceeded the {timeout:g}-second execution limit"
+                ) from exc
+            raise
+        finally:
+            if timer:
+                timer.cancel()
 
     def clean(value: Any) -> Any:
         if isinstance(value, float) and not math.isfinite(value):

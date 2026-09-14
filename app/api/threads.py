@@ -160,6 +160,26 @@ def list_messages(thread_id: str) -> list[dict[str, Any]]:
         )
 
 
+def list_recent_messages(thread_id: str, *, limit: int = 12) -> list[dict[str, Any]]:
+    """Return the newest messages in chronological order without loading the thread."""
+    safe_limit = max(1, min(int(limit), 100))
+    with connect() as conn:
+        return rows_dict(
+            conn.execute(
+                """
+                SELECT id, thread_id, role, content, payload_json, created_at FROM (
+                    SELECT rowid AS message_order, * FROM messages
+                    WHERE thread_id = ?
+                    ORDER BY created_at DESC, rowid DESC
+                    LIMIT ?
+                ) AS recent
+                ORDER BY created_at ASC, message_order ASC
+                """,
+                (thread_id, safe_limit),
+            ).fetchall()
+        )
+
+
 def format_message(message: dict[str, Any]) -> dict[str, Any]:
     payload = payload_loads(message.get("payload_json"))
     formatted = {

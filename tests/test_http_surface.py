@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -11,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 os.chdir(ROOT)
 os.environ["SQLITE_DB_PATH"] = str(ROOT / "data" / "runtime" / "test_http.sqlite3")
 os.environ["DUCKDB_PATH"] = str(ROOT / "data" / "runtime" / "test_http.duckdb")
-os.environ["JWT_SECRET"] = "test-secret"
+os.environ["JWT_SECRET"] = "test-secret-that-is-at-least-32-bytes"
 
 from app.main import app  # noqa: E402
 
@@ -34,6 +35,13 @@ class HttpSurfaceTests(unittest.TestCase):
             payload = health.json()
             self.assertEqual(payload["status"], "ok")
             self.assertTrue(payload["checks"]["pipeline_ready"])
+            self.assertEqual(health.headers["cache-control"], "no-store")
+            self.assertIn("default-src 'self'", health.headers["content-security-policy"])
+
+            invalid_request_id = client.get("/health", headers={"X-Request-ID": "bad id"})
+            self.assertNotEqual(invalid_request_id.headers["x-request-id"], "bad id")
+            valid_request_id = client.get("/health", headers={"X-Request-ID": "trace-123"})
+            self.assertEqual(valid_request_id.headers["x-request-id"], "trace-123")
 
             catalog = client.get("/api/datasets")
             self.assertEqual(catalog.status_code, 200)
@@ -56,6 +64,50 @@ class HttpSurfaceTests(unittest.TestCase):
                 shared_page = client.get("/share/direct-link-token")
                 self.assertEqual(shared_page.status_code, 200)
                 self.assertIn("text/html", shared_page.headers["content-type"])
+                self.assertEqual(shared_page.headers["cache-control"], "no-cache")
+
+                asset = next((ROOT / "frontend" / "dist" / "assets").iterdir())
+                asset_response = client.get(f"/assets/{asset.name}")
+                self.assertEqual(asset_response.status_code, 200)
+                self.assertIn("immutable", asset_response.headers["cache-control"])
+
+            boundaries = client.get("/geo/states.geojson")
+            self.assertEqual(boundaries.status_code, 200)
+            self.assertEqual(boundaries.headers["cache-control"], "public, max-age=86400")
+
+    def test_request_limits_and_deleted_user_tokens(self) -> None:
+        from app.storage.sqlite import connect
+
+        with TestClient(app) as client:
+            headers = _auth(client)
+            oversized = client.post("/api/ask", json={"question": "x" * 8_001}, headers=headers)
+            self.assertEqual(oversized.status_code, 422)
+
+            with connect() as connection:
+                token = headers["Authorization"].split(" ", 1)[1]
+                import jwt
+
+                subject = int(
+                    jwt.decode(token, os.environ["JWT_SECRET"], algorithms=["HS256"])["sub"]
+                )
+                connection.execute("DELETE FROM users WHERE id = ?", (subject,))
+                connection.commit()
+
+            self.assertEqual(client.get("/api/auth/me", headers=headers).status_code, 401)
+
+    def test_stream_errors_are_redacted_in_production(self) -> None:
+        with TestClient(app) as client:
+            headers = _auth(client)
+            with (
+                patch.dict(os.environ, {"DEBUG_ERRORS": "false"}),
+                patch("app.main.answer_question", side_effect=RuntimeError("private SQL detail")),
+            ):
+                response = client.post(
+                    "/api/ask/stream", json={"question": "test failure"}, headers=headers
+                )
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("Analysis failed unexpectedly", response.text)
+            self.assertNotIn("private SQL detail", response.text)
 
     def test_auth_and_ask_contract_shape(self) -> None:
         """The /api/ask contract shape must stay stable across the rebuild."""
