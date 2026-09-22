@@ -80,6 +80,7 @@ def _normalized_rows(
     *,
     required_dimensions: set[str] | None = None,
     include_other_values: bool = True,
+    preserve_order: bool = True,
 ) -> str:
     # SQL is required to stabilize ranking ties, but sorting here makes the
     # signature insensitive to JSON key order and harmless DB serialization.
@@ -116,6 +117,8 @@ def _normalized_rows(
                 "other_values": sorted(other_values),
             }
         )
+    if not preserve_order:
+        normalized.sort(key=lambda row: json.dumps(row, sort_keys=True, default=str))
     return json.dumps(normalized, sort_keys=True, default=str, separators=(",", ":"))
 
 
@@ -140,14 +143,56 @@ def _normalized_formula(
     }
 
 
-def _normalized_predicate(predicate: Any) -> dict[str, Any]:
+def _normalized_filters(contract: dict[str, Any]) -> list[dict[str, Any]]:
+    """Canonical entity scope grounded before SQL generation.
+
+    Planner predicates are not the authority for named geographies/agencies:
+    entity resolution is.  Capturing the grounded filters lets the evaluator
+    distinguish Maryland from Virginia while ignoring whether a provider also
+    redundantly represented the same scope as a typed row predicate.
+    """
+
+    memory = contract.get("context_memory") or {}
+    normalized: list[dict[str, Any]] = []
+    for item in memory.get("filters") or []:
+        if not isinstance(item, dict):
+            continue
+        values = item.get("values") or [item.get("value")]
+        normalized.append(
+            {
+                "table": str(item.get("table") or "").casefold(),
+                "column": re.sub(
+                    r"[^a-z0-9_]+", "_", str(item.get("column") or "").casefold()
+                ).strip("_"),
+                "values": sorted(
+                    re.sub(r"\s+", " ", str(value).strip()).casefold()
+                    for value in values
+                    if value not in (None, "")
+                ),
+            }
+        )
+    return sorted(normalized, key=lambda item: json.dumps(item, sort_keys=True))
+
+
+def _normalized_predicate(
+    predicate: Any,
+    *,
+    grounded_filter_columns: set[str],
+) -> dict[str, Any]:
     raw = predicate if isinstance(predicate, dict) else {}
     operator = str(raw.get("operator") or "none").casefold()
     if operator == "none":
         return {"operator": "none"}
+    operands = [str(value) for value in (raw.get("operands") or [])]
+    normalized_operands = {
+        re.sub(r"[^a-z0-9_]+", "_", value.casefold()).strip("_") for value in operands
+    }
+    if normalized_operands and normalized_operands <= grounded_filter_columns:
+        return {"operator": "none"}
     return {
         "operator": operator,
-        "operands": [str(value) for value in (raw.get("operands") or [])],
+        "operands": operands,
+        "comparison_value": _normalized_period(raw.get("comparison_value")),
     }
 
 
@@ -190,6 +235,10 @@ def _signature(result: dict[str, Any]) -> dict[str, Any]:
         [contract.get("metric")] if contract.get("metric") else []
     )
     statistic = analysis.get("statistic")
+    filters = _normalized_filters(contract)
+    grounded_filter_columns = {item["column"] for item in filters if item["column"]}
+    top_k = analysis.get("top_k", contract.get("top_k"))
+    order_sensitive = operation == "ranking" or top_k is not None
     return {
         "resolution": result.get("resolution"),
         "tables": analysis.get("tables") or contract.get("tables"),
@@ -197,20 +246,29 @@ def _signature(result: dict[str, Any]) -> dict[str, Any]:
         "operation": operation,
         "statistic": statistic,
         "formula": _normalized_formula(analysis.get("formula"), statistic=statistic),
-        "predicate": _normalized_predicate(analysis.get("predicate")),
+        "filters": filters,
+        "predicate": _normalized_predicate(
+            analysis.get("predicate"),
+            grounded_filter_columns=grounded_filter_columns,
+        ),
         "observation_grain": analysis.get("observation_grain"),
         "result_scope": scope,
         "result_unit": analysis.get("result_unit"),
         "year": _normalized_period(analysis.get("effective_period", contract.get("year"))),
         "period_by_table": _normalized_period(analysis.get("period_by_table")),
-        "sort_direction": analysis.get("sort_direction", contract.get("sort_direction")),
-        "sort_columns": analysis.get("sort_columns") or [],
-        "top_k": analysis.get("top_k", contract.get("top_k")),
+        "sort_direction": (
+            analysis.get("sort_direction", contract.get("sort_direction"))
+            if order_sensitive
+            else "none"
+        ),
+        "sort_columns": (analysis.get("sort_columns") or []) if order_sensitive else [],
+        "top_k": top_k,
         "output_dimensions": sorted(signature_dimensions),
         "rows": _normalized_rows(
             result.get("data") or [],
             required_dimensions=required_dimensions,
             include_other_values=dimension_sensitive,
+            preserve_order=order_sensitive,
         ),
     }
 

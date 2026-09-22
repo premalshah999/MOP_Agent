@@ -158,3 +158,157 @@ def test_signature_normalizes_equivalent_period_json_types() -> None:
         }
 
     assert _signature(result(2024)) == _signature(result("2024"))
+
+
+def test_signature_uses_grounded_scope_not_redundant_entity_predicate() -> None:
+    def result(predicate: dict) -> dict:
+        return {
+            "resolution": "answered",
+            "contract": {
+                "tables": ["contract_state"],
+                "operation": "lookup",
+                "context_memory": {
+                    "filters": [
+                        {
+                            "table": "contract_state",
+                            "column": "state",
+                            "values": ["MARYLAND"],
+                        }
+                    ]
+                },
+            },
+            "data": [{"value": 30579948445.7}],
+            "resultPackage": {
+                "analysis_contract": {
+                    "tables": ["contract_state"],
+                    "metric_columns": ["Grants"],
+                    "operation": "lookup",
+                    "statistic": "value",
+                    "result_scope": "single",
+                    "result_unit": "usd",
+                    "predicate": predicate,
+                }
+            },
+        }
+
+    assert _signature(result({"operator": "none"})) == _signature(
+        result(
+            {
+                "operator": "eq",
+                "operands": ["state"],
+                "comparison_value": "Maryland",
+            }
+        )
+    )
+
+
+def test_signature_preserves_grounded_entity_scope() -> None:
+    def result(state: str) -> dict:
+        return {
+            "resolution": "answered",
+            "contract": {
+                "tables": ["contract_state"],
+                "operation": "lookup",
+                "context_memory": {
+                    "filters": [
+                        {
+                            "table": "contract_state",
+                            "column": "state",
+                            "values": [state],
+                        }
+                    ]
+                },
+            },
+            "data": [{"value": 10}],
+            "resultPackage": {
+                "analysis_contract": {
+                    "tables": ["contract_state"],
+                    "metric_columns": ["Grants"],
+                    "operation": "lookup",
+                    "statistic": "value",
+                    "result_scope": "single",
+                    "predicate": {"operator": "none"},
+                }
+            },
+        }
+
+    assert _signature(result("MARYLAND")) != _signature(result("VIRGINIA"))
+
+
+def test_signature_ignores_cosmetic_sort_for_unranked_comparison() -> None:
+    def result(direction: str, rows: list[dict]) -> dict:
+        return {
+            "resolution": "answered",
+            "contract": {"tables": ["contract_state"], "operation": "comparison"},
+            "data": rows,
+            "resultPackage": {
+                "analysis_contract": {
+                    "tables": ["contract_state"],
+                    "metric_columns": ["Grants"],
+                    "operation": "comparison",
+                    "statistic": "value",
+                    "result_scope": "grouped",
+                    "output_dimensions": ["state"],
+                    "sort_direction": direction,
+                    "top_k": None,
+                }
+            },
+        }
+
+    maryland = {"state": "Maryland", "grants": 30}
+    virginia = {"state": "Virginia", "grants": 26}
+    assert _signature(result("desc", [maryland, virginia])) == _signature(
+        result("none", [virginia, maryland])
+    )
+
+
+def test_signature_preserves_sort_for_ranked_results() -> None:
+    def result(direction: str) -> dict:
+        return {
+            "resolution": "answered",
+            "contract": {"tables": ["acs_state"], "operation": "ranking"},
+            "data": [
+                {"state": "A", "poverty": 20},
+                {"state": "B", "poverty": 10},
+            ],
+            "resultPackage": {
+                "analysis_contract": {
+                    "tables": ["acs_state"],
+                    "metric_columns": ["Below poverty"],
+                    "operation": "ranking",
+                    "statistic": "value",
+                    "result_scope": "top_n",
+                    "output_dimensions": ["state"],
+                    "sort_direction": direction,
+                    "top_k": 2,
+                }
+            },
+        }
+
+    assert _signature(result("desc")) != _signature(result("asc"))
+
+
+def test_signature_preserves_measure_predicate_threshold() -> None:
+    def result(threshold: int) -> dict:
+        return {
+            "resolution": "answered",
+            "contract": {"tables": ["acs_state"], "operation": "comparison"},
+            "data": [{"state": "A", "poverty": 25}],
+            "resultPackage": {
+                "analysis_contract": {
+                    "tables": ["acs_state"],
+                    "metric_columns": ["Below poverty"],
+                    "operation": "comparison",
+                    "statistic": "value",
+                    "result_scope": "grouped",
+                    "output_dimensions": ["state"],
+                    "predicate": {
+                        "operator": "gt",
+                        "operands": ["Below poverty"],
+                        "comparison_value": threshold,
+                    },
+                }
+            },
+        }
+
+    assert _signature(result(20)) != _signature(result(30))
