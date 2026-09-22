@@ -1287,6 +1287,83 @@ def test_typed_literal_predicate_is_required_in_sql() -> None:
     assert semantic_sql_problems(present, question, contract, {}) == []
 
 
+def test_typed_entity_predicate_accepts_grounded_canonical_value() -> None:
+    question = "How many grant dollars did Maryland receive in 2024?"
+    contract = build_analysis_contract(
+        question,
+        {
+            "tables": ["contract_state"],
+            "columns": ["Grants"],
+            "geography_level": "state",
+            "semantic_plan": {
+                "operation": "lookup",
+                "statistic": "value",
+                "result_unit": "usd",
+                "formula": {"operator": "identity", "operands": ["Grants"]},
+                "predicate": {
+                    "operator": "eq",
+                    "operands": ["state"],
+                    "comparison_value": "Maryland",
+                },
+                "observation_grain": "state",
+                "result_scope": "single",
+                "output_dimensions": ["state"],
+            },
+        },
+    )
+    sql = (
+        'SELECT state, "Grants" AS grant_dollars FROM mart_contract_state '
+        "WHERE state = 'MARYLAND' AND year = '2024'"
+    )
+    resolved = {
+        "contract_state": {
+            "state": {"value": "MARYLAND", "values": ["MARYLAND"]},
+        }
+    }
+
+    assert semantic_sql_problems(sql, question, contract, resolved) == []
+
+
+def test_typed_entity_predicate_rejects_unrelated_grounded_value() -> None:
+    question = "How many grant dollars did Maryland receive in 2024?"
+    contract = build_analysis_contract(
+        question,
+        {
+            "tables": ["contract_state"],
+            "columns": ["Grants"],
+            "geography_level": "state",
+            "semantic_plan": {
+                "operation": "lookup",
+                "statistic": "value",
+                "result_unit": "usd",
+                "formula": {"operator": "identity", "operands": ["Grants"]},
+                "predicate": {
+                    "operator": "eq",
+                    "operands": ["state"],
+                    "comparison_value": "Maryland",
+                },
+                "observation_grain": "state",
+                "result_scope": "single",
+                "output_dimensions": ["state"],
+            },
+        },
+    )
+    wrong_sql = (
+        'SELECT state, "Grants" AS grant_dollars FROM mart_contract_state '
+        "WHERE state = 'VIRGINIA' AND year = '2024'"
+    )
+    resolved = {
+        "contract_state": {
+            "state": {"value": "MARYLAND", "values": ["MARYLAND"]},
+        }
+    }
+
+    assert any(
+        "row predicate" in problem
+        for problem in semantic_sql_problems(wrong_sql, question, contract, resolved)
+    )
+
+
 def test_identity_formula_does_not_erase_companion_measure() -> None:
     contract = build_analysis_contract(
         "Rank county outflow and show liabilities beside it.",

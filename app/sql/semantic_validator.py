@@ -525,6 +525,7 @@ def _formula_problems(
 def _predicate_problems(
     tree: exp.Expression,
     contract: AnalysisContract,
+    resolved: dict[str, Any],
 ) -> list[str]:
     """Require the planner's typed row-selection comparison."""
     predicate = contract.predicate
@@ -556,8 +557,18 @@ def _predicate_problems(
             literal = expression.expression
             if isinstance(literal, exp.Literal):
                 expected = predicate.comparison_value
-                if literal.is_string and str(literal.this) == str(expected):
-                    return []
+                if literal.is_string:
+                    # Entity resolution canonicalizes user-facing aliases before
+                    # SQL generation (for example, ``MD``/``Maryland`` becomes
+                    # the stored value ``MARYLAND``).  Treat that grounded value
+                    # as equivalent to the planner's original wording.  This is
+                    # deliberately limited to the predicate column and values
+                    # resolved from the user's question; it does not make the
+                    # validator accept arbitrary alternate literals.
+                    accepted = {_norm(expected)}
+                    accepted.update(_grounded_values(resolved, predicate.operands[0]))
+                    if _norm(literal.this) in accepted:
+                        return []
                 try:
                     if (
                         not literal.is_string
@@ -986,7 +997,7 @@ def semantic_sql_problems(
     problems.extend(_predicate_unit_problems(contract))
     if enforce_shape:
         problems.extend(_formula_problems(tree, contract))
-        problems.extend(_predicate_problems(tree, contract))
+        problems.extend(_predicate_problems(tree, contract, resolved))
         problems.extend(_explicit_full_ranking_problems(tree, contract))
         problems.extend(_atomic_result_sql_problems(tree, contract))
     if enforce_shape:
